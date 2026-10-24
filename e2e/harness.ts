@@ -4,7 +4,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { parseArgs } from "node:util";
 import { type GitHub, splitRepository } from "../src/lib/github.ts";
-import { findRunByTitle, matchesAcceptedRequest, recentItems } from "./correlation.ts";
+import { findRecentRunByTitle, matchesAcceptedRequest, recentItems } from "./correlation.ts";
 
 export const OWNER = "civitaspo";
 export const ACTIONS = `${OWNER}/csm-ci-actions`;
@@ -90,6 +90,7 @@ export async function syncFixtures(gh: GitHub): Promise<void> {
 }
 
 export async function dispatch(ctx: Ctx, repository: string, workflow: string, inputs: Record<string, string> = {}): Promise<Run> {
+  const since = new Date(Date.now() - 2_000);
   const correlation = workflow === "csm-ci-smoke.yml" ? randomUUID() : undefined;
   const dispatchInputs = correlation ? { ...inputs, correlation } : inputs;
   await until(`dispatch of ${workflow}`, async () => {
@@ -103,8 +104,14 @@ export async function dispatch(ctx: Ctx, repository: string, workflow: string, i
     }
   });
   const run = await until(`the ${workflow} run ${correlation ?? ""}`, async () => {
-    const { data } = await ctx.gh.rest.actions.listWorkflowRuns({ ...splitRepository(repository), workflow_id: workflow, event: "workflow_dispatch", per_page: 5 });
-    return correlation ? findRunByTitle(data.workflow_runs, `csm-ci-smoke ${correlation}`) : data.workflow_runs[0];
+    async function* pages() {
+      const iterator = ctx.gh.paginate.iterator(ctx.gh.rest.actions.listWorkflowRuns, {
+        ...splitRepository(repository), workflow_id: workflow, event: "workflow_dispatch", per_page: 100,
+      });
+      for await (const page of iterator) yield page.data;
+    }
+    if (correlation) return findRecentRunByTitle(pages(), since, `csm-ci-smoke ${correlation}`);
+    return (await recentItems(pages(), since))[0];
   });
   return waitRun(ctx, repository, run.id);
 }

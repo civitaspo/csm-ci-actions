@@ -17,6 +17,10 @@ export async function recentItems<T extends Timestamped>(pages: AsyncIterable<re
   return result;
 }
 
+export async function findRecentRunByTitle<T extends Timestamped & { display_title: string }>(pages: AsyncIterable<readonly T[]>, since: Date, title: string): Promise<T | undefined> {
+  return findRunByTitle(await recentItems(pages, since), title);
+}
+
 export function matchesAcceptedRequest(log: string, match: RequestMatch): boolean {
   const accepted = `accepted ${match.kind} for ${match.repository} ${JSON.stringify(match.args)}`;
   return log.split(/\r?\n/).some((line) => line.includes(accepted));
