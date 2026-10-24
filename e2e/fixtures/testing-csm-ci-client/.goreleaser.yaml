@@ -1,0 +1,16 @@
+version: 2
+project_name: testing-csm-ci-client
+builds:
+  - main: ./cmd/release-fixture
+    env: [CGO_ENABLED=0]
+    goos: [linux]
+    goarch: [amd64]
+    flags: [-trimpath]
+    ldflags: [-s -w]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+archives:
+  - formats: [tar.gz]
+    builds_info:
+      group: root
+      owner: root
+      mtime: 2008-01-02T15:04:05Z

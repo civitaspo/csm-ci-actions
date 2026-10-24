@@ -4,6 +4,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { parseArgs } from "node:util";
 import { type GitHub, splitRepository } from "../src/lib/github.ts";
+import { CARGO_TARGETS, parseConfig } from "../src/lib/config.ts";
 import { findRecentRunByTitle, matchesAcceptedRequest, matchesCleanupLabel, recentItems } from "./correlation.ts";
 
 export const OWNER = "civitaspo";
@@ -91,7 +92,8 @@ export async function syncFixtures(gh: GitHub): Promise<void> {
 
 export async function dispatch(ctx: Ctx, repository: string, workflow: string, inputs: Record<string, string> = {}): Promise<Run> {
   const since = new Date(Date.now() - 2_000);
-  const correlation = workflow === "csm-ci-smoke.yml" ? randomUUID() : undefined;
+  const correlatedWorkflow = workflow === "csm-ci-smoke.yml" || workflow === "csm-ci-release-verify.yml";
+  const correlation = correlatedWorkflow ? randomUUID() : undefined;
   const dispatchInputs = correlation ? { ...inputs, correlation } : inputs;
   await until(`dispatch of ${workflow}`, async () => {
     try {
@@ -110,7 +112,7 @@ export async function dispatch(ctx: Ctx, repository: string, workflow: string, i
       });
       for await (const page of iterator) yield page.data;
     }
-    if (correlation) return findRecentRunByTitle(pages(), since, `csm-ci-smoke ${correlation}`);
+    if (correlation) return findRecentRunByTitle(pages(), since, `${workflow.replace(/\.yml$/, "")} ${correlation}`);
     return (await recentItems(pages(), since))[0];
   });
   return waitRun(ctx, repository, run.id);
@@ -203,6 +205,7 @@ export const SERVER_BOT_ID = 347400474;
 
 export type Pr = { number: number; head: string; branch: string };
 export type RequestMatch = { kind: string; repository: string; args: Record<string, number>; label?: string };
+export type ReleaseBuildType = "none" | "js-action" | "goreleaser" | "cargo";
 
 // signed: createCommitOnBranch, which GitHub signs as web-flow for the token's user.
 // Otherwise the REST contents API, whose commits GitHub leaves unsigned.
@@ -239,6 +242,101 @@ export async function openPr(ctx: Ctx, kind: "signed" | "unsigned", as: GitHub =
   }
   const { data: pr } = await prAs.rest.pulls.create({ ...repo, base: "main", head: branch, title: `e2e ${branch}`, ...(draft ? { draft: true } : {}) });
   return { number: pr.number, head, branch };
+}
+
+export async function withServerConfig<T>(ctx: Ctx, edit: (text: string) => string, run: () => Promise<T>): Promise<T> {
+  const repository = splitRepository(SERVER);
+  const read = async () => {
+    const { data } = await ctx.gh.rest.repos.getContent({ ...repository, path: "csm-ci.yaml", ref: "main" });
+    assert(!Array.isArray(data) && data.type === "file", `expected ${SERVER}/csm-ci.yaml to be a file`);
+    return { sha: data.sha, text: Buffer.from(data.content, "base64").toString("utf8") };
+  };
+  const write = async (sha: string, text: string, message: string) => ctx.gh.rest.repos.createOrUpdateFileContents({
+    ...repository, path: "csm-ci.yaml", branch: "main", sha, message, content: Buffer.from(text).toString("base64"),
+  });
+  const original = await read();
+  const changed = edit(original.text);
+  parseConfig(changed);
+  if (changed === original.text) return run();
+  try {
+    await write(original.sha, changed, "Temporarily configure release e2e");
+    return await run();
+  } finally {
+    const latest = await read();
+    if (latest.text === changed) await write(latest.sha, original.text, "Restore release e2e server fixture");
+    else if (latest.text !== original.text) throw new Error("server fixture changed unexpectedly during release e2e; refusing to overwrite it");
+  }
+}
+
+export function configureRelease(type: ReleaseBuildType): (text: string) => string {
+  return (text) => {
+    const parsed = parseConfig(text);
+    const repository = parsed.repositories.find((entry) => entry.name === CLIENT.toLowerCase());
+    assert(repository?.release, `release config for ${CLIENT} is missing`);
+    const release = type === "cargo" ? `release: { build_type: cargo, targets: [${CARGO_TARGETS.join(", ")}] }` : `release: { build_type: ${type} }`;
+    const pattern = /release: \{ build_type: [^}]+\}/;
+    assert(pattern.test(text), "could not locate release build configuration");
+    return text.replace(pattern, release);
+  };
+}
+
+export const withoutReleaseOperation = (text: string): string => {
+  const changed = text.replace("ops: [approve, merge, policy-check, securefix, release], release: { build_type: none }", "ops: [approve, merge, policy-check, securefix]");
+  assert(changed !== text, "could not locate enabled release operation in fixture");
+  return changed;
+};
+
+export async function openReleasePr(ctx: Ctx, version: string, additions: Record<string, string | null> = {}): Promise<Pr & { openedAt: Date }> {
+  const repo = splitRepository(CLIENT);
+  try {
+    await ctx.gh.rest.git.getRef({ ...repo, ref: "heads/release/next" });
+    throw new Error("ref release/next already exists; refusing to reuse it");
+  } catch (e) {
+    if (!hasStatus(e, 404)) throw e;
+  }
+  const base = (await ctx.gh.rest.repos.getBranch({ ...repo, branch: "main" })).data.commit.sha;
+  const branch = "release/next";
+  await ctx.gh.rest.git.createRef({ ...repo, ref: `refs/heads/${branch}`, sha: base });
+  const files = { ".release-version": `${version}\n`, "e2e/release-request.txt": `${crypto.randomUUID()}\n`, ...additions };
+  const since = new Date(Date.now() - 2_000);
+  let ownedHead = base;
+  try {
+    const data = await ctx.gh.graphql<{ createCommitOnBranch: { commit: { oid: string } } }>(
+      "mutation($i: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $i) { commit { oid } } }",
+      { i: { branch: { repositoryNameWithOwner: CLIENT, branchName: branch }, message: { headline: `e2e release ${version}` }, expectedHeadOid: base,
+        fileChanges: {
+          additions: Object.entries(files).flatMap(([path, content]) => content === null ? [] : [{ path, contents: Buffer.from(content).toString("base64") }]),
+          deletions: Object.entries(files).flatMap(([path, content]) => content === null ? [{ path }] : []),
+        } } },
+    );
+    ownedHead = data.createCommitOnBranch.commit.oid;
+    const { data: pr } = await ctx.gh.rest.pulls.create({ ...repo, base: "main", head: branch, title: `e2e release ${version}` });
+    return { number: pr.number, head: ownedHead, branch, openedAt: since };
+  } catch (error) {
+    const { data: pulls } = await ctx.gh.rest.pulls.list({ ...repo, state: "open", head: `${OWNER}:release/next`, per_page: 100 });
+    for (const pr of pulls.filter((item) => item.title === `e2e release ${version}`)) {
+      await ctx.gh.rest.pulls.update({ ...repo, pull_number: pr.number, state: "closed" });
+    }
+    try {
+      const { data: ref } = await ctx.gh.rest.git.getRef({ ...repo, ref: "heads/release/next" });
+      if (ref.object.sha === ownedHead) await ctx.gh.rest.git.deleteRef({ ...repo, ref: "heads/release/next" });
+    } catch (cleanupError) {
+      if (!hasStatus(cleanupError, 404)) throw cleanupError;
+    }
+    throw error;
+  }
+}
+
+export async function closeReleasePrIfOwned(ctx: Ctx, pr: Pr): Promise<void> {
+  const repo = splitRepository(CLIENT);
+  const { data } = await ctx.gh.rest.pulls.get({ ...repo, pull_number: pr.number });
+  if (data.state === "open") await ctx.gh.rest.pulls.update({ ...repo, pull_number: pr.number, state: "closed" });
+  try {
+    const { data: ref } = await ctx.gh.rest.git.getRef({ ...repo, ref: "heads/release/next" });
+    if (ref.object.sha === pr.head) await ctx.gh.rest.git.deleteRef({ ...repo, ref: "heads/release/next" });
+  } catch (e) {
+    if (!hasStatus(e, 404)) throw e;
+  }
 }
 
 export async function closePr(ctx: Ctx, pr: Pr): Promise<void> {

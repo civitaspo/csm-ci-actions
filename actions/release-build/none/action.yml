@@ -1,0 +1,7 @@
+name: csm-ci release build (none)
+description: Produce no build outputs for a source-only release.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: mkdir -p assets

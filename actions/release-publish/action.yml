@@ -1,0 +1,19 @@
+name: csm-ci release publish
+description: Create or complete a draft release, then verify immutable assets and tag.
+inputs:
+  github-token:
+    description: Server App token with contents:write on the client repository.
+    required: true
+  plan:
+    description: Server-validated release plan JSON.
+    required: true
+  assets:
+    description: Asset names and SHA256 digests emitted by release-assets.
+    required: true
+  directory:
+    description: Directory containing attested build outputs and SHA256SUMS.
+    required: false
+    default: assets
+runs:
+  using: node24
+  main: ../../dist/release-publish.js

@@ -1,0 +1,15 @@
+name: csm-ci release assets
+description: Validate build outputs and create SHA256SUMS without running client code.
+inputs:
+  directory:
+    description: Directory containing build outputs.
+    required: false
+    default: assets
+outputs:
+  subject-path:
+    description: Glob of all validated assets for actions/attest.
+  assets:
+    description: Sorted asset names and SHA256 digests as JSON.
+runs:
+  using: node24
+  main: ../../dist/release-assets.js

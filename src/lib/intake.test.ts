@@ -17,7 +17,7 @@ const labelRoute = (body: unknown, status = 200) => ({ method: "GET", path: `/re
 describe("runIntake", () => {
   test("accepts a live label", async () => {
     const fetch = fakeFetch([configRoute, labelRoute({ name: LABEL, description: "owner/repo/12" })]);
-    expect(await runIntake(github("t", fetch), input)).toMatchObject({ kind: "approve", args: { pull_number: 12 } });
+    expect(await runIntake(github("t", fetch), input)).toMatchObject({ request: { kind: "approve", args: { pull_number: 12 } }, serverBotId: 3000 });
     expect(fetch.calls).toEqual(["GET /repos/owner/server/contents/csm-ci.yaml", `GET /repos/owner/server/labels/${LABEL}`]);
   });
 

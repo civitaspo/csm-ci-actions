@@ -1,0 +1,8 @@
+[package]
+name = "testing-csm-ci-client"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "testing-csm-ci-client"
+path = "src/main.rs"

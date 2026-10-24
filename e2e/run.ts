@@ -13,8 +13,9 @@ import { policyCheck } from "./policy-check.ts";
 import { merge } from "./merge.ts";
 import { smoke } from "./smoke.ts";
 import { securefix } from "./securefix.ts";
+import { release } from "./release.ts";
 
-const FEATURES: Record<string, Scenario[]> = { smoke, approve, merge, "policy-check": policyCheck, securefix };
+const FEATURES: Record<string, Scenario[]> = { smoke, approve, merge, "policy-check": policyCheck, securefix, release };
 
 const LOCK = "e2e-lock";
 const LOCK_TTL_MS = 60 * 60_000;

@@ -36586,6 +36586,22 @@ var Login = string2().min(1);
 var Principal = strictObject({ id: Id, login: Login });
 var RepoName = string2().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/).transform((s) => s.toLowerCase());
 var Owner = string2().regex(/^[A-Za-z0-9-]+$/).transform((s) => s.toLowerCase());
+var CARGO_TARGETS = [
+  "aarch64-apple-darwin",
+  "aarch64-unknown-linux-gnu",
+  "x86_64-apple-darwin",
+  "x86_64-pc-windows-msvc",
+  "x86_64-unknown-linux-gnu"
+];
+var ReleaseSchema = discriminatedUnion("build_type", [
+  strictObject({ build_type: literal("none") }),
+  strictObject({ build_type: literal("js-action") }),
+  strictObject({ build_type: literal("goreleaser") }),
+  strictObject({
+    build_type: literal("cargo"),
+    targets: array(_enum(CARGO_TARGETS)).min(1).refine((targets) => new Set(targets).size === targets.length, "duplicate cargo target")
+  })
+]);
 var OPS = ["approve", "merge", "policy-check", "securefix", "release"];
 var PolicySchema = discriminatedUnion("type", [
   strictObject({ type: literal("signed-commits") }),
@@ -36606,7 +36622,12 @@ var SecurefixSchema = strictObject({
 });
 var RepositoryEntry = strictObject({
   name: string2().min(1).transform((s) => s.toLowerCase()),
-  ops: array(_enum(OPS)).refine((ops) => new Set(ops).size === ops.length, "duplicate op")
+  ops: array(_enum(OPS)).refine((ops) => new Set(ops).size === ops.length, "duplicate op"),
+  release: ReleaseSchema.optional()
+}).superRefine((entry, ctx) => {
+  if (entry.ops.includes("release") !== (entry.release !== undefined)) {
+    ctx.addIssue({ code: "custom", path: ["release"], message: "release settings must be present exactly when release is enabled" });
+  }
 });
 var ConfigSchema = strictObject({
   owners: array(Owner).min(1),
@@ -36854,7 +36875,13 @@ async function runIntake(gh, input) {
   const config = await loadConfig(gh, input.repository, input.sha, input.configPath);
   const request = validateIntake(event, { repositoryId: input.repositoryId, runAttempt: input.runAttempt }, config);
   await verifyLiveLabel(gh, config.server_repository, request.label, event.label.description ?? "");
-  return request;
+  return { request, release: request.kind === "release" ? repositoryRelease(config, request.repository) : undefined, serverBotId: config.apps.server_bot_id };
+}
+function repositoryRelease(config, repository) {
+  const entry = repositoryEntry(config, repository);
+  if (!entry?.release)
+    throw new Error(`release configuration for ${repository} disappeared after intake validation`);
+  return entry.release;
 }
 
 // src/intake/main.ts
@@ -36865,7 +36892,7 @@ function env(name) {
   return value;
 }
 async function main() {
-  const request = await runIntake(github(getInput("github-token", { required: true })), {
+  const { request, release, serverBotId } = await runIntake(github(getInput("github-token", { required: true })), {
     event: JSON.parse(readFileSync(env("GITHUB_EVENT_PATH"), "utf8")),
     repository: env("GITHUB_REPOSITORY"),
     sha: env("GITHUB_SHA"),
@@ -36879,6 +36906,8 @@ async function main() {
   setOutput("name", repo);
   setOutput("args", JSON.stringify(request.args));
   setOutput("concurrency-key", concurrencyKey(request));
+  setOutput("release", release ? JSON.stringify(release) : "");
+  setOutput("server-bot-id", String(serverBotId));
   info(`accepted ${request.kind} for ${request.repository} ${JSON.stringify(request.args)}`);
 }
 main().catch((e) => setFailed(e instanceof Error ? e.message : String(e)));

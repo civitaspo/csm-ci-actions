@@ -15,3 +15,5 @@ jobs:
     permissions:
       contents: read
       issues: write
+      id-token: write
+      attestations: write

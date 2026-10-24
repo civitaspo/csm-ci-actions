@@ -28,6 +28,8 @@ jobs:
       name: ${{ steps.intake.outputs.name }}
       args: ${{ steps.intake.outputs.args }}
       concurrency-key: ${{ steps.intake.outputs.concurrency-key }}
+      release: ${{ steps.intake.outputs.release }}
+      server-bot-id: ${{ steps.intake.outputs.server-bot-id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -42,6 +44,7 @@ jobs:
 
   op:
     needs: [intake]
+    if: needs.intake.outputs.kind != 'release'
     runs-on: ubuntu-24.04
     timeout-minutes: 70
     environment: csm-ci
@@ -299,8 +302,210 @@ jobs:
           KIND: ${{ needs.intake.outputs.kind }}
         run: echo "no $KIND handler yet"
 
+  release-plan:
+    needs: [intake]
+    if: needs.intake.outputs.kind == 'release'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: csm-ci
+    permissions:
+      contents: read
+    outputs:
+      plan: ${{ steps.plan.outputs.plan }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      merge-sha: ${{ steps.plan.outputs.merge-sha }}
+      tag: ${{ steps.plan.outputs.tag }}
+      version: ${{ steps.plan.outputs.version }}
+      build-type: ${{ steps.plan.outputs.build-type }}
+      source-date-epoch: ${{ steps.source-date.outputs.epoch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .csm-ci-actions
+          persist-credentials: false
+      - id: read-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ needs.intake.outputs.owner }}
+          repositories: ${{ needs.intake.outputs.name }}
+          permission-contents: read
+          permission-pull-requests: read
+      - id: plan
+        uses: ./.csm-ci-actions/actions/release-plan
+        with:
+          github-token: ${{ steps.read-token.outputs.token }}
+          repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
+          pull-number: ${{ fromJSON(needs.intake.outputs.args).pull_number }}
+          server-bot-id: ${{ needs.intake.outputs.server-bot-id }}
+          release-config: ${{ needs.intake.outputs.release }}
+      - id: tag-token
+        if: steps.plan.outputs.tag-exists != 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ needs.intake.outputs.owner }}
+          repositories: ${{ needs.intake.outputs.name }}
+          permission-contents: write
+      - uses: ./.csm-ci-actions/actions/release-tag
+        if: steps.plan.outputs.tag-exists != 'true'
+        with:
+          github-token: ${{ steps.tag-token.outputs.token }}
+          plan: ${{ steps.plan.outputs.plan }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
+          ref: ${{ steps.plan.outputs.merge-sha }}
+          token: ${{ steps.read-token.outputs.token }}
+          path: client
+          persist-credentials: false
+      - id: source-date
+        name: Record the merge commit timestamp
+        env:
+          MERGE_SHA: ${{ steps.plan.outputs.merge-sha }}
+        run: echo "epoch=$(git -C client show -s --format=%ct "$MERGE_SHA")" >> "$GITHUB_OUTPUT"
+      - name: Archive the tracked merge source
+        env:
+          MERGE_SHA: ${{ steps.plan.outputs.merge-sha }}
+        run: git -C client archive --format=tar --output="$RUNNER_TEMP/release-source.tar" "$MERGE_SHA"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-source
+          path: ${{ runner.temp }}/release-source.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  release-build:
+    needs: [intake, release-plan]
+    if: needs.intake.outputs.kind == 'release'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions: {}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.release-plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .csm-ci-actions
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-source
+          path: client
+      - name: Prepare the isolated source snapshot
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.release-plan.outputs.tag }}
+          SOURCE_DATE_EPOCH: ${{ needs.release-plan.outputs.source-date-epoch }}
+          SOURCE_REPOSITORY: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
+        run: |
+          if ! [[ "$SOURCE_DATE_EPOCH" =~ ^[0-9]+$ ]]; then
+            echo "Invalid source commit timestamp" >&2
+            exit 1
+          fi
+          tar -xf client/release-source.tar -C client
+          rm client/release-source.tar
+          git -C client init --quiet
+          git -C client remote add origin "$GITHUB_SERVER_URL/$SOURCE_REPOSITORY.git"
+          git -C client config user.name "csm-ci release build"
+          git -C client config user.email "csm-ci-release-build@users.noreply.github.com"
+          git -C client add -f -A
+          GIT_AUTHOR_DATE="@$SOURCE_DATE_EPOCH +0000" \
+            GIT_COMMITTER_DATE="@$SOURCE_DATE_EPOCH +0000" \
+            git -C client -c commit.gpgsign=false commit --quiet -m "release source"
+          git -C client tag "$RELEASE_TAG"
+          mkdir -p assets
+      - if: needs.release-plan.outputs.build-type == 'none'
+        uses: ./.csm-ci-actions/actions/release-build/none
+      - if: needs.release-plan.outputs.build-type == 'js-action'
+        uses: ./.csm-ci-actions/actions/release-build/js-action
+        with:
+          client-path: client
+      - if: needs.release-plan.outputs.build-type == 'goreleaser'
+        uses: ./.csm-ci-actions/actions/release-build/goreleaser
+        with:
+          client-path: client
+      - if: needs.release-plan.outputs.build-type == 'cargo'
+        uses: ./.csm-ci-actions/actions/release-build/cargo
+        with:
+          client-path: client
+          repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
+          version: ${{ needs.release-plan.outputs.version }}
+          target: ${{ matrix.target }}
+      - if: hashFiles('assets/**') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-assets-${{ matrix.target || 'default' }}
+          path: assets/
+          if-no-files-found: error
+          retention-days: 1
+
+  release-publish:
+    needs: [intake, release-plan, release-build]
+    if: needs.intake.outputs.kind == 'release'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: csm-ci
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    concurrency:
+      group: csm-ci-release-${{ needs.intake.outputs.owner }}-${{ needs.intake.outputs.name }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .csm-ci-actions
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: contains(fromJSON('["cargo", "goreleaser"]'), needs.release-plan.outputs.build-type)
+        with:
+          pattern: release-assets-*
+          path: assets
+          merge-multiple: true
+      - id: assets
+        uses: ./.csm-ci-actions/actions/release-assets
+        with:
+          directory: assets
+      - id: predicate
+        env:
+          CLIENT_REPOSITORY: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
+          MERGE_SHA: ${{ needs.release-plan.outputs.merge-sha }}
+          TAG: ${{ needs.release-plan.outputs.tag }}
+        run: jq -cn --arg repository "$CLIENT_REPOSITORY" --arg sha "$MERGE_SHA" --arg tag "$TAG" '{client_repository:$repository,merge_sha:$sha,tag:$tag}' > "$RUNNER_TEMP/release-predicate.json"
+      - uses: actions/attest@f057fd524d485ac48d9b534c235aad15b5bb303f # v3.0.0
+        with:
+          subject-path: ${{ steps.assets.outputs.subject-path }}
+          predicate-type: https://github.com/civitaspo/csm-ci-actions/attestation/release/v1
+          predicate-path: ${{ runner.temp }}/release-predicate.json
+      - id: server-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ needs.intake.outputs.owner }}
+          repositories: ${{ needs.intake.outputs.name }}
+          permission-contents: write
+      - uses: ./.csm-ci-actions/actions/release-publish
+        with:
+          github-token: ${{ steps.server-token.outputs.token }}
+          plan: ${{ needs.release-plan.outputs.plan }}
+          assets: ${{ steps.assets.outputs.assets }}
+          directory: assets
+
   cleanup:
-    needs: [intake, op]
+    needs: [intake, op, release-plan, release-build, release-publish]
     if: >-
       always() && github.event_name == 'label' && github.event.action == 'created' &&
       startsWith(github.event.label.name, 'csm-ci-')

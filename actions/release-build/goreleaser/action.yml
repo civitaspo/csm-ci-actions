@@ -1,0 +1,48 @@
+name: csm-ci release build (goreleaser)
+description: Run GoReleaser without publishing, signing or announcing.
+inputs:
+  client-path:
+    description: Path to the isolated source snapshot.
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
+      with:
+        version: v2.19.0
+        distribution: goreleaser
+        workdir: ${{ inputs.client-path }}
+        args: release --skip=publish,sign,announce --clean
+    - shell: bash
+      env:
+        CLIENT_PATH: ${{ inputs.client-path }}
+      run: |
+        mkdir -p assets
+        manifest="$CLIENT_PATH/dist/artifacts.json"
+        if [ ! -f "$manifest" ] || [ -L "$manifest" ]; then
+          echo "GoReleaser did not produce a regular artifacts.json manifest" >&2
+          exit 1
+        fi
+        count=0
+        while IFS= read -r -d '' relative; do
+          case "$relative" in
+            dist/*) ;;
+            *) echo "GoReleaser archive path is outside dist/: $relative" >&2; exit 1 ;;
+          esac
+          file="$CLIENT_PATH/$relative"
+          if [ ! -f "$file" ] || [ -L "$file" ]; then
+            echo "GoReleaser archive is not a regular file: $relative" >&2
+            exit 1
+          fi
+          name="${file##*/}"
+          if [ -e "assets/$name" ]; then
+            echo "duplicate GoReleaser asset name: $name" >&2
+            exit 1
+          fi
+          cp -- "$file" "assets/$name"
+          count=$((count + 1))
+        done < <(jq -j '.[] | select(.type == "Archive") | .path | strings | ., "\u0000"' "$manifest")
+        if [ "$count" -eq 0 ]; then
+          echo "GoReleaser produced no release assets" >&2
+          exit 1
+        fi

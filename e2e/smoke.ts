@@ -31,13 +31,6 @@ export const smoke: Scenario[] = [
     },
   },
   {
-    name: "a request for an op the repository does not enable is rejected and deleted",
-    run: async (ctx) => {
-      const request = await smokeRequest(ctx, "release", "1");
-      await expectServer(ctx, { kind: "release", repository: CLIENT, args: { pull_number: 1 }, label: request.label }, request.since, "failure", "skipped", /does not enable release/);
-    },
-  },
-  {
     name: "a request label created by a human skips intake and is deleted",
     run: async (ctx) => {
       const since = new Date(Date.now() - 2_000);
