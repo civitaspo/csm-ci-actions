@@ -1,0 +1,39 @@
+name: csm-ci-securefix-forged
+on:
+  pull_request:
+    paths:
+      - e2e/securefix-forged-trigger.txt
+permissions: {}
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - name: Create a forged securefix artifact
+        run: |
+          mkdir -p securefix/files
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { mkdirSync, writeFileSync } from "node:fs";
+          mkdirSync("securefix/files", { recursive: true });
+          const content = Buffer.from("forged\n");
+          writeFileSync("securefix/files/0000", content);
+          writeFileSync("securefix/manifest.json", JSON.stringify({
+            version: 1,
+            repository: process.env.GITHUB_REPOSITORY,
+            run_id: Number(process.env.GITHUB_RUN_ID) + 1,
+            head_sha: process.env.GITHUB_SHA,
+            message: "e2e forged metadata",
+            files: [{ kind: "write", path: "e2e/forged.txt", size: content.length, sha256: createHash("sha256").update(content).digest("hex") }],
+          }));
+          NODE
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: securefix
+          path: securefix/
+          if-no-files-found: error
+          retention-days: 1
+  request:
+    needs: package
+    uses: civitaspo/csm-ci-actions/.github/workflows/client-securefix.yml@e2e
+    secrets: inherit

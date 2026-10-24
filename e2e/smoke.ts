@@ -26,15 +26,15 @@ export const smoke: Scenario[] = [
   {
     name: "a client app label passes intake and is deleted",
     run: async (ctx) => {
-      const since = await smokeRequest(ctx, "policy-check", "1");
-      await expectServer(ctx, since, "success", "success", /accepted policy-check for civitaspo\/testing-csm-ci-client \{"pull_number":1\}/);
+      const request = await smokeRequest(ctx, "policy-check", "1");
+      await expectServer(ctx, { kind: "policy-check", repository: CLIENT, args: { pull_number: 1 }, label: request.label }, request.since, "success", "success", /accepted policy-check for civitaspo\/testing-csm-ci-client \{"pull_number":1\}/);
     },
   },
   {
     name: "a request for an op the repository does not enable is rejected and deleted",
     run: async (ctx) => {
-      const since = await smokeRequest(ctx, "securefix", "1");
-      await expectServer(ctx, since, "failure", "skipped", /does not enable securefix/);
+      const request = await smokeRequest(ctx, "release", "1");
+      await expectServer(ctx, { kind: "release", repository: CLIENT, args: { pull_number: 1 }, label: request.label }, request.since, "failure", "skipped", /does not enable release/);
     },
   },
   {
@@ -43,7 +43,7 @@ export const smoke: Scenario[] = [
       const since = new Date(Date.now() - 2_000);
       const name = `csm-ci-approve-human${Date.now().toString(36)}`;
       await ctx.gh.rest.issues.createLabel({ ...splitRepository(SERVER), name, description: `${CLIENT}/1` });
-      await expectServer(ctx, since, "skipped", "skipped");
+      await expectServer(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: 1 }, label: name }, since, "skipped", "skipped");
     },
   },
 ];

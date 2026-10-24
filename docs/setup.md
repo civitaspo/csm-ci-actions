@@ -41,23 +41,52 @@ apps:
 trust:
   committers:
     - { id: 0, login: your-account }
+  approvers:
+    - { id: 0, login: your-account }
+  mergers:
+    - { id: 0, login: your-account }
+  bot_mergers: []
+merge:
+  required_checks:
+    - { name: status-check, app_id: 15368 }
+  deadline_minutes: 60
 policies:
   - { type: signed-commits }
   - { type: trusted-committers }
+  - type: sensitive-paths
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - "**/package.json"
+      - "**/package-lock.json"
+      - "**/npm-shrinkwrap.json"
+      - "**/bun.lock*"
+      - "**/yarn.lock"
+      - "**/pnpm-lock.yaml"
+      - "**/go.mod"
+      - "**/go.sum"
+      - "**/pyproject.toml"
+      - "**/requirements*.txt"
+      - "**/Pipfile*"
+      - "**/poetry.lock"
+      - "**/uv.lock"
+      - "**/Gemfile*"
+      - "**/composer.*"
+      - "**/Package.swift"
+      - "**/Package.resolved"
+      - Makefile
+      - "**/Dockerfile*"
+      - "**/.goreleaser.*"
+      - scripts/**
+      - "**/build.rs"
+      - .cargo/**
+      - .github/**
+    exempt: []
 repositories:
   - { name: your-account/*, ops: [approve, merge, policy-check] }
 ```
 
-The schema rejects unknown keys and puts the server bot in no trust list. To enable releases for a repository, add `release` to `ops` and choose a build type:
-
-```yaml
-repositories:
-  - name: your-account/my-action
-    ops: [approve, merge, policy-check, release]
-    release: { build_type: js-action }
-```
-
-For Rust projects, use a non-empty `targets` list for `cargo`. The list is restricted to supported target triples so configuration cannot select arbitrary GitHub runners.
+The schema rejects unknown keys and puts the server bot in no trust list.
 
 ## 4. Add the server workflows
 
@@ -109,6 +138,8 @@ jobs:
 
 Each operation has a reusable client workflow. Pin it to a full commit SHA of csm-ci-actions.
 
+For securefix, configure its server-side routes and add the client packaging and request jobs as described in [securefix.md](securefix.md).
+
 `.github/workflows/csm-ci-approve.yml` asks for approvals ([approve.md](approve.md)):
 
 ```yaml
@@ -131,6 +162,20 @@ jobs:
     secrets: inherit
 ```
 
+`.github/workflows/csm-ci-policy-check.yml` evaluates pull request policies:
+
+```yaml
+name: csm-ci-policy-check
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+permissions: {}
+jobs:
+  policy-check:
+    uses: civitaspo/csm-ci-actions/.github/workflows/client-policy-check.yml@<sha>
+    secrets: inherit
+```
+
 Add the approver to `csm-ci.yaml`:
 
 ```yaml
@@ -140,20 +185,20 @@ trust:
     - { id: 0, login: your-account }
 ```
 
-For releases, enable the `release` op and select its build type in `csm-ci.yaml`. Add a client caller that requests a release after a `release/next` PR is merged:
+`.github/workflows/csm-ci-merge.yml` lets a trusted merger request a squash merge:
 
 ```yaml
-name: csm-ci-release
+name: csm-ci-merge
 on:
-  pull_request:
-    types: [closed]
+  issue_comment:
+    types: [created]
 permissions: {}
 jobs:
-  release:
-    # The reusable workflow needs the Client App key from the client repository.
+  merge:
+    # The client App key reaches the called job only through inherit.
     # jactionlint ignore=secrets-inherit
-    uses: civitaspo/csm-ci-actions/.github/workflows/client-release.yml@<sha>
+    uses: civitaspo/csm-ci-actions/.github/workflows/client-merge.yml@<sha>
     secrets: inherit
 ```
 
-The Server App creates the tag and release. The release build job runs without secrets or credentials.
+The command is exactly `/merge`. The server waits for the latest approver review, current policies, and configured checks. After readiness succeeds, the workflow mints fresh read and notification tokens plus a contents and pull-requests write token, then revalidates and merges. If an accepted wait fails, the workflow mints a fresh notification token for the failure receipt.

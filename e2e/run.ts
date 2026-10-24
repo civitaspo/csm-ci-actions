@@ -9,9 +9,12 @@ import { parseArgs } from "node:util";
 import { type GitHub, github, splitRepository } from "../src/lib/github.ts";
 import { approve } from "./approve.ts";
 import { ACTIONS, assert, type Ctx, hasStatus, moveE2eBranch, type Scenario, sleep, syncFixtures } from "./harness.ts";
+import { policyCheck } from "./policy-check.ts";
+import { merge } from "./merge.ts";
 import { smoke } from "./smoke.ts";
+import { securefix } from "./securefix.ts";
 
-const FEATURES: Record<string, Scenario[]> = { smoke, approve };
+const FEATURES: Record<string, Scenario[]> = { smoke, approve, merge, "policy-check": policyCheck, securefix };
 
 const LOCK = "e2e-lock";
 const LOCK_TTL_MS = 60 * 60_000;
@@ -56,12 +59,15 @@ async function releaseLock(gh: GitHub, holder: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const { values } = parseArgs({ options: { ref: { type: "string" }, feature: { type: "string", default: "smoke" } } });
+  const { values } = parseArgs({ options: { ref: { type: "string" }, feature: { type: "string", default: "smoke" }, scenario: { type: "string" } } });
   const token = process.env.GH_TOKEN;
   assert(token, "GH_TOKEN is not set");
   assert(values.ref && /^[0-9a-f]{40}$/.test(values.ref), "--ref must be a full commit sha");
-  const scenarios = FEATURES[values.feature ?? ""];
-  assert(scenarios, `unknown feature ${values.feature}; known: ${Object.keys(FEATURES).join(", ")}`);
+  const featureScenarios = FEATURES[values.feature ?? ""];
+  assert(featureScenarios, `unknown feature ${values.feature}; known: ${Object.keys(FEATURES).join(", ")}`);
+  assert(values.scenario === undefined || values.scenario.length > 0, "--scenario must be a non-empty substring");
+  const scenarios = values.scenario ? featureScenarios.filter((scenario) => scenario.name.includes(values.scenario!)) : featureScenarios;
+  assert(scenarios.length > 0, `no ${values.feature} scenario matches ${JSON.stringify(values.scenario)}`);
 
   const gh = github(token);
   const actions = github(process.env.CSM_CI_ACTIONS_TOKEN || token);
@@ -74,22 +80,29 @@ async function main(): Promise<void> {
   try {
     await moveE2eBranch(actions, values.ref);
     await syncFixtures(gh);
-    for (const scenario of scenarios) {
+    const runScenario = async (scenario: Scenario) => {
       if (scenario.needsUntrusted && !untrustedToken) {
         console.log(`SKIP ${scenario.name}: needs CSM_CI_UNTRUSTED_COMMITTER_TOKEN, which only the e2e workflow has`);
-        skipped++;
-        continue;
+        return { failed: false, skipped: true };
       }
       const ctx: Ctx = { gh, urls: [], untrusted: untrustedToken ? github(untrustedToken) : undefined };
       try {
         await scenario.run(ctx);
         console.log(`PASS ${scenario.name}`);
+        for (const url of ctx.urls) console.log(`  ${url}`);
+        return { failed: false, skipped: false };
       } catch (e) {
-        failed++;
-        console.log(`FAIL ${scenario.name}: ${e instanceof Error ? e.message : String(e)}`);
+        const message = e instanceof Error ? e.message : String(e);
+        const status = typeof e === "object" && e !== null && "status" in e && typeof e.status === "number" ? ` (HTTP ${e.status})` : "";
+        console.log(`FAIL ${scenario.name}: ${message}${status}`);
+        for (const url of ctx.urls) console.log(`  ${url}`);
+        return { failed: true, skipped: false };
       }
-      for (const url of ctx.urls) console.log(`  ${url}`);
-    }
+    };
+    const results = await Promise.all(scenarios.filter((scenario) => !scenario.serial).map(runScenario));
+    for (const scenario of scenarios.filter((item) => item.serial)) results.push(await runScenario(scenario));
+    failed = results.filter((r) => r.failed).length;
+    skipped = results.filter((r) => r.skipped).length;
   } finally {
     await releaseLock(actions, holder);
   }

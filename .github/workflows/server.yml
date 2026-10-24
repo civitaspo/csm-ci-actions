@@ -62,7 +62,7 @@ jobs:
           path: .csm-ci-actions
           persist-credentials: false
       - id: server-token
-        if: needs.intake.outputs.kind == 'approve'
+        if: contains(fromJSON('["approve", "policy-check"]'), needs.intake.outputs.kind)
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
@@ -70,7 +70,19 @@ jobs:
           owner: ${{ needs.intake.outputs.owner }}
           repositories: ${{ needs.intake.outputs.name }}
           permission-contents: read
-          permission-pull-requests: write
+          permission-pull-requests: ${{ needs.intake.outputs.kind == 'approve' && 'write' || 'read' }}
+          permission-checks: write
+      - id: securefix-read-token
+        if: needs.intake.outputs.kind == 'securefix'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ needs.intake.outputs.owner }}
+          repositories: ${{ needs.intake.outputs.name }}
+          permission-actions: read
+          permission-contents: read
+          permission-pull-requests: read
       # The approver App needs contents:write for its approval to count, but GitHub checks the
       # App's permissions, so this token stays at pull_requests:write.
       - id: approver-token
@@ -90,7 +102,202 @@ jobs:
           approver-token: ${{ steps.approver-token.outputs.token }}
           repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
           args: ${{ needs.intake.outputs.args }}
-      - if: needs.intake.outputs.kind != 'approve'
+      - id: securefix-locate
+        if: needs.intake.outputs.kind == 'securefix'
+        uses: ./.csm-ci-actions/actions/securefix
+        with:
+          mode: locate
+          config-path: ${{ inputs.config-path }}
+          server-token: ${{ steps.securefix-read-token.outputs.token }}
+          repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
+          run-id: ${{ fromJSON(needs.intake.outputs.args).run_id }}
+      - if: needs.intake.outputs.kind == 'securefix'
+        name: Bound securefix artifact extraction
+        env:
+          SECUREFIX_ARTIFACT_PATH: ${{ runner.temp }}/csm-ci-securefix
+        run: |
+          sudo mkdir -p "$SECUREFIX_ARTIFACT_PATH"
+          sudo mount -t tmpfs -o size=12m,nr_inodes=1024,mode=0700,uid="$(id -u)",gid="$(id -g)" tmpfs "$SECUREFIX_ARTIFACT_PATH"
+          mountpoint -q "$SECUREFIX_ARTIFACT_PATH"
+      - if: needs.intake.outputs.kind == 'securefix'
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        timeout-minutes: 2
+        with:
+          artifact-ids: ${{ steps.securefix-locate.outputs.artifact-id }}
+          github-token: ${{ steps.securefix-read-token.outputs.token }}
+          repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
+          run-id: ${{ fromJSON(needs.intake.outputs.args).run_id }}
+          path: ${{ runner.temp }}/csm-ci-securefix
+          digest-mismatch: error
+      - id: securefix-prepare
+        if: needs.intake.outputs.kind == 'securefix'
+        uses: ./.csm-ci-actions/actions/securefix
+        with:
+          mode: prepare
+          config-path: ${{ inputs.config-path }}
+          server-token: ${{ steps.securefix-read-token.outputs.token }}
+          repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
+          run-id: ${{ fromJSON(needs.intake.outputs.args).run_id }}
+          artifact-path: ${{ runner.temp }}/csm-ci-securefix
+      - id: securefix-write-token
+        if: >-
+          needs.intake.outputs.kind == 'securefix' &&
+          (steps.securefix-prepare.outputs.result == 'ready' || steps.securefix-prepare.outputs.route-mode == 'true') &&
+          steps.securefix-prepare.outputs.requires-workflows-write != 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ needs.intake.outputs.owner }}
+          repositories: ${{ needs.intake.outputs.name }}
+          permission-actions: read
+          permission-contents: write
+          permission-pull-requests: ${{ steps.securefix-prepare.outputs.route-mode == 'true' && 'write' || 'read' }}
+      - id: securefix-workflow-token
+        if: needs.intake.outputs.kind == 'securefix' && steps.securefix-prepare.outputs.requires-workflows-write == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ needs.intake.outputs.owner }}
+          repositories: ${{ needs.intake.outputs.name }}
+          permission-actions: read
+          permission-contents: write
+          permission-pull-requests: ${{ steps.securefix-prepare.outputs.route-mode == 'true' && 'write' || 'read' }}
+          permission-workflows: write
+      - id: merge-read-token
+        if: needs.intake.outputs.kind == 'merge'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ needs.intake.outputs.owner }}
+          repositories: ${{ needs.intake.outputs.name }}
+          permission-contents: read
+          permission-pull-requests: read
+          permission-checks: read
+          permission-issues: read
+      - id: merge-notify-token
+        if: needs.intake.outputs.kind == 'merge'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ needs.intake.outputs.owner }}
+          repositories: ${{ needs.intake.outputs.name }}
+          permission-issues: write
+          permission-pull-requests: write
+      - id: merge-ready
+        if: needs.intake.outputs.kind == 'merge'
+        continue-on-error: true
+        uses: ./.csm-ci-actions/actions/merge
+        with:
+          mode: wait
+          config-path: ${{ inputs.config-path }}
+          server-token: ${{ steps.merge-read-token.outputs.token }}
+          notification-token: ${{ steps.merge-notify-token.outputs.token }}
+          repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
+          args: ${{ needs.intake.outputs.args }}
+      - id: merge-failure-notify-token
+        if: needs.intake.outputs.kind == 'merge' && steps.merge-ready.outcome == 'failure' && steps.merge-ready.outputs.accepted == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ needs.intake.outputs.owner }}
+          repositories: ${{ needs.intake.outputs.name }}
+          permission-issues: write
+          permission-pull-requests: write
+      - if: needs.intake.outputs.kind == 'merge' && steps.merge-ready.outcome == 'failure' && steps.merge-ready.outputs.accepted == 'true'
+        continue-on-error: true
+        uses: ./.csm-ci-actions/actions/merge
+        with:
+          mode: failure-receipt
+          config-path: ${{ inputs.config-path }}
+          server-token: ${{ steps.merge-read-token.outputs.token }}
+          notification-token: ${{ steps.merge-failure-notify-token.outputs.token }}
+          repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
+          args: ${{ needs.intake.outputs.args }}
+          failure-message: ${{ steps.merge-ready.outputs.error }}
+      - if: always() && needs.intake.outputs.kind == 'merge' && steps.merge-ready.outcome == 'failure'
+        env:
+          FAILURE_MESSAGE: ${{ steps.merge-ready.outputs.error }}
+        run: |
+          echo "$FAILURE_MESSAGE" >&2
+          exit 1
+      - id: merge-final-read-token
+        if: needs.intake.outputs.kind == 'merge' && steps.merge-ready.outputs.ready == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ needs.intake.outputs.owner }}
+          repositories: ${{ needs.intake.outputs.name }}
+          permission-contents: read
+          permission-pull-requests: read
+          permission-checks: read
+          permission-issues: read
+      - id: merge-final-notify-token
+        if: needs.intake.outputs.kind == 'merge' && steps.merge-ready.outputs.ready == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ needs.intake.outputs.owner }}
+          repositories: ${{ needs.intake.outputs.name }}
+          permission-issues: write
+          permission-pull-requests: write
+      - id: merge-token
+        if: needs.intake.outputs.kind == 'merge' && steps.merge-ready.outputs.ready == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ needs.intake.outputs.owner }}
+          repositories: ${{ needs.intake.outputs.name }}
+          permission-contents: write
+          permission-pull-requests: write
+      - if: needs.intake.outputs.kind == 'merge'
+        uses: ./.csm-ci-actions/actions/merge
+        with:
+          mode: merge
+          config-path: ${{ inputs.config-path }}
+          server-token: ${{ steps.merge-final-read-token.outputs.token }}
+          notification-token: ${{ steps.merge-final-notify-token.outputs.token }}
+          write-token: ${{ steps.merge-token.outputs.token }}
+          repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
+          args: ${{ needs.intake.outputs.args }}
+          head: ${{ steps.merge-ready.outputs.head }}
+      - if: needs.intake.outputs.kind == 'policy-check'
+        uses: ./.csm-ci-actions/actions/policy-check
+        with:
+          config-path: ${{ inputs.config-path }}
+          server-token: ${{ steps.server-token.outputs.token }}
+          repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
+          pull-number: ${{ fromJSON(needs.intake.outputs.args).pull_number }}
+      - if: >-
+          needs.intake.outputs.kind == 'securefix' &&
+          (steps.securefix-prepare.outputs.result == 'ready' || steps.securefix-prepare.outputs.route-mode == 'true')
+        uses: ./.csm-ci-actions/actions/securefix
+        with:
+          mode: apply
+          config-path: ${{ inputs.config-path }}
+          server-token: ${{ steps.securefix-read-token.outputs.token }}
+          write-token: ${{ steps.securefix-workflow-token.outputs.token || steps.securefix-write-token.outputs.token }}
+          repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
+          run-id: ${{ fromJSON(needs.intake.outputs.args).run_id }}
+          artifact-path: ${{ runner.temp }}/csm-ci-securefix
+      - if: always() && needs.intake.outputs.kind == 'securefix'
+        name: Release securefix artifact extraction space
+        env:
+          SECUREFIX_ARTIFACT_PATH: ${{ runner.temp }}/csm-ci-securefix
+        run: |
+          if mountpoint -q "$SECUREFIX_ARTIFACT_PATH"; then
+            sudo umount "$SECUREFIX_ARTIFACT_PATH"
+          fi
+          sudo rm -rf "$SECUREFIX_ARTIFACT_PATH"
+      - if: >-
+          !contains(fromJSON('["approve", "merge", "policy-check", "securefix"]'), needs.intake.outputs.kind)
         env:
           KIND: ${{ needs.intake.outputs.kind }}
         run: echo "no $KIND handler yet"

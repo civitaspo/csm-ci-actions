@@ -1,4 +1,36 @@
 import { createRequire } from "node:module";
+var __create = Object.create;
+var __getProtoOf = Object.getPrototypeOf;
+var __defProp = Object.defineProperty;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+function __accessProp(key) {
+  return this[key];
+}
+var __toESMCache_node;
+var __toESMCache_esm;
+var __toESM = (mod, isNodeMode, target) => {
+  var canCache = mod != null && typeof mod === "object";
+  if (canCache) {
+    var cache = isNodeMode ? __toESMCache_node ??= new WeakMap : __toESMCache_esm ??= new WeakMap;
+    var cached = cache.get(mod);
+    if (cached)
+      return cached;
+  }
+  target = mod != null ? __create(__getProtoOf(mod)) : {};
+  const to = isNodeMode || !mod || !mod.__esModule || !__hasOwnProp.call(mod, "default") ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
+  if (mod && typeof mod === "object" || typeof mod === "function") {
+    for (let key of __getOwnPropNames(mod))
+      if (!__hasOwnProp.call(to, key))
+        __defProp(to, key, {
+          get: __accessProp.bind(mod, key),
+          enumerable: true
+        });
+  }
+  if (canCache)
+    cache.set(mod, to);
+  return to;
+};
 var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
@@ -17368,6 +17400,1711 @@ var require_eventsource = __commonJS(function(exports, module) {
   };
 });
 
+// node_modules/picomatch/lib/constants.js
+var require_constants6 = __commonJS(function(exports, module) {
+  var WIN_SLASH = "\\\\/";
+  var WIN_NO_SLASH = `[^${WIN_SLASH}]`;
+  var DEFAULT_MAX_EXTGLOB_RECURSION = 0;
+  var DOT_LITERAL = "\\.";
+  var PLUS_LITERAL = "\\+";
+  var QMARK_LITERAL = "\\?";
+  var SLASH_LITERAL = "\\/";
+  var ONE_CHAR = "(?=.)";
+  var QMARK = "[^/]";
+  var END_ANCHOR = `(?:${SLASH_LITERAL}|$)`;
+  var START_ANCHOR = `(?:^|${SLASH_LITERAL})`;
+  var DOTS_SLASH = `${DOT_LITERAL}{1,2}${END_ANCHOR}`;
+  var NO_DOT = `(?!${DOT_LITERAL})`;
+  var NO_DOTS = `(?!${START_ANCHOR}${DOTS_SLASH})`;
+  var NO_DOT_SLASH = `(?!${DOT_LITERAL}{0,1}${END_ANCHOR})`;
+  var NO_DOTS_SLASH = `(?!${DOTS_SLASH})`;
+  var QMARK_NO_DOT = `[^.${SLASH_LITERAL}]`;
+  var STAR = `${QMARK}*?`;
+  var SEP = "/";
+  var POSIX_CHARS = {
+    DOT_LITERAL,
+    PLUS_LITERAL,
+    QMARK_LITERAL,
+    SLASH_LITERAL,
+    ONE_CHAR,
+    QMARK,
+    END_ANCHOR,
+    DOTS_SLASH,
+    NO_DOT,
+    NO_DOTS,
+    NO_DOT_SLASH,
+    NO_DOTS_SLASH,
+    QMARK_NO_DOT,
+    STAR,
+    START_ANCHOR,
+    SEP
+  };
+  var WINDOWS_CHARS = {
+    ...POSIX_CHARS,
+    SLASH_LITERAL: `[${WIN_SLASH}]`,
+    QMARK: WIN_NO_SLASH,
+    STAR: `${WIN_NO_SLASH}*?`,
+    DOTS_SLASH: `${DOT_LITERAL}{1,2}(?:[${WIN_SLASH}]|$)`,
+    NO_DOT: `(?!${DOT_LITERAL})`,
+    NO_DOTS: `(?!(?:^|[${WIN_SLASH}])${DOT_LITERAL}{1,2}(?:[${WIN_SLASH}]|$))`,
+    NO_DOT_SLASH: `(?!${DOT_LITERAL}{0,1}(?:[${WIN_SLASH}]|$))`,
+    NO_DOTS_SLASH: `(?!${DOT_LITERAL}{1,2}(?:[${WIN_SLASH}]|$))`,
+    QMARK_NO_DOT: `[^.${WIN_SLASH}]`,
+    START_ANCHOR: `(?:^|[${WIN_SLASH}])`,
+    END_ANCHOR: `(?:[${WIN_SLASH}]|$)`,
+    SEP: "\\"
+  };
+  var POSIX_REGEX_SOURCE = {
+    __proto__: null,
+    alnum: "a-zA-Z0-9",
+    alpha: "a-zA-Z",
+    ascii: "\\x00-\\x7F",
+    blank: " \\t",
+    cntrl: "\\x00-\\x1F\\x7F",
+    digit: "0-9",
+    graph: "\\x21-\\x7E",
+    lower: "a-z",
+    print: "\\x20-\\x7E ",
+    punct: "\\-!\"#$%&'()\\*+,./:;<=>?@[\\]^_`{|}~",
+    space: " \\t\\r\\n\\v\\f",
+    upper: "A-Z",
+    word: "A-Za-z0-9_",
+    xdigit: "A-Fa-f0-9"
+  };
+  module.exports = {
+    DEFAULT_MAX_EXTGLOB_RECURSION,
+    MAX_LENGTH: 1024 * 64,
+    POSIX_REGEX_SOURCE,
+    REGEX_BACKSLASH: /\\(?![*+?^${}(|)[\]])/g,
+    REGEX_NON_SPECIAL_CHARS: /^[^@![\].,$*+?^{}()|\\/]+/,
+    REGEX_SPECIAL_CHARS: /[-*+?.^${}(|)[\]]/,
+    REGEX_SPECIAL_CHARS_BACKREF: /(\\?)((\W)(\3*))/g,
+    REGEX_SPECIAL_CHARS_GLOBAL: /([-*+?.^${}(|)[\]])/g,
+    REGEX_REMOVE_BACKSLASH: /(?:\[.*?[^\\]\]|\\(?=.))/g,
+    REPLACEMENTS: {
+      __proto__: null,
+      "***": "*",
+      "**/**": "**",
+      "**/**/**": "**"
+    },
+    CHAR_0: 48,
+    CHAR_9: 57,
+    CHAR_UPPERCASE_A: 65,
+    CHAR_LOWERCASE_A: 97,
+    CHAR_UPPERCASE_Z: 90,
+    CHAR_LOWERCASE_Z: 122,
+    CHAR_LEFT_PARENTHESES: 40,
+    CHAR_RIGHT_PARENTHESES: 41,
+    CHAR_ASTERISK: 42,
+    CHAR_AMPERSAND: 38,
+    CHAR_AT: 64,
+    CHAR_BACKWARD_SLASH: 92,
+    CHAR_CARRIAGE_RETURN: 13,
+    CHAR_CIRCUMFLEX_ACCENT: 94,
+    CHAR_COLON: 58,
+    CHAR_COMMA: 44,
+    CHAR_DOT: 46,
+    CHAR_DOUBLE_QUOTE: 34,
+    CHAR_EQUAL: 61,
+    CHAR_EXCLAMATION_MARK: 33,
+    CHAR_FORM_FEED: 12,
+    CHAR_FORWARD_SLASH: 47,
+    CHAR_GRAVE_ACCENT: 96,
+    CHAR_HASH: 35,
+    CHAR_HYPHEN_MINUS: 45,
+    CHAR_LEFT_ANGLE_BRACKET: 60,
+    CHAR_LEFT_CURLY_BRACE: 123,
+    CHAR_LEFT_SQUARE_BRACKET: 91,
+    CHAR_LINE_FEED: 10,
+    CHAR_NO_BREAK_SPACE: 160,
+    CHAR_PERCENT: 37,
+    CHAR_PLUS: 43,
+    CHAR_QUESTION_MARK: 63,
+    CHAR_RIGHT_ANGLE_BRACKET: 62,
+    CHAR_RIGHT_CURLY_BRACE: 125,
+    CHAR_RIGHT_SQUARE_BRACKET: 93,
+    CHAR_SEMICOLON: 59,
+    CHAR_SINGLE_QUOTE: 39,
+    CHAR_SPACE: 32,
+    CHAR_TAB: 9,
+    CHAR_UNDERSCORE: 95,
+    CHAR_VERTICAL_LINE: 124,
+    CHAR_ZERO_WIDTH_NOBREAK_SPACE: 65279,
+    extglobChars(chars) {
+      return {
+        "!": { type: "negate", open: "(?:(?!(?:", close: `))${chars.STAR})` },
+        "?": { type: "qmark", open: "(?:", close: ")?" },
+        "+": { type: "plus", open: "(?:", close: ")+" },
+        "*": { type: "star", open: "(?:", close: ")*" },
+        "@": { type: "at", open: "(?:", close: ")" }
+      };
+    },
+    globChars(win32) {
+      return win32 === true ? WINDOWS_CHARS : POSIX_CHARS;
+    }
+  };
+});
+
+// node_modules/picomatch/lib/utils.js
+var require_utils2 = __commonJS(function(exports) {
+  var {
+    REGEX_BACKSLASH,
+    REGEX_REMOVE_BACKSLASH,
+    REGEX_SPECIAL_CHARS,
+    REGEX_SPECIAL_CHARS_GLOBAL
+  } = require_constants6();
+  exports.isObject = (val) => val !== null && typeof val === "object" && !Array.isArray(val);
+  exports.hasRegexChars = (str) => REGEX_SPECIAL_CHARS.test(str);
+  exports.isRegexChar = (str) => str.length === 1 && exports.hasRegexChars(str);
+  exports.escapeRegex = (str) => str.replace(REGEX_SPECIAL_CHARS_GLOBAL, "\\$1");
+  exports.toPosixSlashes = (str) => str.replace(REGEX_BACKSLASH, "/");
+  exports.isWindows = () => {
+    if (typeof navigator !== "undefined" && navigator.platform) {
+      const platform = navigator.platform.toLowerCase();
+      return platform === "win32" || platform === "windows";
+    }
+    if (typeof process !== "undefined" && process.platform) {
+      return process.platform === "win32";
+    }
+    return false;
+  };
+  exports.removeBackslashes = (str) => {
+    return str.replace(REGEX_REMOVE_BACKSLASH, (match) => {
+      return match === "\\" ? "" : match;
+    });
+  };
+  exports.escapeLast = (input, char, lastIdx) => {
+    const idx = input.lastIndexOf(char, lastIdx);
+    if (idx === -1)
+      return input;
+    if (input[idx - 1] === "\\")
+      return exports.escapeLast(input, char, idx - 1);
+    return `${input.slice(0, idx)}\\${input.slice(idx)}`;
+  };
+  exports.removePrefix = (input, state = {}) => {
+    let output = input;
+    if (output.startsWith("./")) {
+      output = output.slice(2);
+      state.prefix = "./";
+    }
+    return output;
+  };
+  exports.wrapOutput = (input, state = {}, options = {}) => {
+    const prepend = options.contains ? "" : "^";
+    const append = options.contains ? "" : "$";
+    let output = `${prepend}(?:${input})${append}`;
+    if (state.negated === true) {
+      output = `(?:^(?!${output}).*$)`;
+    }
+    return output;
+  };
+  exports.basename = (path, { windows } = {}) => {
+    const segs = path.split(windows ? /[\\/]/ : "/");
+    const last = segs[segs.length - 1];
+    if (last === "") {
+      return segs[segs.length - 2];
+    }
+    return last;
+  };
+});
+
+// node_modules/picomatch/lib/scan.js
+var require_scan = __commonJS(function(exports, module) {
+  var utils = require_utils2();
+  var {
+    CHAR_ASTERISK,
+    CHAR_AT,
+    CHAR_BACKWARD_SLASH,
+    CHAR_COMMA,
+    CHAR_DOT,
+    CHAR_EXCLAMATION_MARK,
+    CHAR_FORWARD_SLASH,
+    CHAR_LEFT_CURLY_BRACE,
+    CHAR_LEFT_PARENTHESES,
+    CHAR_LEFT_SQUARE_BRACKET,
+    CHAR_PLUS,
+    CHAR_QUESTION_MARK,
+    CHAR_RIGHT_CURLY_BRACE,
+    CHAR_RIGHT_PARENTHESES,
+    CHAR_RIGHT_SQUARE_BRACKET
+  } = require_constants6();
+  var isPathSeparator = (code) => {
+    return code === CHAR_FORWARD_SLASH || code === CHAR_BACKWARD_SLASH;
+  };
+  var depth = (token) => {
+    if (token.isPrefix !== true) {
+      token.depth = token.isGlobstar ? Infinity : 1;
+    }
+  };
+  var scan = (input, options) => {
+    const opts = options || {};
+    const length = input.length - 1;
+    const scanToEnd = opts.parts === true || opts.tokens === true || opts.scanToEnd === true;
+    const slashes = [];
+    const tokens = [];
+    const parts = [];
+    let str = input;
+    let index = -1;
+    let start = 0;
+    let lastIndex = 0;
+    let isBrace = false;
+    let isBracket = false;
+    let isGlob = false;
+    let isExtglob = false;
+    let isGlobstar = false;
+    let braceEscaped = false;
+    let backslashes = false;
+    let negated = false;
+    let negatedExtglob = false;
+    let finished = false;
+    let braces = 0;
+    let prev;
+    let code;
+    let token = { value: "", depth: 0, isGlob: false };
+    const eos = () => index >= length;
+    const peek = () => str.charCodeAt(index + 1);
+    const advance = () => {
+      prev = code;
+      return str.charCodeAt(++index);
+    };
+    while (index < length) {
+      code = advance();
+      let next;
+      if (code === CHAR_BACKWARD_SLASH) {
+        backslashes = token.backslashes = true;
+        code = advance();
+        if (code === CHAR_LEFT_CURLY_BRACE) {
+          braceEscaped = true;
+        }
+        continue;
+      }
+      if (braceEscaped === true || code === CHAR_LEFT_CURLY_BRACE) {
+        braces++;
+        while (eos() !== true && (code = advance())) {
+          if (code === CHAR_BACKWARD_SLASH) {
+            backslashes = token.backslashes = true;
+            advance();
+            continue;
+          }
+          if (code === CHAR_LEFT_CURLY_BRACE) {
+            braces++;
+            continue;
+          }
+          if (braceEscaped !== true && code === CHAR_DOT && (code = advance()) === CHAR_DOT) {
+            isBrace = token.isBrace = true;
+            isGlob = token.isGlob = true;
+            finished = true;
+            if (scanToEnd === true) {
+              continue;
+            }
+            break;
+          }
+          if (braceEscaped !== true && code === CHAR_COMMA) {
+            isBrace = token.isBrace = true;
+            isGlob = token.isGlob = true;
+            finished = true;
+            if (scanToEnd === true) {
+              continue;
+            }
+            break;
+          }
+          if (code === CHAR_RIGHT_CURLY_BRACE) {
+            braces--;
+            if (braces === 0) {
+              braceEscaped = false;
+              isBrace = token.isBrace = true;
+              finished = true;
+              break;
+            }
+          }
+        }
+        if (scanToEnd === true) {
+          continue;
+        }
+        break;
+      }
+      if (code === CHAR_FORWARD_SLASH) {
+        slashes.push(index);
+        tokens.push(token);
+        token = { value: "", depth: 0, isGlob: false };
+        if (finished === true)
+          continue;
+        if (prev === CHAR_DOT && index === start + 1) {
+          start += 2;
+          continue;
+        }
+        lastIndex = index + 1;
+        continue;
+      }
+      if (opts.noext !== true) {
+        const isExtglobChar = code === CHAR_PLUS || code === CHAR_AT || code === CHAR_ASTERISK || code === CHAR_QUESTION_MARK || code === CHAR_EXCLAMATION_MARK;
+        if (isExtglobChar === true && peek() === CHAR_LEFT_PARENTHESES) {
+          isGlob = token.isGlob = true;
+          isExtglob = token.isExtglob = true;
+          finished = true;
+          if (code === CHAR_EXCLAMATION_MARK && index === start) {
+            negatedExtglob = true;
+          }
+          if (scanToEnd === true) {
+            let parens = 0;
+            while (eos() !== true && (code = advance())) {
+              if (code === CHAR_BACKWARD_SLASH) {
+                backslashes = token.backslashes = true;
+                advance();
+                continue;
+              }
+              if (code === CHAR_LEFT_PARENTHESES) {
+                parens++;
+                continue;
+              }
+              if (code === CHAR_RIGHT_PARENTHESES && --parens === 0) {
+                finished = true;
+                break;
+              }
+            }
+            continue;
+          }
+          break;
+        }
+      }
+      if (code === CHAR_ASTERISK) {
+        if (prev === CHAR_ASTERISK)
+          isGlobstar = token.isGlobstar = true;
+        isGlob = token.isGlob = true;
+        finished = true;
+        if (scanToEnd === true) {
+          continue;
+        }
+        break;
+      }
+      if (code === CHAR_QUESTION_MARK) {
+        isGlob = token.isGlob = true;
+        finished = true;
+        if (scanToEnd === true) {
+          continue;
+        }
+        break;
+      }
+      if (code === CHAR_LEFT_SQUARE_BRACKET) {
+        while (eos() !== true && (next = advance())) {
+          if (next === CHAR_BACKWARD_SLASH) {
+            backslashes = token.backslashes = true;
+            advance();
+            continue;
+          }
+          if (next === CHAR_RIGHT_SQUARE_BRACKET) {
+            isBracket = token.isBracket = true;
+            isGlob = token.isGlob = true;
+            finished = true;
+            break;
+          }
+        }
+        if (scanToEnd === true) {
+          continue;
+        }
+        break;
+      }
+      if (opts.nonegate !== true && code === CHAR_EXCLAMATION_MARK && index === start) {
+        negated = token.negated = true;
+        start++;
+        continue;
+      }
+      if (opts.noparen !== true && code === CHAR_LEFT_PARENTHESES) {
+        isGlob = token.isGlob = true;
+        if (scanToEnd === true) {
+          let parens = 1;
+          while (eos() !== true && (code = advance())) {
+            if (code === CHAR_BACKWARD_SLASH) {
+              backslashes = token.backslashes = true;
+              advance();
+              continue;
+            }
+            if (code === CHAR_LEFT_PARENTHESES) {
+              parens++;
+              continue;
+            }
+            if (code === CHAR_RIGHT_PARENTHESES && --parens === 0) {
+              finished = true;
+              break;
+            }
+          }
+          continue;
+        }
+        break;
+      }
+      if (isGlob === true) {
+        finished = true;
+        if (scanToEnd === true) {
+          continue;
+        }
+        break;
+      }
+    }
+    if (opts.noext === true) {
+      isExtglob = false;
+      isGlob = false;
+    }
+    let base = str;
+    let prefix = "";
+    let glob = "";
+    if (start > 0) {
+      prefix = str.slice(0, start);
+      str = str.slice(start);
+      lastIndex -= start;
+    }
+    if (base && isGlob === true && lastIndex > 0) {
+      base = str.slice(0, lastIndex);
+      glob = str.slice(lastIndex);
+    } else if (isGlob === true) {
+      base = "";
+      glob = str;
+    } else {
+      base = str;
+    }
+    if (base && base !== "" && base !== "/" && base !== str) {
+      if (isPathSeparator(base.charCodeAt(base.length - 1))) {
+        base = base.slice(0, -1);
+      }
+    }
+    if (opts.unescape === true) {
+      if (glob)
+        glob = utils.removeBackslashes(glob);
+      if (base && backslashes === true) {
+        base = utils.removeBackslashes(base);
+      }
+    }
+    const state = {
+      prefix,
+      input,
+      start,
+      base,
+      glob,
+      isBrace,
+      isBracket,
+      isGlob,
+      isExtglob,
+      isGlobstar,
+      negated,
+      negatedExtglob
+    };
+    if (opts.tokens === true) {
+      state.maxDepth = 0;
+      if (!isPathSeparator(code)) {
+        tokens.push(token);
+      }
+      state.tokens = tokens;
+    }
+    if (opts.parts === true || opts.tokens === true) {
+      let prevIndex;
+      for (let idx = 0;idx < slashes.length; idx++) {
+        const n = prevIndex !== undefined ? prevIndex + 1 : start;
+        const i = slashes[idx];
+        const value = input.slice(n, i);
+        if (opts.tokens) {
+          if (idx === 0 && start !== 0) {
+            tokens[idx].isPrefix = true;
+            tokens[idx].value = prefix;
+          } else {
+            tokens[idx].value = value;
+          }
+          depth(tokens[idx]);
+          state.maxDepth += tokens[idx].depth;
+        }
+        if (i >= start) {
+          parts.push(value);
+          prevIndex = i;
+        }
+      }
+      const n = prevIndex !== undefined ? prevIndex + 1 : start;
+      const value = input.slice(n);
+      parts.push(value);
+      if (opts.tokens && prevIndex && prevIndex + 1 < input.length) {
+        tokens[tokens.length - 1].value = value;
+        depth(tokens[tokens.length - 1]);
+        state.maxDepth += tokens[tokens.length - 1].depth;
+      }
+      state.slashes = slashes;
+      state.parts = parts;
+    }
+    return state;
+  };
+  module.exports = scan;
+});
+
+// node_modules/picomatch/lib/parse.js
+var require_parse2 = __commonJS(function(exports, module) {
+  var constants = require_constants6();
+  var utils = require_utils2();
+  var {
+    MAX_LENGTH,
+    POSIX_REGEX_SOURCE,
+    REGEX_NON_SPECIAL_CHARS,
+    REGEX_SPECIAL_CHARS_BACKREF,
+    REPLACEMENTS
+  } = constants;
+  var expandRange = (args, options) => {
+    if (typeof options.expandRange === "function") {
+      return options.expandRange(...args, options);
+    }
+    args.sort();
+    const value = `[${args.join("-")}]`;
+    try {
+      new RegExp(value);
+    } catch (ex) {
+      return args.map((v) => utils.escapeRegex(v)).join("..");
+    }
+    return value;
+  };
+  var syntaxError = (type, char) => {
+    return `Missing ${type}: "${char}" - use "\\\\${char}" to match literal characters`;
+  };
+  var splitTopLevel = (input) => {
+    const parts = [];
+    let bracket = 0;
+    let paren = 0;
+    let quote = 0;
+    let value = "";
+    let escaped = false;
+    for (const ch of input) {
+      if (escaped === true) {
+        value += ch;
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        value += ch;
+        escaped = true;
+        continue;
+      }
+      if (ch === '"') {
+        quote = quote === 1 ? 0 : 1;
+        value += ch;
+        continue;
+      }
+      if (quote === 0) {
+        if (ch === "[") {
+          bracket++;
+        } else if (ch === "]" && bracket > 0) {
+          bracket--;
+        } else if (bracket === 0) {
+          if (ch === "(") {
+            paren++;
+          } else if (ch === ")" && paren > 0) {
+            paren--;
+          } else if (ch === "|" && paren === 0) {
+            parts.push(value);
+            value = "";
+            continue;
+          }
+        }
+      }
+      value += ch;
+    }
+    parts.push(value);
+    return parts;
+  };
+  var isPlainBranch = (branch) => {
+    let escaped = false;
+    for (const ch of branch) {
+      if (escaped === true) {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (/[?*+@!()[\]{}]/.test(ch)) {
+        return false;
+      }
+    }
+    return true;
+  };
+  var normalizeSimpleBranch = (branch) => {
+    let value = branch.trim();
+    let changed = true;
+    while (changed === true) {
+      changed = false;
+      if (/^@\([^\\()[\]{}|]+\)$/.test(value)) {
+        value = value.slice(2, -1);
+        changed = true;
+      }
+    }
+    if (!isPlainBranch(value)) {
+      return;
+    }
+    return value.replace(/\\(.)/g, "$1");
+  };
+  var hasRepeatedCharPrefixOverlap = (branches) => {
+    const values = branches.map(normalizeSimpleBranch).filter(Boolean);
+    for (let i = 0;i < values.length; i++) {
+      for (let j = i + 1;j < values.length; j++) {
+        const a = values[i];
+        const b = values[j];
+        const char = a[0];
+        if (!char || a !== char.repeat(a.length) || b !== char.repeat(b.length)) {
+          continue;
+        }
+        if (a === b || a.startsWith(b) || b.startsWith(a)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+  var parseRepeatedExtglob = (pattern, requireEnd = true) => {
+    if (pattern[0] !== "+" && pattern[0] !== "*" || pattern[1] !== "(") {
+      return;
+    }
+    let bracket = 0;
+    let paren = 0;
+    let quote = 0;
+    let escaped = false;
+    for (let i = 1;i < pattern.length; i++) {
+      const ch = pattern[i];
+      if (escaped === true) {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (ch === '"') {
+        quote = quote === 1 ? 0 : 1;
+        continue;
+      }
+      if (quote === 1) {
+        continue;
+      }
+      if (ch === "[") {
+        bracket++;
+        continue;
+      }
+      if (ch === "]" && bracket > 0) {
+        bracket--;
+        continue;
+      }
+      if (bracket > 0) {
+        continue;
+      }
+      if (ch === "(") {
+        paren++;
+        continue;
+      }
+      if (ch === ")") {
+        paren--;
+        if (paren === 0) {
+          if (requireEnd === true && i !== pattern.length - 1) {
+            return;
+          }
+          return {
+            type: pattern[0],
+            body: pattern.slice(2, i),
+            end: i
+          };
+        }
+      }
+    }
+  };
+  var buildCharClassStar = (chars) => {
+    const source = chars.length === 1 ? utils.escapeRegex(chars[0]) : `[${chars.map((ch) => utils.escapeRegex(ch)).join("")}]`;
+    return `${source}*`;
+  };
+  var getStarExtglobSequenceChars = (pattern) => {
+    let index = 0;
+    const chars = [];
+    while (index < pattern.length) {
+      const match = parseRepeatedExtglob(pattern.slice(index), false);
+      if (!match || match.type !== "*") {
+        return;
+      }
+      const branches = splitTopLevel(match.body).map((branch) => branch.trim());
+      if (branches.length !== 1) {
+        return;
+      }
+      const branch = normalizeSimpleBranch(branches[0]);
+      if (!branch || branch.length !== 1) {
+        return;
+      }
+      chars.push(branch);
+      index += match.end + 1;
+    }
+    if (chars.length < 1) {
+      return;
+    }
+    return chars;
+  };
+  var repeatedExtglobRecursion = (pattern) => {
+    let depth = 0;
+    let value = pattern.trim();
+    let match = parseRepeatedExtglob(value);
+    while (match) {
+      depth++;
+      value = match.body.trim();
+      match = parseRepeatedExtglob(value);
+    }
+    return depth;
+  };
+  var analyzeRepeatedExtglob = (body, options) => {
+    if (options.maxExtglobRecursion === false) {
+      return { risky: false };
+    }
+    const max = typeof options.maxExtglobRecursion === "number" ? options.maxExtglobRecursion : constants.DEFAULT_MAX_EXTGLOB_RECURSION;
+    const branches = splitTopLevel(body).map((branch) => branch.trim());
+    if (branches.length > 1) {
+      if (branches.some((branch) => branch === "") || branches.some((branch) => /^[*?]+$/.test(branch)) || hasRepeatedCharPrefixOverlap(branches)) {
+        return { risky: true };
+      }
+    }
+    const safeChars = [];
+    let sawStarSequence = false;
+    let combinable = true;
+    for (const branch of branches) {
+      const chars = getStarExtglobSequenceChars(branch);
+      if (chars) {
+        sawStarSequence = true;
+        safeChars.push(...chars);
+        continue;
+      }
+      const literal = normalizeSimpleBranch(branch);
+      if (literal && literal.length === 1) {
+        safeChars.push(literal);
+        continue;
+      }
+      combinable = false;
+      if (repeatedExtglobRecursion(branch) > max) {
+        return { risky: true };
+      }
+    }
+    if (sawStarSequence) {
+      return combinable ? { risky: true, safeOutput: buildCharClassStar([...new Set(safeChars)]) } : { risky: true };
+    }
+    return { risky: false };
+  };
+  var parse = (input, options) => {
+    if (typeof input !== "string") {
+      throw new TypeError("Expected a string");
+    }
+    input = REPLACEMENTS[input] || input;
+    const opts = { ...options };
+    const max = typeof opts.maxLength === "number" ? Math.min(MAX_LENGTH, opts.maxLength) : MAX_LENGTH;
+    let len = input.length;
+    if (len > max) {
+      throw new SyntaxError(`Input length: ${len}, exceeds maximum allowed length: ${max}`);
+    }
+    const bos = { type: "bos", value: "", output: opts.prepend || "" };
+    const tokens = [bos];
+    const capture = opts.capture ? "" : "?:";
+    const PLATFORM_CHARS = constants.globChars(opts.windows);
+    const EXTGLOB_CHARS = constants.extglobChars(PLATFORM_CHARS);
+    const {
+      DOT_LITERAL,
+      PLUS_LITERAL,
+      SLASH_LITERAL,
+      ONE_CHAR,
+      DOTS_SLASH,
+      NO_DOT,
+      NO_DOT_SLASH,
+      NO_DOTS_SLASH,
+      QMARK,
+      QMARK_NO_DOT,
+      STAR,
+      START_ANCHOR
+    } = PLATFORM_CHARS;
+    const globstar = (opts) => {
+      return `(${capture}(?:(?!${START_ANCHOR}${opts.dot ? DOTS_SLASH : DOT_LITERAL}).)*?)`;
+    };
+    const nodot = opts.dot ? "" : NO_DOT;
+    const qmarkNoDot = opts.dot ? QMARK : QMARK_NO_DOT;
+    let star = opts.bash === true ? globstar(opts) : STAR;
+    if (opts.capture) {
+      star = `(${star})`;
+    }
+    if (typeof opts.noext === "boolean") {
+      opts.noextglob = opts.noext;
+    }
+    const state = {
+      input,
+      index: -1,
+      start: 0,
+      dot: opts.dot === true,
+      consumed: "",
+      output: "",
+      prefix: "",
+      backtrack: false,
+      negated: false,
+      brackets: 0,
+      braces: 0,
+      parens: 0,
+      quotes: 0,
+      globstar: false,
+      tokens
+    };
+    input = utils.removePrefix(input, state);
+    len = input.length;
+    const extglobs = [];
+    const braces = [];
+    const stack = [];
+    let prev = bos;
+    let value;
+    const eos = () => state.index === len - 1;
+    const peek = state.peek = (n = 1) => input[state.index + n];
+    const advance = state.advance = () => input[++state.index] || "";
+    const remaining = () => input.slice(state.index + 1);
+    const consume = (value = "", num = 0) => {
+      state.consumed += value;
+      state.index += num;
+    };
+    const append = (token) => {
+      state.output += token.output != null ? token.output : token.value;
+      consume(token.value);
+    };
+    const negate = () => {
+      let count = 1;
+      while (peek() === "!" && (peek(2) !== "(" || peek(3) === "?")) {
+        advance();
+        state.start++;
+        count++;
+      }
+      if (count % 2 === 0) {
+        return false;
+      }
+      state.negated = true;
+      state.start++;
+      return true;
+    };
+    const increment = (type) => {
+      state[type]++;
+      stack.push(type);
+    };
+    const decrement = (type) => {
+      state[type]--;
+      stack.pop();
+    };
+    const push = (tok) => {
+      if (prev.type === "globstar") {
+        const isBrace = state.braces > 0 && (tok.type === "comma" || tok.type === "brace");
+        const isExtglob = tok.extglob === true || extglobs.length && (tok.type === "pipe" || tok.type === "paren");
+        if (tok.type !== "slash" && tok.type !== "paren" && !isBrace && !isExtglob) {
+          state.output = state.output.slice(0, -prev.output.length);
+          prev.type = "star";
+          prev.value = "*";
+          prev.output = star;
+          state.output += prev.output;
+        }
+      }
+      if (extglobs.length && tok.type !== "paren") {
+        extglobs[extglobs.length - 1].inner += tok.value;
+      }
+      if (tok.value || tok.output)
+        append(tok);
+      if (prev && prev.type === "text" && tok.type === "text") {
+        prev.output = (prev.output || prev.value) + tok.value;
+        prev.value += tok.value;
+        return;
+      }
+      tok.prev = prev;
+      tokens.push(tok);
+      prev = tok;
+    };
+    const extglobOpen = (type, value) => {
+      const token = { ...EXTGLOB_CHARS[value], conditions: 1, inner: "" };
+      token.prev = prev;
+      token.parens = state.parens;
+      token.output = state.output;
+      token.startIndex = state.index;
+      token.tokensIndex = tokens.length;
+      const output = (opts.capture ? "(" : "") + token.open;
+      increment("parens");
+      push({ type, value, output: state.output ? "" : ONE_CHAR });
+      push({ type: "paren", extglob: true, value: advance(), output });
+      extglobs.push(token);
+    };
+    const extglobClose = (token) => {
+      const literal = input.slice(token.startIndex, state.index + 1);
+      const body = input.slice(token.startIndex + 2, state.index);
+      const analysis = analyzeRepeatedExtglob(body, opts);
+      if ((token.type === "plus" || token.type === "star") && analysis.risky) {
+        const safeOutput = analysis.safeOutput ? (token.output ? "" : ONE_CHAR) + (opts.capture ? `(${analysis.safeOutput})` : analysis.safeOutput) : undefined;
+        const open = tokens[token.tokensIndex];
+        open.type = "text";
+        open.value = literal;
+        open.output = safeOutput || utils.escapeRegex(literal);
+        for (let i = token.tokensIndex + 1;i < tokens.length; i++) {
+          tokens[i].value = "";
+          tokens[i].output = "";
+          delete tokens[i].suffix;
+        }
+        state.output = token.output + open.output;
+        state.backtrack = true;
+        push({ type: "paren", extglob: true, value, output: "" });
+        decrement("parens");
+        return;
+      }
+      let output = token.close + (opts.capture ? ")" : "");
+      let rest;
+      if (token.type === "negate") {
+        let extglobStar = star;
+        if (token.inner && token.inner.length > 1 && token.inner.includes("/")) {
+          extglobStar = globstar(opts);
+        }
+        if (extglobStar !== star || eos() || /^\)+$/.test(remaining())) {
+          output = token.close = `)$))${extglobStar}`;
+        }
+        if (token.inner.includes("*") && (rest = remaining()) && /^\.[^\\/.]+$/.test(rest)) {
+          const expression = parse(rest, { ...options, fastpaths: false }).output;
+          output = token.close = `)${expression})${extglobStar})`;
+        }
+        if (token.prev.type === "bos") {
+          state.negatedExtglob = true;
+        }
+      }
+      push({ type: "paren", extglob: true, value, output });
+      decrement("parens");
+    };
+    if (opts.fastpaths !== false && !/(^[*!]|[/()[\]{}"])/.test(input)) {
+      let backslashes = false;
+      let output = input.replace(REGEX_SPECIAL_CHARS_BACKREF, (m, esc, chars, first, rest, index) => {
+        if (first === "\\") {
+          backslashes = true;
+          return m;
+        }
+        if (first === "?") {
+          if (esc) {
+            return esc + first + (rest ? QMARK.repeat(rest.length) : "");
+          }
+          if (index === 0) {
+            return qmarkNoDot + (rest ? QMARK.repeat(rest.length) : "");
+          }
+          return QMARK.repeat(chars.length);
+        }
+        if (first === ".") {
+          return DOT_LITERAL.repeat(chars.length);
+        }
+        if (first === "*") {
+          if (esc) {
+            return esc + first + (rest ? star : "");
+          }
+          return star;
+        }
+        return esc ? m : `\\${m}`;
+      });
+      if (backslashes === true) {
+        if (opts.unescape === true) {
+          output = output.replace(/\\/g, "");
+        } else {
+          output = output.replace(/\\+/g, (m) => {
+            return m.length % 2 === 0 ? "\\\\" : m ? "\\" : "";
+          });
+        }
+      }
+      if (output === input && opts.contains === true) {
+        state.output = input;
+        return state;
+      }
+      state.output = utils.wrapOutput(output, state, options);
+      return state;
+    }
+    while (!eos()) {
+      value = advance();
+      if (value === "\x00") {
+        continue;
+      }
+      if (value === "\\") {
+        const next = peek();
+        if (next === "/" && opts.bash !== true) {
+          continue;
+        }
+        if (next === "." || next === ";") {
+          continue;
+        }
+        if (!next) {
+          value += "\\";
+          push({ type: "text", value });
+          continue;
+        }
+        const match = /^\\+/.exec(remaining());
+        let slashes = 0;
+        if (match && match[0].length > 2) {
+          slashes = match[0].length;
+          state.index += slashes;
+          if (slashes % 2 !== 0) {
+            value += "\\";
+          }
+        }
+        if (opts.unescape === true) {
+          value = advance();
+        } else {
+          value += advance();
+        }
+        if (state.brackets === 0) {
+          push({ type: "text", value });
+          continue;
+        }
+      }
+      if (state.brackets > 0 && (value !== "]" || prev.value === "[" || prev.value === "[^")) {
+        if (opts.posix !== false && value === ":") {
+          const inner = prev.value.slice(1);
+          if (inner.includes("[")) {
+            prev.posix = true;
+            if (inner.includes(":")) {
+              const idx = prev.value.lastIndexOf("[");
+              const pre = prev.value.slice(0, idx);
+              const rest = prev.value.slice(idx + 2);
+              const posix = POSIX_REGEX_SOURCE[rest];
+              if (posix) {
+                prev.value = pre + posix;
+                state.backtrack = true;
+                advance();
+                if (!bos.output && tokens.indexOf(prev) === 1) {
+                  bos.output = ONE_CHAR;
+                }
+                continue;
+              }
+            }
+          }
+        }
+        if (value === "[" && peek() !== ":" || value === "-" && peek() === "]") {
+          value = `\\${value}`;
+        }
+        if (value === "]" && (prev.value === "[" || prev.value === "[^")) {
+          value = `\\${value}`;
+        }
+        if (opts.posix === true && value === "!" && prev.value === "[") {
+          value = "^";
+        }
+        prev.value += value;
+        append({ value });
+        continue;
+      }
+      if (state.quotes === 1 && value !== '"') {
+        value = utils.escapeRegex(value);
+        prev.value += value;
+        append({ value });
+        continue;
+      }
+      if (value === '"') {
+        state.quotes = state.quotes === 1 ? 0 : 1;
+        if (opts.keepQuotes === true) {
+          push({ type: "text", value });
+        }
+        continue;
+      }
+      if (value === "(") {
+        increment("parens");
+        push({ type: "paren", value });
+        continue;
+      }
+      if (value === ")") {
+        if (state.parens === 0 && opts.strictBrackets === true) {
+          throw new SyntaxError(syntaxError("opening", "("));
+        }
+        const extglob = extglobs[extglobs.length - 1];
+        if (extglob && state.parens === extglob.parens + 1) {
+          extglobClose(extglobs.pop());
+          continue;
+        }
+        push({ type: "paren", value, output: state.parens ? ")" : "\\)" });
+        decrement("parens");
+        continue;
+      }
+      if (value === "[") {
+        if (opts.nobracket === true || !remaining().includes("]")) {
+          if (opts.nobracket !== true && opts.strictBrackets === true) {
+            throw new SyntaxError(syntaxError("closing", "]"));
+          }
+          value = `\\${value}`;
+        } else {
+          increment("brackets");
+        }
+        push({ type: "bracket", value });
+        continue;
+      }
+      if (value === "]") {
+        if (opts.nobracket === true || prev && prev.type === "bracket" && prev.value.length === 1) {
+          push({ type: "text", value, output: `\\${value}` });
+          continue;
+        }
+        if (state.brackets === 0) {
+          if (opts.strictBrackets === true) {
+            throw new SyntaxError(syntaxError("opening", "["));
+          }
+          push({ type: "text", value, output: `\\${value}` });
+          continue;
+        }
+        decrement("brackets");
+        const prevValue = prev.value.slice(1);
+        if (prev.posix !== true && prevValue[0] === "^" && !prevValue.includes("/")) {
+          value = `/${value}`;
+        }
+        prev.value += value;
+        append({ value });
+        if (opts.literalBrackets === false || utils.hasRegexChars(prevValue)) {
+          continue;
+        }
+        const escaped = utils.escapeRegex(prev.value);
+        state.output = state.output.slice(0, -prev.value.length);
+        if (opts.literalBrackets === true) {
+          state.output += escaped;
+          prev.value = escaped;
+          continue;
+        }
+        prev.value = `(${capture}${escaped}|${prev.value})`;
+        state.output += prev.value;
+        continue;
+      }
+      if (value === "{" && opts.nobrace !== true) {
+        increment("braces");
+        const open = {
+          type: "brace",
+          value,
+          output: "(",
+          outputIndex: state.output.length,
+          tokensIndex: state.tokens.length
+        };
+        braces.push(open);
+        push(open);
+        continue;
+      }
+      if (value === "}") {
+        const brace = braces[braces.length - 1];
+        if (opts.nobrace === true || !brace) {
+          push({ type: "text", value, output: value });
+          continue;
+        }
+        let output = ")";
+        if (brace.dots === true) {
+          const arr = tokens.slice();
+          const range = [];
+          for (let i = arr.length - 1;i >= 0; i--) {
+            tokens.pop();
+            if (arr[i].type === "brace") {
+              break;
+            }
+            if (arr[i].type !== "dots") {
+              range.unshift(arr[i].value);
+            }
+          }
+          output = expandRange(range, opts);
+          state.backtrack = true;
+        }
+        if (brace.comma !== true && brace.dots !== true) {
+          const out = state.output.slice(0, brace.outputIndex);
+          const toks = state.tokens.slice(brace.tokensIndex);
+          brace.value = brace.output = "\\{";
+          value = output = "\\}";
+          state.output = out;
+          for (const t of toks) {
+            state.output += t.output || t.value;
+          }
+        }
+        push({ type: "brace", value, output });
+        decrement("braces");
+        braces.pop();
+        continue;
+      }
+      if (value === "|") {
+        if (extglobs.length > 0) {
+          extglobs[extglobs.length - 1].conditions++;
+        }
+        push({ type: "text", value });
+        continue;
+      }
+      if (value === ",") {
+        let output = value;
+        const brace = braces[braces.length - 1];
+        if (brace && stack[stack.length - 1] === "braces") {
+          brace.comma = true;
+          output = "|";
+        }
+        push({ type: "comma", value, output });
+        continue;
+      }
+      if (value === "/") {
+        if (prev.type === "dot" && state.index === state.start + 1) {
+          state.start = state.index + 1;
+          state.consumed = "";
+          state.output = "";
+          tokens.pop();
+          prev = bos;
+          continue;
+        }
+        push({ type: "slash", value, output: SLASH_LITERAL });
+        continue;
+      }
+      if (value === ".") {
+        if (state.braces > 0 && prev.type === "dot") {
+          if (prev.value === ".")
+            prev.output = DOT_LITERAL;
+          const brace = braces[braces.length - 1];
+          prev.type = "dots";
+          prev.output += value;
+          prev.value += value;
+          brace.dots = true;
+          continue;
+        }
+        if (state.braces + state.parens === 0 && prev.type !== "bos" && prev.type !== "slash") {
+          push({ type: "text", value, output: DOT_LITERAL });
+          continue;
+        }
+        push({ type: "dot", value, output: DOT_LITERAL });
+        continue;
+      }
+      if (value === "?") {
+        const isGroup = prev && prev.value === "(";
+        if (!isGroup && opts.noextglob !== true && peek() === "(" && peek(2) !== "?") {
+          extglobOpen("qmark", value);
+          continue;
+        }
+        if (prev && prev.type === "paren") {
+          const next = peek();
+          let output = value;
+          if (prev.value === "(" && !/[!=<:]/.test(next) || next === "<" && !/<([!=]|\w+>)/.test(remaining())) {
+            output = `\\${value}`;
+          }
+          push({ type: "text", value, output });
+          continue;
+        }
+        if (opts.dot !== true && (prev.type === "slash" || prev.type === "bos")) {
+          push({ type: "qmark", value, output: QMARK_NO_DOT });
+          continue;
+        }
+        push({ type: "qmark", value, output: QMARK });
+        continue;
+      }
+      if (value === "!") {
+        if (opts.noextglob !== true && peek() === "(") {
+          if (peek(2) !== "?" || !/[!=<:]/.test(peek(3))) {
+            extglobOpen("negate", value);
+            continue;
+          }
+        }
+        if (opts.nonegate !== true && state.index === 0) {
+          negate();
+          continue;
+        }
+      }
+      if (value === "+") {
+        if (opts.noextglob !== true && peek() === "(" && peek(2) !== "?") {
+          extglobOpen("plus", value);
+          continue;
+        }
+        if (prev && prev.value === "(" || opts.regex === false) {
+          push({ type: "plus", value, output: PLUS_LITERAL });
+          continue;
+        }
+        if (prev && (prev.type === "bracket" || prev.type === "paren" || prev.type === "brace") || state.parens > 0) {
+          push({ type: "plus", value });
+          continue;
+        }
+        push({ type: "plus", value: PLUS_LITERAL });
+        continue;
+      }
+      if (value === "@") {
+        if (opts.noextglob !== true && peek() === "(" && peek(2) !== "?") {
+          push({ type: "at", extglob: true, value, output: "" });
+          continue;
+        }
+        push({ type: "text", value });
+        continue;
+      }
+      if (value !== "*") {
+        if (value === "$" || value === "^") {
+          value = `\\${value}`;
+        }
+        const match = REGEX_NON_SPECIAL_CHARS.exec(remaining());
+        if (match) {
+          value += match[0];
+          state.index += match[0].length;
+        }
+        push({ type: "text", value });
+        continue;
+      }
+      if (prev && (prev.type === "globstar" || prev.star === true)) {
+        prev.type = "star";
+        prev.star = true;
+        prev.value += value;
+        prev.output = star;
+        state.backtrack = true;
+        state.globstar = true;
+        consume(value);
+        continue;
+      }
+      let rest = remaining();
+      if (opts.noextglob !== true && /^\([^?]/.test(rest)) {
+        extglobOpen("star", value);
+        continue;
+      }
+      if (prev.type === "star") {
+        if (opts.noglobstar === true) {
+          consume(value);
+          continue;
+        }
+        const prior = prev.prev;
+        const before = prior.prev;
+        const isStart = prior.type === "slash" || prior.type === "bos";
+        const afterStar = before && (before.type === "star" || before.type === "globstar");
+        if (opts.bash === true && (!isStart || rest[0] && rest[0] !== "/")) {
+          push({ type: "star", value, output: "" });
+          continue;
+        }
+        const isBrace = state.braces > 0 && (prior.type === "comma" || prior.type === "brace");
+        const isExtglob = extglobs.length && (prior.type === "pipe" || prior.type === "paren");
+        if (!isStart && prior.type !== "paren" && !isBrace && !isExtglob) {
+          push({ type: "star", value, output: "" });
+          continue;
+        }
+        while (rest.slice(0, 3) === "/**") {
+          const after = input[state.index + 4];
+          if (after && after !== "/") {
+            break;
+          }
+          rest = rest.slice(3);
+          consume("/**", 3);
+        }
+        const isEnd = eos() || state.parens > 0 && rest === ")".repeat(state.parens) && !extglobs.some((extglob) => extglob.type === "negate");
+        if (prior.type === "bos" && eos()) {
+          prev.type = "globstar";
+          prev.value += value;
+          prev.output = globstar(opts);
+          state.output = prev.output;
+          state.globstar = true;
+          consume(value);
+          continue;
+        }
+        if (prior.type === "slash" && prior.prev.type !== "bos" && !afterStar && isEnd) {
+          state.output = state.output.slice(0, -(prior.output + prev.output).length);
+          prior.output = `(?:${prior.output}`;
+          prev.type = "globstar";
+          prev.output = globstar(opts) + (opts.strictSlashes ? ")" : "|$)");
+          prev.value += value;
+          state.globstar = true;
+          state.output += prior.output + prev.output;
+          consume(value);
+          continue;
+        }
+        if (prior.type === "slash" && prior.prev.type !== "bos" && rest[0] === "/") {
+          const end = rest[1] !== undefined ? "|$" : "";
+          state.output = state.output.slice(0, -(prior.output + prev.output).length);
+          prior.output = `(?:${prior.output}`;
+          prev.type = "globstar";
+          prev.output = `${globstar(opts)}${SLASH_LITERAL}|${SLASH_LITERAL}${end})`;
+          prev.value += value;
+          state.output += prior.output + prev.output;
+          state.globstar = true;
+          consume(value + advance());
+          push({ type: "slash", value: "/", output: "" });
+          continue;
+        }
+        if (prior.type === "bos" && rest[0] === "/") {
+          prev.type = "globstar";
+          prev.value += value;
+          prev.output = `(?:^|${SLASH_LITERAL}|${globstar(opts)}${SLASH_LITERAL})`;
+          state.output = prev.output;
+          state.globstar = true;
+          consume(value + advance());
+          push({ type: "slash", value: "/", output: "" });
+          continue;
+        }
+        state.output = state.output.slice(0, -prev.output.length);
+        prev.type = "globstar";
+        prev.output = globstar(opts);
+        prev.value += value;
+        state.output += prev.output;
+        state.globstar = true;
+        consume(value);
+        continue;
+      }
+      const token = { type: "star", value, output: star };
+      if (opts.bash === true) {
+        token.output = ".*?";
+        if (prev.type === "bos" || prev.type === "slash") {
+          token.output = nodot + token.output;
+        }
+        push(token);
+        continue;
+      }
+      if (prev && (prev.type === "bracket" || prev.type === "paren") && opts.regex === true) {
+        token.output = value;
+        push(token);
+        continue;
+      }
+      if (state.index === state.start || prev.type === "slash" || prev.type === "dot") {
+        if (prev.type === "dot") {
+          state.output += NO_DOT_SLASH;
+          prev.output += NO_DOT_SLASH;
+        } else if (opts.dot === true) {
+          state.output += NO_DOTS_SLASH;
+          prev.output += NO_DOTS_SLASH;
+        } else {
+          state.output += nodot;
+          prev.output += nodot;
+        }
+        if (peek() !== "*") {
+          state.output += ONE_CHAR;
+          prev.output += ONE_CHAR;
+        }
+      }
+      push(token);
+    }
+    while (state.brackets > 0) {
+      if (opts.strictBrackets === true)
+        throw new SyntaxError(syntaxError("closing", "]"));
+      state.output = utils.escapeLast(state.output, "[");
+      decrement("brackets");
+    }
+    while (state.parens > 0) {
+      if (opts.strictBrackets === true)
+        throw new SyntaxError(syntaxError("closing", ")"));
+      state.output = utils.escapeLast(state.output, "(");
+      decrement("parens");
+    }
+    while (state.braces > 0) {
+      if (opts.strictBrackets === true)
+        throw new SyntaxError(syntaxError("closing", "}"));
+      state.output = utils.escapeLast(state.output, "{");
+      decrement("braces");
+    }
+    if (opts.strictSlashes !== true && (prev.type === "star" || prev.type === "bracket")) {
+      push({ type: "maybe_slash", value: "", output: `${SLASH_LITERAL}?` });
+    }
+    if (state.backtrack === true) {
+      state.output = "";
+      for (const token of state.tokens) {
+        state.output += token.output != null ? token.output : token.value;
+        if (token.suffix) {
+          state.output += token.suffix;
+        }
+      }
+    }
+    return state;
+  };
+  parse.fastpaths = (input, options) => {
+    const opts = { ...options };
+    const max = typeof opts.maxLength === "number" ? Math.min(MAX_LENGTH, opts.maxLength) : MAX_LENGTH;
+    const len = input.length;
+    if (len > max) {
+      throw new SyntaxError(`Input length: ${len}, exceeds maximum allowed length: ${max}`);
+    }
+    input = REPLACEMENTS[input] || input;
+    const {
+      DOT_LITERAL,
+      SLASH_LITERAL,
+      ONE_CHAR,
+      DOTS_SLASH,
+      NO_DOT,
+      NO_DOTS,
+      NO_DOTS_SLASH,
+      STAR,
+      START_ANCHOR
+    } = constants.globChars(opts.windows);
+    const nodot = opts.dot ? NO_DOTS : NO_DOT;
+    const slashDot = opts.dot ? NO_DOTS_SLASH : NO_DOT;
+    const capture = opts.capture ? "" : "?:";
+    const state = { negated: false, prefix: "" };
+    let star = opts.bash === true ? ".*?" : STAR;
+    if (opts.capture) {
+      star = `(${star})`;
+    }
+    const globstar = (opts) => {
+      if (opts.noglobstar === true)
+        return star;
+      return `(${capture}(?:(?!${START_ANCHOR}${opts.dot ? DOTS_SLASH : DOT_LITERAL}).)*?)`;
+    };
+    const create = (str) => {
+      switch (str) {
+        case "*":
+          return `${nodot}${ONE_CHAR}${star}`;
+        case ".*":
+          return `${DOT_LITERAL}${ONE_CHAR}${star}`;
+        case "*.*":
+          return `${nodot}${star}${DOT_LITERAL}${ONE_CHAR}${star}`;
+        case "*/*":
+          return `${nodot}${star}${SLASH_LITERAL}${ONE_CHAR}${slashDot}${star}`;
+        case "**":
+          return nodot + globstar(opts);
+        case "**/*":
+          return `(?:${nodot}${globstar(opts)}${SLASH_LITERAL})?${slashDot}${ONE_CHAR}${star}`;
+        case "**/*.*":
+          return `(?:${nodot}${globstar(opts)}${SLASH_LITERAL})?${slashDot}${star}${DOT_LITERAL}${ONE_CHAR}${star}`;
+        case "**/.*":
+          return `(?:${nodot}${globstar(opts)}${SLASH_LITERAL})?${DOT_LITERAL}${ONE_CHAR}${star}`;
+        default: {
+          const match = /^(.*?)\.(\w+)$/.exec(str);
+          if (!match)
+            return;
+          const source = create(match[1]);
+          if (!source)
+            return;
+          return source + DOT_LITERAL + match[2];
+        }
+      }
+    };
+    const output = utils.removePrefix(input, state);
+    let source = create(output);
+    if (source && opts.strictSlashes !== true) {
+      source += `${SLASH_LITERAL}?`;
+    }
+    return source;
+  };
+  module.exports = parse;
+});
+
+// node_modules/picomatch/lib/picomatch.js
+var require_picomatch = __commonJS(function(exports, module) {
+  var scan = require_scan();
+  var parse = require_parse2();
+  var utils = require_utils2();
+  var constants = require_constants6();
+  var isObject = (val) => val && typeof val === "object" && !Array.isArray(val);
+  var picomatch = (glob, options, returnState = false) => {
+    if (Array.isArray(glob)) {
+      const fns = glob.map((input) => picomatch(input, options, returnState));
+      const arrayMatcher = (str) => {
+        for (const isMatch of fns) {
+          const state = isMatch(str);
+          if (state)
+            return state;
+        }
+        return false;
+      };
+      return arrayMatcher;
+    }
+    const isState = isObject(glob) && glob.tokens && glob.input;
+    if (glob === "" || typeof glob !== "string" && !isState) {
+      throw new TypeError("Expected pattern to be a non-empty string");
+    }
+    const opts = options || {};
+    const posix = opts.windows;
+    const regex = isState ? picomatch.compileRe(glob, options) : picomatch.makeRe(glob, options, false, true);
+    const state = regex.state;
+    delete regex.state;
+    let isIgnored = () => false;
+    if (opts.ignore) {
+      const ignoreOpts = { ...options, ignore: null, onMatch: null, onResult: null };
+      isIgnored = picomatch(opts.ignore, ignoreOpts, returnState);
+    }
+    const matcher = (input, returnObject = false) => {
+      const { isMatch, match, output } = picomatch.test(input, regex, options, { glob, posix });
+      const result = { glob, state, regex, posix, input, output, match, isMatch };
+      if (typeof opts.onResult === "function") {
+        opts.onResult(result);
+      }
+      if (isMatch === false) {
+        result.isMatch = false;
+        return returnObject ? result : false;
+      }
+      if (isIgnored(input)) {
+        if (typeof opts.onIgnore === "function") {
+          opts.onIgnore(result);
+        }
+        result.isMatch = false;
+        return returnObject ? result : false;
+      }
+      if (typeof opts.onMatch === "function") {
+        opts.onMatch(result);
+      }
+      return returnObject ? result : true;
+    };
+    if (returnState) {
+      matcher.state = state;
+    }
+    return matcher;
+  };
+  picomatch.test = (input, regex, options, { glob, posix } = {}) => {
+    if (typeof input !== "string") {
+      throw new TypeError("Expected input to be a string");
+    }
+    if (input === "") {
+      return { isMatch: false, output: "" };
+    }
+    const opts = options || {};
+    const format = opts.format || (posix ? utils.toPosixSlashes : null);
+    let match = input === glob;
+    let output = match && format ? format(input) : input;
+    if (match === false) {
+      output = format ? format(input) : input;
+      match = output === glob;
+    }
+    if (match === false || opts.capture === true) {
+      if (opts.matchBase === true || opts.basename === true) {
+        match = picomatch.matchBase(input, regex, options, posix);
+      } else {
+        match = regex.exec(output);
+      }
+    }
+    return { isMatch: Boolean(match), match, output };
+  };
+  picomatch.matchBase = (input, glob, options, posix = options && options.windows) => {
+    const regex = glob instanceof RegExp ? glob : picomatch.makeRe(glob, options);
+    return regex.test(utils.basename(input, { windows: posix }));
+  };
+  picomatch.isMatch = (str, patterns, options) => picomatch(patterns, options)(str);
+  picomatch.parse = (pattern, options) => {
+    if (Array.isArray(pattern))
+      return pattern.map((p) => picomatch.parse(p, options));
+    return parse(pattern, { ...options, fastpaths: false });
+  };
+  picomatch.scan = (input, options) => scan(input, options);
+  picomatch.compileRe = (state, options, returnOutput = false, returnState = false) => {
+    if (returnOutput === true) {
+      return state.output;
+    }
+    const opts = options || {};
+    const prepend = opts.contains ? "" : "^";
+    const append = opts.contains ? "" : "$";
+    let source = `${prepend}(?:${state.output})${append}`;
+    if (state && state.negated === true) {
+      source = `^(?!${source}).*$`;
+    }
+    const regex = picomatch.toRegex(source, options);
+    if (returnState === true) {
+      regex.state = state;
+    }
+    return regex;
+  };
+  picomatch.makeRe = (input, options = {}, returnOutput = false, returnState = false) => {
+    if (!input || typeof input !== "string") {
+      throw new TypeError("Expected a non-empty string");
+    }
+    let parsed = { negated: false, fastpaths: true };
+    if (options.fastpaths !== false && (input[0] === "." || input[0] === "*")) {
+      parsed.output = parse.fastpaths(input, options);
+    }
+    if (!parsed.output) {
+      parsed = parse(input, options);
+    }
+    return picomatch.compileRe(parsed, options, returnOutput, returnState);
+  };
+  picomatch.toRegex = (source, options) => {
+    try {
+      const opts = options || {};
+      return new RegExp(source, opts.flags || (opts.nocase ? "i" : ""));
+    } catch (err) {
+      if (options && options.debug === true)
+        throw err;
+      return /$^/;
+    }
+  };
+  picomatch.constants = constants;
+  module.exports = picomatch;
+});
+
+// node_modules/picomatch/index.js
+var require_picomatch2 = __commonJS(function(exports, module) {
+  var pico = require_picomatch();
+  var utils = require_utils2();
+  function picomatch(glob, options, returnState = false) {
+    if (options && (options.windows === null || options.windows === undefined)) {
+      options = { ...options, windows: utils.isWindows() };
+    }
+    return pico(glob, options, returnState);
+  }
+  Object.assign(picomatch, pico);
+  module.exports = picomatch;
+});
+
 // node_modules/yaml/dist/nodes/identity.js
 var require_identity = __commonJS(function(exports) {
   var ALIAS = Symbol.for("yaml.alias");
@@ -25924,7 +27661,9 @@ function datetime(args) {
   return new RegExp(`^${dateSource}T(?:${timeRegex})$`);
 }
 var anyString = /^[\s\S]{0,}$/;
+var integer = /^-?\d+$/;
 var number = /^-?\d+(?:\.\d+)?$/;
+var boolean = /^(?:true|false)$/i;
 var lowercase = /^[^A-Z]*$/;
 var uppercase = /^[^a-z]*$/;
 
@@ -26806,6 +28545,26 @@ var $ZodNumberFormat = /* @__PURE__ */ $constructor("$ZodNumberFormat", (inst, d
   $ZodCheckNumberFormat.init(inst, def);
   $ZodNumber.init(inst, def);
 });
+var $ZodBoolean = /* @__PURE__ */ $constructor("$ZodBoolean", (inst, def) => {
+  $ZodType.init(inst, def);
+  inst._zod.pattern = boolean;
+  inst._zod.parse = (payload, _ctx) => {
+    if (def.coerce)
+      try {
+        payload.value = Boolean(payload.value);
+      } catch (_) {}
+    const input = payload.value;
+    if (typeof input === "boolean")
+      return payload;
+    payload.issues.push({
+      expected: "boolean",
+      code: "invalid_type",
+      input,
+      inst
+    });
+    return payload;
+  };
+});
 var $ZodUnknown = /* @__PURE__ */ $constructor("$ZodUnknown", (inst, def) => {
   $ZodType.init(inst, def);
   inst._zod.parse = (payload) => payload;
@@ -27456,6 +29215,161 @@ function handleIntersectionResults(result, left, right) {
   result.value = merged.data;
   return result;
 }
+var $ZodRecord = /* @__PURE__ */ $constructor("$ZodRecord", (inst, def) => {
+  $ZodType.init(inst, def);
+  const memo = globalConfig.memoizer;
+  memo?.attach(inst);
+  inst._zod.parse = (payload, ctx) => {
+    const input = payload.value;
+    if (!isPlainObject(input)) {
+      payload.issues.push({
+        expected: "record",
+        code: "invalid_type",
+        input,
+        inst
+      });
+      return payload;
+    }
+    const proms = [];
+    const values = def.keyType._zod.values;
+    if (values && !def.partial) {
+      payload.value = memo ? memo.alloc(inst, payload, {}, ctx) : {};
+      const recordKeys = new Set;
+      for (const key of values) {
+        if (typeof key === "string" || typeof key === "number" || typeof key === "symbol") {
+          recordKeys.add(typeof key === "number" ? key.toString() : key);
+          if (key === "__proto__")
+            continue;
+          const keyResult = def.keyType._zod.run({ value: key, issues: [] }, ctx);
+          if (keyResult instanceof Promise) {
+            throw new Error("Async schemas not supported in object keys currently");
+          }
+          if (keyResult.issues.length) {
+            payload.issues.push({
+              code: "invalid_key",
+              origin: "record",
+              issues: keyResult.issues.map((iss) => finalizeIssue(iss, ctx, config())),
+              input: key,
+              path: [key],
+              inst
+            });
+            continue;
+          }
+          const outKey = keyResult.value;
+          if (outKey === "__proto__")
+            continue;
+          const result = def.valueType._zod.run({ value: input[key], issues: [] }, ctx);
+          if (result instanceof Promise) {
+            proms.push(result.then((result) => {
+              if (result.issues.length) {
+                payload.issues.push(...prefixIssues(key, result.issues));
+              }
+              payload.value[outKey] = result.value;
+            }));
+          } else {
+            if (result.issues.length) {
+              payload.issues.push(...prefixIssues(key, result.issues));
+            }
+            payload.value[outKey] = result.value;
+          }
+        }
+      }
+      let unrecognized;
+      for (const key in input) {
+        if (!recordKeys.has(key)) {
+          if (def.mode === "loose") {
+            if (key === "__proto__")
+              continue;
+            payload.value[key] = input[key];
+          } else {
+            unrecognized = unrecognized ?? [];
+            unrecognized.push(key);
+          }
+        }
+      }
+      if (unrecognized && unrecognized.length > 0) {
+        payload.issues.push({
+          code: "unrecognized_keys",
+          input,
+          inst,
+          keys: unrecognized,
+          continue: true
+        });
+      }
+    } else {
+      payload.value = memo ? memo.alloc(inst, payload, {}, ctx) : {};
+      let unrecognized;
+      for (const key of Reflect.ownKeys(input)) {
+        if (key === "__proto__")
+          continue;
+        if (!Object.prototype.propertyIsEnumerable.call(input, key))
+          continue;
+        let keyResult = def.keyType._zod.run({ value: key, issues: [] }, ctx);
+        if (keyResult instanceof Promise) {
+          throw new Error("Async schemas not supported in object keys currently");
+        }
+        const checkNumericKey = typeof key === "string" && number.test(key) && keyResult.issues.length;
+        if (checkNumericKey) {
+          const retryResult = def.keyType._zod.run({ value: Number(key), issues: [] }, ctx);
+          if (retryResult instanceof Promise) {
+            throw new Error("Async schemas not supported in object keys currently");
+          }
+          if (retryResult.issues.length === 0) {
+            keyResult = retryResult;
+          }
+        }
+        if (keyResult.issues.length) {
+          if (def.mode === "loose") {
+            payload.value[key] = input[key];
+          } else if (values) {
+            unrecognized = unrecognized ?? [];
+            unrecognized.push(key);
+          } else {
+            payload.issues.push({
+              code: "invalid_key",
+              origin: "record",
+              issues: keyResult.issues.map((iss) => finalizeIssue(iss, ctx, config())),
+              input: key,
+              path: [key],
+              inst
+            });
+          }
+          continue;
+        }
+        const outKey = keyResult.value;
+        if (outKey === "__proto__")
+          continue;
+        const result = def.valueType._zod.run({ value: input[key], issues: [] }, ctx);
+        if (result instanceof Promise) {
+          proms.push(result.then((result) => {
+            if (result.issues.length) {
+              payload.issues.push(...prefixIssues(key, result.issues));
+            }
+            payload.value[outKey] = result.value;
+          }));
+        } else {
+          if (result.issues.length) {
+            payload.issues.push(...prefixIssues(key, result.issues));
+          }
+          payload.value[outKey] = result.value;
+        }
+      }
+      if (unrecognized && unrecognized.length > 0) {
+        payload.issues.push({
+          code: "unrecognized_keys",
+          input,
+          inst,
+          keys: unrecognized,
+          continue: true
+        });
+      }
+    }
+    if (proms.length) {
+      return Promise.all(proms).then(() => payload);
+    }
+    return payload;
+  };
+});
 var $ZodEnum = /* @__PURE__ */ $constructor("$ZodEnum", (inst, def) => {
   $ZodType.init(inst, def);
   const values = getEnumValues(def.entries);
@@ -28450,6 +30364,12 @@ function _int(Class, params) {
     ...normalizeParams(params)
   });
 }
+function _boolean(Class, params) {
+  return new Class({
+    type: "boolean",
+    ...normalizeParams(params)
+  });
+}
 function _unknown(Class) {
   return new Class({
     type: "unknown"
@@ -29332,6 +31252,9 @@ var numberProcessor = (schema, ctx, _json, params) => {
       json.allOf = [...json.allOf ?? [], ...rest.map((m) => ({ multipleOf: m }))];
   }
 };
+var booleanProcessor = (_schema, _ctx, json, _params) => {
+  json.type = "boolean";
+};
 var neverProcessor = (_schema, _ctx, json, _params) => {
   json.not = {};
 };
@@ -29487,7 +31410,112 @@ var intersectionProcessor = (schema, ctx, json, params) => {
   json.allOf = allOf;
   ctx.intersections.push(allOf);
 };
+function stringifyKeyNames(bySchema, json, visited) {
+  if (json.$ref) {
+    if (visited.has(json))
+      return json;
+    visited.add(json);
+    const def = bySchema.get(json)?.def;
+    if (!def)
+      return json;
+    const inlined = stringifyKeyNames(bySchema, def, visited);
+    return inlined === def ? json : inlined;
+  }
+  for (const keyword of ["anyOf", "oneOf"]) {
+    const branches = json[keyword];
+    if (!Array.isArray(branches))
+      continue;
+    const mapped = branches.map((branch) => stringifyKeyNames(bySchema, branch, visited));
+    if (mapped.some((branch, i) => branch !== branches[i]))
+      json = { ...json, [keyword]: mapped };
+  }
+  const types = Array.isArray(json.type) ? json.type : [json.type];
+  const numericType = !types.includes("string") && types.some((t) => t === "number" || t === "integer");
+  const values = json.enum ?? (json.const !== undefined ? [json.const] : undefined);
+  if (!numericType && !values?.some((v) => typeof v === "number"))
+    return json;
+  const { minimum, maximum, exclusiveMinimum, exclusiveMaximum, multipleOf, format, id, ...rest } = json;
+  if (rest.enum)
+    rest.enum = rest.enum.map((v) => typeof v === "number" ? String(v) : v);
+  else if (typeof rest.const === "number")
+    rest.const = String(rest.const);
+  if (!numericType)
+    return rest;
+  rest.type = "string";
+  if (!values)
+    rest.pattern = (types.includes("number") ? number : integer).source;
+  return rest;
+}
 var pendingRecords = new WeakMap;
+function rewriteKeyNames(ctx) {
+  const bySchema = new Map;
+  for (const entry of ctx.seen.values()) {
+    if (entry.def && !bySchema.has(entry.schema))
+      bySchema.set(entry.schema, entry);
+  }
+  const rewrites = new Map;
+  for (const record of pendingRecords.get(ctx) ?? []) {
+    const seen = ctx.seen.get(record);
+    const names = (seen?.def ?? seen?.schema)?.propertyNames;
+    if (!names || names === true || rewrites.has(names))
+      continue;
+    const rewritten = stringifyKeyNames(bySchema, names, new Set);
+    if (rewritten !== names)
+      rewrites.set(names, rewritten);
+  }
+  if (!rewrites.size)
+    return;
+  for (const entry of ctx.seen.values()) {
+    for (const carrier of [entry.schema, entry.def]) {
+      const rewritten = carrier && rewrites.get(carrier.propertyNames);
+      if (rewritten)
+        carrier.propertyNames = rewritten;
+    }
+  }
+}
+var recordProcessor = (schema, ctx, _json, params) => {
+  const json = _json;
+  const def = schema._zod.def;
+  json.type = "object";
+  const keyType = def.keyType;
+  const patterns = aggregateChecks(keyType).patterns;
+  if (def.mode === "loose" && patterns && patterns.size > 0) {
+    const valueSchema = processSchema(def.valueType, ctx, {
+      ...params,
+      path: [...params.path, "patternProperties", "*"]
+    });
+    json.patternProperties = {};
+    for (const pattern of patterns) {
+      assignProp(json.patternProperties, exactPattern(pattern).source, valueSchema);
+    }
+  } else {
+    if (ctx.target === "draft-07" || ctx.target === "draft-2020-12") {
+      json.propertyNames = processSchema(def.keyType, ctx, {
+        ...params,
+        path: [...params.path, "propertyNames"]
+      });
+      let pending = pendingRecords.get(ctx);
+      if (!pending) {
+        pending = [];
+        pendingRecords.set(ctx, pending);
+        ctx.deferred.push(() => rewriteKeyNames(ctx));
+      }
+      pending.push(schema);
+    }
+    json.additionalProperties = processSchema(def.valueType, ctx, {
+      ...params,
+      path: [...params.path, "additionalProperties"]
+    });
+  }
+  const keyValues = keyType._zod.values;
+  const omittableOnInput = ctx.io === "input" && inputOptin(def.valueType) !== undefined;
+  if (keyValues && !def.partial && !omittableOnInput) {
+    const validKeyValues = [...keyValues].filter((v) => typeof v === "string" || typeof v === "number");
+    if (validKeyValues.length > 0) {
+      json.required = validKeyValues.map(String);
+    }
+  }
+};
 var nullableProcessor = (schema, ctx, json, params) => {
   const def = schema._zod.def;
   const inner = processSchema(def.innerType, ctx, params);
@@ -30126,6 +32154,14 @@ var ZodNumberFormat = /* @__PURE__ */ $constructor("ZodNumberFormat", (inst, def
 function int(params) {
   return _int(ZodNumberFormat, params);
 }
+var ZodBoolean = /* @__PURE__ */ $constructor("ZodBoolean", (inst, def) => {
+  $ZodBoolean.init(inst, def);
+  ZodType.init(inst, def);
+  inst._zod.processJSONSchema = (ctx, json, params) => booleanProcessor(inst, ctx, json, params);
+});
+function boolean2(params) {
+  return _boolean(ZodBoolean, params);
+}
 var ZodUnknown = /* @__PURE__ */ $constructor("ZodUnknown", (inst, def) => {
   $ZodUnknown.init(inst, def);
   ZodType.init(inst, def);
@@ -30269,6 +32305,30 @@ function intersection(left, right) {
     type: "intersection",
     left,
     right
+  });
+}
+var ZodRecord = /* @__PURE__ */ $constructor("ZodRecord", (inst, def) => {
+  _ensureDefaultMemoizer();
+  $ZodRecord.init(inst, def);
+  ZodType.init(inst, def);
+  inst._zod.processJSONSchema = (ctx, json, params) => recordProcessor(inst, ctx, json, params);
+  inst.keyType = def.keyType;
+  inst.valueType = def.valueType;
+});
+function record(keyType, valueType, params) {
+  if (!valueType || !valueType._zod) {
+    return new ZodRecord({
+      type: "record",
+      keyType: string2(),
+      valueType: keyType,
+      ...normalizeParams(valueType)
+    });
+  }
+  return new ZodRecord({
+    type: "record",
+    keyType,
+    valueType,
+    ...normalizeParams(params)
   });
 }
 var ZodEnum = /* @__PURE__ */ $constructor("ZodEnum", (inst, def) => {
@@ -30561,46 +32621,43 @@ var Login = string2().min(1);
 var Principal = strictObject({ id: Id, login: Login });
 var RepoName = string2().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/).transform((s) => s.toLowerCase());
 var Owner = string2().regex(/^[A-Za-z0-9-]+$/).transform((s) => s.toLowerCase());
-var CARGO_TARGETS = [
-  "aarch64-apple-darwin",
-  "aarch64-unknown-linux-gnu",
-  "x86_64-apple-darwin",
-  "x86_64-pc-windows-msvc",
-  "x86_64-unknown-linux-gnu"
-];
-var ReleaseSchema = discriminatedUnion("build_type", [
-  strictObject({ build_type: literal("none") }),
-  strictObject({ build_type: literal("js-action") }),
-  strictObject({ build_type: literal("goreleaser") }),
-  strictObject({
-    build_type: literal("cargo"),
-    targets: array(_enum(CARGO_TARGETS)).min(1).refine((targets) => new Set(targets).size === targets.length, "duplicate cargo target")
-  })
-]);
 var OPS = ["approve", "merge", "policy-check", "securefix", "release"];
 var PolicySchema = discriminatedUnion("type", [
   strictObject({ type: literal("signed-commits") }),
-  strictObject({ type: literal("trusted-committers") })
+  strictObject({ type: literal("trusted-committers") }),
+  strictObject({ type: literal("sensitive-paths"), paths: array(string2().min(1)), exempt: array(Principal).default([]) })
 ]);
+var SecurefixPathRule = _enum(["any", "semver", "version-only"]);
+var SecurefixRoute = strictObject({
+  name: string2().regex(/^[a-z0-9-]+$/),
+  from: literal("default"),
+  to: string2().min(1).refine((branch) => branch !== "default" && isSecurefixBranch(branch), "must be a safe branch name"),
+  workflow: string2().min(1),
+  paths: record(string2(), SecurefixPathRule).refine((paths) => Object.keys(paths).length > 0, "must include at least one path")
+});
+var SecurefixSchema = strictObject({
+  allow_workflow_changes: boolean2(),
+  routes: array(SecurefixRoute).refine((routes) => new Set(routes.map((route) => route.name)).size === routes.length, "duplicate route name")
+});
 var RepositoryEntry = strictObject({
   name: string2().min(1).transform((s) => s.toLowerCase()),
-  ops: array(_enum(OPS)).refine((ops) => new Set(ops).size === ops.length, "duplicate op"),
-  release: ReleaseSchema.optional()
-}).superRefine((entry, ctx) => {
-  if (entry.ops.includes("release") !== (entry.release !== undefined)) {
-    ctx.addIssue({ code: "custom", path: ["release"], message: "release settings must be present exactly when release is enabled" });
-  }
+  ops: array(_enum(OPS)).refine((ops) => new Set(ops).size === ops.length, "duplicate op")
 });
 var ConfigSchema = strictObject({
   owners: array(Owner).min(1),
   server_repository: RepoName,
   apps: strictObject({ client_bot_id: Id, server_app_id: Id, server_bot_id: Id }),
   approver: Principal,
-  trust: strictObject({ committers: array(Principal), approvers: array(Principal) }),
+  trust: strictObject({ committers: array(Principal), approvers: array(Principal), mergers: array(Principal), bot_mergers: array(Principal) }),
+  merge: strictObject({
+    required_checks: array(strictObject({ name: string2().min(1), app_id: Id })),
+    deadline_minutes: number2().int().positive().default(60)
+  }),
   policies: array(PolicySchema),
+  securefix: SecurefixSchema.optional(),
   repositories: array(RepositoryEntry).min(1)
 }).superRefine((c, ctx) => {
-  for (const list of ["committers", "approvers"]) {
+  for (const list of ["committers", "approvers", "mergers", "bot_mergers"]) {
     if (c.trust[list].some((p) => p.id === c.apps.server_bot_id || p.id === c.approver.id)) {
       ctx.addIssue({ code: "custom", path: ["trust", list], message: "the server and approver bots must not be in a trust list" });
     }
@@ -30609,9 +32666,31 @@ var ConfigSchema = strictObject({
   if (!c.owners.includes(serverOwner ?? "")) {
     ctx.addIssue({ code: "custom", path: ["server_repository"], message: "server_repository owner must be listed in owners" });
   }
+  if (c.repositories.some((r) => r.ops.includes("securefix")) && c.securefix === undefined) {
+    ctx.addIssue({ code: "custom", path: ["securefix"], message: "securefix settings are required when a repository enables securefix" });
+  }
+  for (const [index, route] of (c.securefix?.routes ?? []).entries()) {
+    if (!isSafeSecurefixPath(route.workflow) || !route.workflow.startsWith(".github/workflows/")) {
+      ctx.addIssue({ code: "custom", path: ["securefix", "routes", index, "workflow"], message: "must be a safe path under .github/workflows" });
+    }
+    if (route.from === route.to) {
+      ctx.addIssue({ code: "custom", path: ["securefix", "routes", index], message: "from and to must be different branches" });
+    }
+    for (const path of Object.keys(route.paths)) {
+      if (!isSafeSecurefixPath(path) || path.startsWith("!") || path.includes("!(") || path.includes("[!")) {
+        ctx.addIssue({ code: "custom", path: ["securefix", "routes", index, "paths", path], message: "must be a safe relative path or glob" });
+      }
+    }
+  }
 });
 function parseConfig(text) {
   return ConfigSchema.parse($parse(text));
+}
+function isSafeSecurefixPath(path) {
+  return path.length > 0 && !path.startsWith("/") && !path.includes("\\") && !/[\u0000-\u001f\u007f]/u.test(path) && path.split("/").every((segment) => segment !== "" && segment !== "." && segment !== ".." && segment.toLowerCase() !== ".git");
+}
+function isSecurefixBranch(branch) {
+  return branch === "default" || /^[A-Za-z0-9._/-]+$/u.test(branch) && !branch.startsWith("-") && !branch.endsWith("/") && !branch.includes("..") && !branch.includes("//") && !branch.includes("@{") && branch !== "HEAD" && branch.split("/").every((part) => part.length > 0 && !part.startsWith(".") && !part.endsWith(".lock"));
 }
 
 // src/lib/request.ts
@@ -30642,6 +32721,8 @@ function parseCommand(body) {
   const text = body.trim();
   if (text === "/approve")
     return { name: "approve" };
+  if (text === "/merge")
+    return { name: "merge" };
   if (text === "/recheck")
     return { name: "recheck" };
   return;
@@ -30652,7 +32733,7 @@ function validateComment(c, repository, pullNumber, now) {
   }
   const command = parseCommand(c.body);
   if (!command)
-    throw new Rejection(`comment ${c.id} is not exactly /approve or /recheck`);
+    throw new Rejection(`comment ${c.id} is not exactly /approve, /merge or /recheck`);
   if (command.name === "recheck")
     return command;
   if (c.lastEditedAt !== null || c.createdAt !== c.updatedAt)
@@ -34707,7 +36788,12 @@ function isRetryableError(error, timedOut) {
     return false;
   if ("status" in error && (error.status === 502 || error.status === 503 || error.status === 504))
     return true;
-  if (!("cause" in error))
+  return isNetworkFailure(error);
+}
+function isNetworkFailure(error) {
+  if (error instanceof TypeError)
+    return true;
+  if (typeof error !== "object" || error === null || !("cause" in error))
     return false;
   const cause = error.cause;
   return cause instanceof TypeError || cause instanceof Error && ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EAI_AGAIN", "ENETUNREACH"].some((code) => cause.message.includes(code));
@@ -34742,6 +36828,76 @@ function signedCommits(_, { trust }) {
   return [...trust.problems, ...trust.commits.filter((c) => !c.signed).map((c) => `${c.sha} is not signed and verified`)];
 }
 
+// src/lib/policies/sensitive-paths.ts
+var import_picomatch = __toESM(require_picomatch2(), 1);
+
+// src/lib/github-comment.ts
+async function fetchComment(gh, repository, commentId) {
+  const { data: comment } = await gh.rest.issues.getComment({ ...splitRepository(repository), comment_id: commentId });
+  if (!comment.node_id)
+    throw new Rejection(`cannot verify the edit history of comment ${commentId}`);
+  const { node } = await gh.graphql("query($id: ID!) { node(id: $id) { ... on IssueComment { databaseId lastEditedAt } } }", { id: comment.node_id });
+  if (!node || node.databaseId !== Number(comment.id) || !(node.lastEditedAt === null || typeof node.lastEditedAt === "string")) {
+    throw new Rejection(`cannot verify the edit history of comment ${commentId}`);
+  }
+  return {
+    id: Number(comment.id),
+    body: comment.body ?? "",
+    issueUrl: comment.issue_url,
+    createdAt: comment.created_at,
+    updatedAt: comment.updated_at,
+    lastEditedAt: node.lastEditedAt,
+    user: comment.user ? { id: Number(comment.user.id), login: comment.user.login, type: comment.user.type } : null
+  };
+}
+
+// src/lib/policies/sensitive-paths.ts
+var MARKER = /<!-- csm-ci:approve:command:(\d+) -->/g;
+var MAX_FILES = 3000;
+async function sensitivePaths(policy, ctx) {
+  const { owner, repo } = splitRepository(ctx.repository);
+  const files = await ctx.gh.paginate(ctx.gh.rest.pulls.listFiles, { owner, repo, pull_number: ctx.pullNumber, per_page: 100 });
+  if (files.length >= MAX_FILES)
+    return [`pull request changes ${MAX_FILES} or more files; sensitive-paths cannot verify every file`];
+  const forceAll = ctx.repository.toLowerCase() === ctx.config.server_repository || ctx.repository.toLowerCase() === "civitaspo/csm-ci-actions";
+  const patterns = forceAll ? ["**"] : policy.paths;
+  const match = import_picomatch.default(patterns, { dot: true });
+  const changed = files.filter((f) => match(f.filename) || f.previous_filename !== undefined && match(f.previous_filename));
+  if (changed.length === 0)
+    return [];
+  const exempt = !forceAll && policy.exempt.some((p) => p.id === ctx.authorId) && ctx.trust.commits.length > 0 && ctx.trust.commits.every((c) => c.identity.kind === "user" && c.identity.principal.id === ctx.authorId);
+  if (exempt)
+    return [];
+  const commandApproval = ctx.commandApproval;
+  if (commandApproval?.head === ctx.head && ctx.config.trust.approvers.some((p) => p.id === commandApproval.authorId))
+    return [];
+  const reviews = await ctx.gh.paginate(ctx.gh.rest.pulls.listReviews, { owner, repo, pull_number: ctx.pullNumber, per_page: 100 });
+  const candidates = reviews.filter((r) => Number(r.user?.id) === ctx.config.approver.id && r.state === "APPROVED" && r.commit_id === ctx.head);
+  for (const review of candidates) {
+    const body = review.body ?? "";
+    const markers = [...body.matchAll(MARKER)];
+    for (const marker of markers) {
+      const commentId = Number(marker[1]);
+      try {
+        const comment = await fetchComment(ctx.gh, ctx.repository, commentId);
+        const belongsToPull = comment.issueUrl.toLowerCase() === `https://api.github.com/repos/${owner}/${repo}/issues/${ctx.pullNumber}`;
+        if (comment.body !== "/approve" || !belongsToPull || comment.user?.type !== "User" || !ctx.config.trust.approvers.some((p) => p.id === comment.user?.id) || comment.createdAt !== comment.updatedAt || comment.lastEditedAt !== null)
+          continue;
+        return [];
+      } catch (error) {
+        if (typeof error === "object" && error !== null && "status" in error && error.status === 404)
+          continue;
+        if (error instanceof Rejection)
+          continue;
+        throw error;
+      }
+    }
+  }
+  const paths = changed.slice(0, 20).map((f) => f.previous_filename ? `${f.filename} (previously ${f.previous_filename})` : f.filename);
+  const more = changed.length > paths.length ? ` and ${changed.length - paths.length} more` : "";
+  return [`sensitive paths need a trusted approver's /approve: ${paths.join(", ")}${more}`];
+}
+
 // src/lib/policies/trusted-committers.ts
 function trustedCommitters(_, { trust }) {
   return [
@@ -34759,14 +36915,15 @@ function trustedCommitters(_, { trust }) {
 // src/lib/policies/index.ts
 var EVALUATORS = {
   "signed-commits": signedCommits,
-  "trusted-committers": trustedCommitters
+  "trusted-committers": trustedCommitters,
+  "sensitive-paths": sensitivePaths
 };
-function evaluatePolicies(policies, ctx) {
-  return policies.map((policy) => {
+async function evaluatePolicies(policies, ctx) {
+  return Promise.all(policies.map(async (policy) => {
     const evaluate = EVALUATORS[policy.type];
-    const problems = evaluate(policy, ctx);
+    const problems = await evaluate(policy, ctx);
     return { type: policy.type, ok: problems.length === 0, problems };
-  });
+  }));
 }
 
 // src/lib/trust.ts
@@ -34847,6 +37004,50 @@ async function fetchCommitFacts(gh, repository, pullNumber) {
   return facts;
 }
 
+// src/lib/policy-check.ts
+var ALWAYS = [{ type: "signed-commits" }, { type: "trusted-committers" }];
+async function evaluatePullPolicies(ctx, commandApproval) {
+  const trust = evaluateTrust(await fetchCommitFacts(ctx.server, ctx.repository, ctx.pull.number), ctx.pull.headSha, ctx.config);
+  const protectedRepository = ctx.repository.toLowerCase() === ctx.config.server_repository || ctx.repository.toLowerCase() === "civitaspo/csm-ci-actions";
+  const hasSensitivePaths = ctx.config.policies.some((p) => p.type === "sensitive-paths");
+  const configured = [...ctx.config.policies.filter((p) => !ALWAYS.some((a) => a.type === p.type))];
+  if (protectedRepository && !hasSensitivePaths)
+    configured.push({ type: "sensitive-paths", paths: ["**"], exempt: [] });
+  const policies = [...ALWAYS, ...configured];
+  return evaluatePolicies(policies, {
+    trust,
+    gh: ctx.server,
+    config: ctx.config,
+    repository: ctx.repository,
+    pullNumber: ctx.pull.number,
+    head: ctx.pull.headSha,
+    authorId: ctx.pull.authorId,
+    ...commandApproval ? { commandApproval } : {}
+  });
+}
+function policySummary(results) {
+  const escapeCell = (value) => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll("\\", "&#92;").replaceAll("|", "&#124;").replaceAll("`", "&#96;").replaceAll("*", "&#42;").replaceAll("_", "&#95;").replaceAll("[", "&#91;").replaceAll("]", "&#93;").replaceAll("~", "&#126;").replaceAll("!", "&#33;").replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+  const rows = results.map((r) => `| ${escapeCell(r.type)} | ${r.ok ? "pass" : "fail"} | ${escapeCell(r.problems.length ? r.problems.join("; ") : "—")} |`);
+  return ["| Policy | Result | Details |", "| --- | --- | --- |", ...rows].join(`
+`);
+}
+async function updatePolicyCheck(ctx) {
+  const { owner, repo } = splitRepository(ctx.repository);
+  const results = await evaluatePullPolicies(ctx);
+  const ok = results.every((r) => r.ok);
+  const summary = policySummary(results);
+  const completedAt = new Date().toISOString();
+  const checkRuns = await ctx.server.paginate(ctx.server.rest.checks.listForRef, { owner, repo, ref: ctx.pull.headSha, per_page: 100 });
+  const existing = checkRuns.find((c) => c.name === "csm-ci/policy" && c.external_id === ctx.pull.headSha && Number(c.app?.id) === ctx.config.apps.server_app_id);
+  const output = { title: ok ? "Policies passed" : "Policies failed", summary };
+  if (existing) {
+    await ctx.server.rest.checks.update({ owner, repo, check_run_id: Number(existing.id), name: "csm-ci/policy", external_id: ctx.pull.headSha, head_sha: ctx.pull.headSha, status: "completed", completed_at: completedAt, conclusion: ok ? "success" : "failure", output });
+  } else {
+    await ctx.server.rest.checks.create({ owner, repo, name: "csm-ci/policy", external_id: ctx.pull.headSha, head_sha: ctx.pull.headSha, status: "completed", completed_at: completedAt, conclusion: ok ? "success" : "failure", output });
+  }
+  return results;
+}
+
 // src/lib/approve.ts
 async function fetchPull(gh, repository, pullNumber) {
   const { data: p } = await gh.rest.pulls.get({ ...splitRepository(repository), pull_number: pullNumber });
@@ -34862,32 +37063,13 @@ async function fetchPull(gh, repository, pullNumber) {
     authorId: Number(p.user.id)
   };
 }
-async function fetchComment(gh, repository, commentId) {
-  const { data: c } = await gh.rest.issues.getComment({ ...splitRepository(repository), comment_id: commentId });
-  const { node } = await gh.graphql("query($id: ID!) { node(id: $id) { ... on IssueComment { databaseId lastEditedAt } } }", { id: c.node_id });
-  if (!node || node.databaseId !== Number(c.id) || !(node.lastEditedAt === null || typeof node.lastEditedAt === "string")) {
-    throw new Rejection(`cannot verify the edit history of comment ${commentId}`);
-  }
-  return {
-    id: Number(c.id),
-    body: c.body ?? "",
-    issueUrl: c.issue_url,
-    createdAt: c.created_at,
-    updatedAt: c.updated_at,
-    lastEditedAt: node.lastEditedAt,
-    user: c.user ? { id: Number(c.user.id), login: c.user.login, type: c.user.type } : null
-  };
-}
-async function trustFor(ctx, pull) {
-  return evaluateTrust(await fetchCommitFacts(ctx.server, ctx.repository, pull.number), pull.headSha, ctx.config);
-}
-async function approveHead(ctx, pull, body) {
+async function approveHead(ctx, pull, body, forceMarker = false) {
   const repo = splitRepository(ctx.repository);
   const head = pull.headSha;
   if (pull.authorId === ctx.config.approver.id)
     throw new Rejection(`the approver authored #${pull.number}`);
   const reviews = await ctx.server.paginate(ctx.server.rest.pulls.listReviews, { ...repo, pull_number: pull.number, per_page: 100 });
-  if (reviews.some((r) => Number(r.user?.id) === ctx.config.approver.id && r.state === "APPROVED" && r.commit_id === head)) {
+  if (!forceMarker && reviews.some((r) => Number(r.user?.id) === ctx.config.approver.id && r.state === "APPROVED" && r.commit_id === head)) {
     return { result: "already-approved", head, problems: [] };
   }
   const { data: review } = await ctx.approver.rest.pulls.createReview({ ...repo, pull_number: pull.number, event: "APPROVE", commit_id: head, body });
@@ -34903,17 +37085,22 @@ async function approveHead(ctx, pull, body) {
   }
   return { result: "approved", head, problems: [] };
 }
-var ALWAYS = [{ type: "signed-commits" }, { type: "trusted-committers" }];
 async function policyProblems(ctx, pull) {
-  const policies = [...ALWAYS, ...ctx.config.policies.filter((p) => !ALWAYS.some((a) => a.type === p.type))];
-  const results = evaluatePolicies(policies, { trust: await trustFor(ctx, pull) });
+  const results = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull });
   return results.flatMap((r) => r.problems.map((p) => `${r.type}: ${p}`));
+}
+async function refreshPolicy(ctx, pull) {
+  await updatePolicyCheck({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull });
 }
 async function autoApprove(ctx, pull) {
   const problems = await policyProblems(ctx, pull);
-  if (problems.length > 0)
+  if (problems.length > 0) {
+    await refreshPolicy(ctx, pull);
     return { result: "declined", head: pull.headSha, problems };
-  return approveHead(ctx, pull, "");
+  }
+  const outcome = await approveHead(ctx, pull, "");
+  await refreshPolicy(ctx, outcome.result === "dismissed" ? await fetchPull(ctx.server, ctx.repository, pull.number) : pull);
+  return outcome;
 }
 async function checkHeadPredatesComment(ctx, pull, comment) {
   const repo = splitRepository(ctx.repository);
@@ -34929,12 +37116,17 @@ async function checkHeadPredatesComment(ctx, pull, comment) {
 }
 async function commandApprove(ctx, pull, comment) {
   checkPullState(pull);
-  const problems = await policyProblems(ctx, pull);
+  const results = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull }, { commentId: comment.id, authorId: comment.user?.id ?? -1, head: pull.headSha });
+  const problems = results.flatMap((r) => r.problems.map((p) => `${r.type}: ${p}`));
   if (problems.length > 0)
-    throw new Rejection(`/approve needs every commit signed by a trusted committer: ${problems.join("; ")}`);
+    throw new Rejection(`/approve cannot proceed because policy checks failed: ${problems.join("; ")}`);
   await checkHeadPredatesComment(ctx, pull, comment);
-  validateComment(await fetchComment(ctx.server, ctx.repository, comment.id), ctx.repository, pull.number, ctx.now());
-  return approveHead(ctx, pull, marker("approve:command", comment.id));
+  const currentCommand = validateComment(await fetchComment(ctx.server, ctx.repository, comment.id), ctx.repository, pull.number, ctx.now());
+  if (currentCommand.name !== "approve")
+    throw new Rejection(`comment ${comment.id} is no longer exactly /approve`);
+  const outcome = await approveHead(ctx, pull, marker("approve:command", comment.id), true);
+  await refreshPolicy(ctx, outcome.result === "dismissed" ? await fetchPull(ctx.server, ctx.repository, pull.number) : pull);
+  return outcome;
 }
 async function react(ctx, commentId) {
   await ctx.server.rest.reactions.createForIssueComment({ ...splitRepository(ctx.repository), comment_id: commentId, content: "rocket" });
@@ -34952,6 +37144,8 @@ async function runApprove(ctx, args) {
     checkPullState(pull);
     return autoApprove(ctx, pull);
   }
+  if (command.name !== "approve")
+    throw new Rejection(`comment ${comment.id} is not exactly /approve`);
   const receipt = marker("approve", comment.id);
   const comments = await ctx.server.paginate(ctx.server.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: pull.number, per_page: 100 });
   if (hasServerMarker(comments, receipt, ctx.config.apps.server_bot_id))
