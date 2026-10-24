@@ -35,6 +35,7 @@ test("requires one client run for each distinct comment instead of counting dupl
   const complete = [...duplicate, { id: 3, display_title: "request #79, comment #456" }];
   expect(runsForComments(complete, 79, [123, 456])?.map(({ id }) => id)).toEqual([1, 3]);
   expect(runsForComments([{ id: 4, display_title: "request #79, comment #1230" }], 79, [123])).toBeUndefined();
+  expect(runsForComments([{ id: 5, display_title: "request #790, comment #123" }], 79, [123])).toBeUndefined();
 });
 
 test("finds the matching run on a later workflow-run page", async () => {

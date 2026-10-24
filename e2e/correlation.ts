@@ -7,7 +7,7 @@ export function findRunByTitle<T extends { display_title: string }>(runs: readon
 }
 
 export function runsForComments<T extends { display_title: string }>(runs: readonly T[], pullNumber: number, commentIds: readonly number[]): T[] | undefined {
-  const titles = [...new Set(commentIds)].map((id) => new RegExp(`request #${pullNumber}.*comment #${id}(?!\\d)`));
+  const titles = [...new Set(commentIds)].map((id) => new RegExp(`request #${pullNumber}(?!\\d).*comment #${id}(?!\\d)`));
   const matches = titles.map((title) => runs.find((run) => title.test(run.display_title)));
   return matches.every((run) => run !== undefined) ? matches : undefined;
 }
