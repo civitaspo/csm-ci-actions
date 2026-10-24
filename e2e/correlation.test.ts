@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 import { completedRequestRuns, findRecentRunByTitle, findRunByTitle, matchesAcceptedRequest, matchesCleanupLabel, recentItems, runsForComments } from "./correlation.ts";
-import type { RequestMatch } from "./harness.ts";
+import { type RequestMatch, serverRuns } from "./harness.ts";
+import { github } from "../src/lib/github.ts";
+import { fakeFetch } from "../src/lib/testing.ts";
 
 const request: RequestMatch = {
   kind: "policy-check",
@@ -78,4 +80,23 @@ test("waits for every emitted request despite delayed server run visibility", ()
   expect(completedRequestRuns([first, { id: 2, status: "queued" }], 2)).toBeUndefined();
   const all = [first, { id: 2, status: "completed" }];
   expect(completedRequestRuns(all, 2)).toEqual(all);
+});
+
+test("correlates a skipped intake through cleanup without downloading a nonexistent intake log", async () => {
+  const base = "/repos/civitaspo/testing-csm-ci-server/actions";
+  const fetch = fakeFetch([
+    { method: "GET", path: `${base}/workflows/csm-ci.yml/runs`, body: { total_count: 1, workflow_runs: [{ id: 10, created_at: "2026-10-25T00:01:00Z", status: "completed", conclusion: "success" }] } },
+    { method: "GET", path: `${base}/runs/10/jobs`, body: { jobs: [{ id: 20, name: "server / intake", conclusion: "skipped" }, { id: 21, name: "server / cleanup", conclusion: "success" }] } },
+    { method: "GET", path: `${base}/jobs/21/logs`, body: "2026-10-25T00:01:05Z   LABEL: csm-ci-approve-humanabc" },
+  ]);
+  const fetchWithUrl = Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
+    const response = await fetch(input, init);
+    Object.defineProperty(response, "url", { value: typeof input === "string" ? input : input instanceof URL ? input.href : input.url });
+    return response;
+  }, { preconnect: () => undefined });
+  const ctx = { gh: github("t", fetchWithUrl), urls: [], untrusted: undefined };
+  const since = new Date("2026-10-25T00:00:00Z");
+  expect((await serverRuns(ctx, { ...request, label: "csm-ci-approve-humanabc" }, since)).map((run) => run.id)).toEqual([10]);
+  expect(await serverRuns(ctx, request, since)).toEqual([]);
+  expect(fetch.calls).not.toContain(`GET ${base}/jobs/20/logs`);
 });

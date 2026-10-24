@@ -143,7 +143,7 @@ export async function serverRuns(ctx: Ctx, match: RequestMatch, since: Date): Pr
     const byName = await jobs(ctx, SERVER, run.id);
     const intake = byName.get("intake");
     if (!intake) continue;
-    if (matchesAcceptedRequest(await jobLog(ctx, SERVER, intake.id), match)) {
+    if (intake.conclusion !== "skipped" && matchesAcceptedRequest(await jobLog(ctx, SERVER, intake.id), match)) {
       found.push(run);
     } else if (match.label) {
       const cleanup = byName.get("cleanup");

@@ -68,7 +68,7 @@ async function expectEveryOp(ctx: Ctx, match: {kind:string; repository:string; a
     const found = [];
     for (const run of recent) {
       const intake = (await jobs(ctx, SERVER, run.id)).get("intake");
-      if (intake && matchesAcceptedRequest(await jobLog(ctx, SERVER, intake.id), match)) found.push(run);
+      if (intake && intake.conclusion !== "skipped" && matchesAcceptedRequest(await jobLog(ctx, SERVER, intake.id), match)) found.push(run);
     }
     return completedRequestRuns(found, expectedCount);
   });
@@ -118,7 +118,7 @@ async function expectNoServerRun(ctx: Ctx, since: Date, match: {kind:string; rep
   const runs = [];
   for (const run of recent) {
     const intake = (await jobs(ctx, SERVER, run.id)).get("intake");
-    if (intake && matchesAcceptedRequest(await jobLog(ctx, SERVER, intake.id), match)) runs.push(run);
+    if (intake && intake.conclusion !== "skipped" && matchesAcceptedRequest(await jobLog(ctx, SERVER, intake.id), match)) runs.push(run);
   }
   assert(runs.length === 0, `expected no server run, found ${runs.map((r) => r.html_url).join(", ")}`);
 }
