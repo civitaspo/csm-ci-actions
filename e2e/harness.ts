@@ -4,7 +4,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { parseArgs } from "node:util";
 import { type GitHub, splitRepository } from "../src/lib/github.ts";
-import { findRecentRunByTitle, matchesAcceptedRequest, recentItems } from "./correlation.ts";
+import { findRecentRunByTitle, matchesAcceptedRequest, matchesCleanupLabel, recentItems } from "./correlation.ts";
 
 export const OWNER = "civitaspo";
 export const ACTIONS = `${OWNER}/csm-ci-actions`;
@@ -147,7 +147,7 @@ export async function serverRuns(ctx: Ctx, match: RequestMatch, since: Date): Pr
       found.push(run);
     } else if (match.label) {
       const cleanup = byName.get("cleanup");
-      if (cleanup && (await jobLog(ctx, SERVER, cleanup.id)).includes(`LABEL: ${match.label}`)) found.push(run);
+      if (cleanup && matchesCleanupLabel(await jobLog(ctx, SERVER, cleanup.id), match.label)) found.push(run);
     }
   }
   return found;

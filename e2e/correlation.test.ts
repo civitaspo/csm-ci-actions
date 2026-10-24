@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { findRecentRunByTitle, findRunByTitle, matchesAcceptedRequest, recentItems, runsForComments } from "./correlation.ts";
+import { findRecentRunByTitle, findRunByTitle, matchesAcceptedRequest, matchesCleanupLabel, recentItems, runsForComments } from "./correlation.ts";
 import type { RequestMatch } from "./harness.ts";
 
 const request: RequestMatch = {
@@ -63,4 +63,11 @@ test("finds a correlated dispatch beyond the first workflow-run page", async () 
     yield [{ created_at: "2026-10-25T00:01:00Z", id: 101, display_title: "csm-ci-smoke target-run" }];
   }
   expect((await findRecentRunByTitle(pages(), since, "csm-ci-smoke target-run"))?.id).toBe(101);
+});
+
+test("cleanup matches the whole label value, not another label with that prefix", () => {
+  expect(matchesCleanupLabel("2026-10-25T00:00:00Z   LABEL: csm-ci-approve-abc\r\n", "csm-ci-approve-abc")).toBe(true);
+  expect(matchesCleanupLabel("LABEL: csm-ci-approve-abc", "csm-ci-approve-abc")).toBe(true);
+  expect(matchesCleanupLabel("  LABEL: csm-ci-approve-abcdef", "csm-ci-approve-abc")).toBe(false);
+  expect(matchesCleanupLabel("  OTHER_LABEL: csm-ci-approve-abc", "csm-ci-approve-abc")).toBe(false);
 });

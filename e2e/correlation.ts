@@ -31,3 +31,7 @@ export function matchesAcceptedRequest(log: string, match: RequestMatch): boolea
   const accepted = `accepted ${match.kind} for ${match.repository} ${JSON.stringify(match.args)}`;
   return log.split(/\r?\n/).some((line) => line.includes(accepted));
 }
+
+export function matchesCleanupLabel(log: string, label: string): boolean {
+  return log.split(/\r?\n/).some((line) => line.trimEnd().endsWith(` LABEL: ${label}`) || line.trimEnd() === `LABEL: ${label}`);
+}
