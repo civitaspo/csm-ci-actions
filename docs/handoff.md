@@ -12,7 +12,8 @@ This document records four things.
 If first-release-plan.md and this document disagree, first-release-plan.md wins. Fix the disagreement in a PR.
 
 - Written on: 2026-10-25 (JST)
-- `main` at the time of writing: `2ee084d` (right after Phase 1 was merged)
+- `main` at the time of writing: `7d51bc9` (Phase 1 done)
+- The repository was recreated on 2026-10-25 with an English-only history, because Japanese had been committed (see AGENTS.md). Pull request numbers and csm-ci-actions run ids from before that no longer exist. Run ids in the testing repositories are still valid.
 
 ---
 
@@ -22,9 +23,9 @@ If first-release-plan.md and this document disagree, first-release-plan.md wins.
 
 | Phase | Content | PR | Status |
 |---|---|---|---|
-| 0 | Foundation. src/lib, intake, request, server.yml, server-check, e2e harness, setup wizard, Renovate | #1, #2, #6 | Merged. The CI e2e (smoke) is also green |
-| 1 spike | Whether an approval by the approver App counts as a required approval | #7 | Merged |
-| 1 | approve. Auto approve, `/approve`, `/recheck` | #9 | Merged. The PR's CI and the local e2e (approve, smoke) are green |
+| 0 | Foundation. src/lib, intake, request, server.yml, server-check, e2e harness, setup wizard, Renovate | 8970620, 55d8472, 9fd7edb, 7d51bc9 | In `main`. The CI e2e (smoke) was green |
+| 1 spike | Whether an approval by the approver App counts as a required approval | eec9c01 (the plan records the result) | In `main` |
+| 1 | approve. Auto approve, `/approve`, `/recheck` | 55d8472, 9fd7edb, 7d51bc9 | In `main`. CI and the local e2e (approve, smoke) were green |
 
 ### 1.2 Remaining phases and dependencies
 
@@ -49,13 +50,13 @@ Section 6.1 lists the shared places where parallel work can conflict.
 ### 1.4 Not yet verified
 
 - Four e2e scenarios that use the untrusted-committer token (`needsUntrusted: true` in `e2e/approve.ts`). This token exists only in the csm-ci-actions environment `csm-ci-e2e`. So these scenarios run only in the CI e2e workflow, which you can run only from `main`.
-  - In the CI e2e run from `main` (2ee084d) after the Phase 1 merge (run 40110527573), 10 of 11 scenarios passed.
+  - In the CI e2e run from `main` of the old repository after Phase 1, 10 of 11 scenarios passed.
   - Of the four untrusted scenarios, these three passed.
     - A commit whose author the App faked as the owner through the REST API is unsigned and is not approved.
     - A signed commit from an untrusted App is not approved, even by `/approve`.
     - A label that points to a comment by someone who is not an approver gets neither 🚀 nor a receipt.
   - The remaining one, "a command from a non-collaborator creates no request", FAILED. The client run itself skipped as expected (`approve / request | skipped`). The harness failed because it read a job list that was still empty right after the run completed.
-  - The harness fix is PR #10. After it merges, rerun the CI e2e and confirm that all four pass.
+  - The harness fix (wait for the job list) is in `main`. Rerun the CI e2e and confirm that all four pass.
 - The 60-minute deadline and "dismissal by a push during approval" are verified by unit tests only. The e2e cannot trigger them on purpose.
 
 ---
@@ -569,12 +570,12 @@ The harness runs in this order.
 
 | Content | run |
 |---|---|
-| Install targets and permissions of the 4 Apps (Phase 0) | testing-csm-ci-server 40099263631, testing-csm-ci-client 40099334300, csm-ci-actions 40102266575 (untrusted-committer) |
-| Smoke e2e from CI (Phase 0, `main` 784ffee) | csm-ci-actions 40103134693 (6/6) |
+| Install targets and permissions of the 4 Apps (Phase 0) | testing-csm-ci-server 40099263631, testing-csm-ci-client 40099334300, and the untrusted committer App in a CI e2e of the old repository |
+| Smoke e2e from CI (Phase 0) | Ran green in the old repository |
 | approve spike | testing-csm-ci-server 40104472870, 40104538521, 40104932016, 40104965007 |
 | Local approve e2e (final head of Phase 1, 8e350d4) | 7 PASS, 4 SKIP. Examples: testing-csm-ci-server 40109466977 (auto approve), 40109645823 (`/approve`), 40109819219 (replay), 40110043805 and 40110042180 (edited), 40110177486 (`/recheck`) |
 | Local smoke e2e (8e350d4) | 6/6. Example: testing-csm-ci-server 40110303817 |
-| CI e2e from `main` (after the Phase 1 merge, 2ee084d) | approve: csm-ci-actions 40110527573 (10/11. The remaining one is a harness wait shortfall, fixed in PR #10). smoke: 40111425994 (success) |
+| CI e2e from `main` of the old repository (after Phase 1) | approve 10/11; the remaining scenario failed on a harness wait shortfall, which is fixed in `main`. smoke green. Rerun both in this repository |
 
 ---
 
@@ -583,6 +584,6 @@ The harness runs in this order.
 - **If you put "pass the CI e2e after the merge" in a goal's completion condition, the goal stays stuck waiting for the merge.** Make the completion condition "the PR is CI green and the local e2e is green". Ask for the post-merge check as separate work.
 - **Re-registering a secret stored an empty value.** `GH_TOKEN=""` is ignored, and gh uses your usual authentication. To check that a PAT is valid, use `curl -fsS -H "Authorization: Bearer $T" https://api.github.com/user`.
 - **Mixing merge commits and squash.** csm-ci-actions is squash only now. For stacked PRs, merge the parent PR first, then retarget the base of the child PR.
-- **Renovate tried to pin `@e2e` in the e2e fixtures to a SHA** (PR #3, closed). `e2e/fixtures/**` is in `ignorePaths` in `renovate.json`.
+- **Renovate tried to pin `@e2e` in the e2e fixtures to a SHA** (in the old repository). `e2e/fixtures/**` is in `ignorePaths` in `renovate.json`.
 - **The auto mode permission check sometimes rejects `gh pr merge`.** When that happens, do not work around it. Ask the user.
 - **If a YAML plain scalar contains `xxx: `, YAML reads it as a key.** Writing `echo "client: ..."` as the value of `run:` breaks it. Use a `run: |` block scalar.
