@@ -3,6 +3,7 @@ import type { Config, Principal } from "./config.ts";
 import { type GitHub, splitRepository } from "./github.ts";
 import { fetchComment } from "./approve.ts";
 import { hasServerMarker, marker, postResult } from "./notify.ts";
+import { evaluatePullPolicies } from "./policy-check.ts";
 import { Rejection } from "./request.ts";
 import { evaluateTrust, fetchCommitFacts } from "./trust.ts";
 
@@ -92,16 +93,6 @@ async function checkHeadPredatesComment(ctx: MergeContext, pull: PullFacts, comm
   if (forced) throw new Rejection(`#${pull.number} was force-pushed after comment ${comment.id}`);
 }
 
-async function trusted(ctx: MergeContext, pull: PullFacts): Promise<void> {
-  const trust = evaluateTrust(await fetchCommitFacts(ctx.server, ctx.repository, pull.number), pull.headSha, ctx.config);
-  if (trust.problems.length) throw new Rejection(`pull request trust failed: ${trust.problems.join("; ")}`);
-  const failing = trust.commits.find((c) => !c.trusted);
-  if (failing) {
-    const who = failing.identity.kind === "user" ? failing.identity.principal.login : failing.identity.kind === "server" ? "the server" : failing.identity.reason;
-    throw new Rejection(`commit ${failing.sha} is not by a trusted committer: ${who}`);
-  }
-}
-
 async function latestApproval(ctx: MergeContext, pull: PullFacts): Promise<boolean> {
   const reviews = await ctx.server.paginate(ctx.server.rest.pulls.listReviews, { ...splitRepository(ctx.repository), pull_number: pull.number, per_page: 100 });
   const latest = reviews.filter((r) => Number(r.user?.id) === ctx.config.approver.id && r.submitted_at)
@@ -123,16 +114,14 @@ async function requiredChecks(ctx: MergeContext, pull: PullFacts): Promise<{ ok:
   return { ok: problems.length === 0, problems };
 }
 
-async function policyProblems(ctx: MergeContext, pull: PullFacts): Promise<string[]> {
-  const { evaluatePullPolicies } = await import("./policy-check.ts");
-  const results = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull });
-  return results.flatMap((r) => r.ok ? [] : r.problems.map((p) => `${r.type}: ${p}`));
-}
-
 async function ready(ctx: MergeContext, args: MergeArgs, head: string): Promise<void> {
   const { pull } = await pinAndValidate(ctx, args, head);
-  await trusted(ctx, pull);
-  const policyErrors = await policyProblems(ctx, pull);
+  const results = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull });
+  const trust = results.filter((r) => r.type === "signed-commits" || r.type === "trusted-committers");
+  const failedTrust = trust.filter((r) => !r.ok).flatMap((r) => r.problems.map((p) => `${r.type}: ${p}`));
+  if (failedTrust.length) throw new Rejection(`pull request trust failed: ${failedTrust.join("; ")}`);
+  const policyErrors = results.filter((r) => !["signed-commits", "trusted-committers"].includes(r.type) && !r.ok)
+    .flatMap((r) => r.problems.map((p) => `${r.type}: ${p}`));
   if (policyErrors.length) throw new NotReady(`policies failed: ${policyErrors.join("; ")}`);
   if (!(await latestApproval(ctx, pull))) throw new NotReady(`the approver has not approved head ${head}`);
   const checks = await requiredChecks(ctx, pull);
@@ -150,7 +139,6 @@ export async function waitForMerge(ctx: MergeContext, args: MergeArgs): Promise<
   const comments = await ctx.server.paginate(ctx.server.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: pull.number, per_page: 100 });
   if (hasServerMarker(comments, receipt, ctx.config.apps.server_bot_id)) throw new Rejection(`comment ${comment.id} was already handled`);
   await checkHeadPredatesComment(ctx, pull, comment);
-  await trusted(ctx, pull);
   const deadline = ctx.now().getTime() + ctx.config.merge.deadline_minutes * 60_000;
   let last: unknown;
   while (ctx.now().getTime() <= deadline) {

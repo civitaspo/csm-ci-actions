@@ -59,7 +59,7 @@ jobs:
           path: .csm-ci-actions
           persist-credentials: false
       - id: server-token
-        if: needs.intake.outputs.kind == 'approve'
+        if: contains(fromJSON('["approve", "policy-check"]'), needs.intake.outputs.kind)
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
@@ -67,7 +67,8 @@ jobs:
           owner: ${{ needs.intake.outputs.owner }}
           repositories: ${{ needs.intake.outputs.name }}
           permission-contents: read
-          permission-pull-requests: write
+          permission-pull-requests: ${{ needs.intake.outputs.kind == 'approve' && 'write' || 'read' }}
+          permission-checks: write
       # The approver App needs contents:write for its approval to count, but GitHub checks the
       # App's permissions, so this token stays at pull_requests:write.
       - id: approver-token
@@ -129,7 +130,14 @@ jobs:
           repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
           args: ${{ needs.intake.outputs.args }}
           head: ${{ steps.merge-ready.outputs.head }}
-      - if: needs.intake.outputs.kind != 'approve' && needs.intake.outputs.kind != 'merge'
+      - if: needs.intake.outputs.kind == 'policy-check'
+        uses: ./.csm-ci-actions/actions/policy-check
+        with:
+          config-path: ${{ inputs.config-path }}
+          server-token: ${{ steps.server-token.outputs.token }}
+          repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
+          pull-number: ${{ fromJSON(needs.intake.outputs.args).pull_number }}
+      - if: needs.intake.outputs.kind != 'approve' && needs.intake.outputs.kind != 'merge' && needs.intake.outputs.kind != 'policy-check'
         env:
           KIND: ${{ needs.intake.outputs.kind }}
         run: echo "no $KIND handler yet"

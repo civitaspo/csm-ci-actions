@@ -465,6 +465,12 @@ Every phase appends to the following files. Only append. Do not change existing 
   - In `/approve`, evaluate without sensitive-paths.
   - Pass the comment as evidence equivalent to the marker.
 
+Implementation decision: `/approve` first checks all always-run and configured policies except sensitive-paths, then creates the approval pinned to the head with the source comment marker, and reevaluates all policies to update the check. This uses the same persisted evidence as later evaluations and avoids treating the command as a separate policy bypass.
+
+| Condition | Impact | Current limitation | Fix |
+|---|---|---|---|
+| A pull request touches 3,000 or more files | Policy fails closed | GitHub caps listing at 3,000 and the summary reports the limit, not the full changed-file set | Keep the fail-closed cap; do not raise it without a different complete-file source |
+
 ### 6.4 Phase 4: securefix
 
 - **client:** A reusable workflow. It turns the diff files into an artifact (`actions/upload-artifact`, pinned by SHA) after it checks path safety. The limits are 512 files, 8MB per file and 10MB in total. It sends the `securefix` kind with `[run_id]`.

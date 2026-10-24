@@ -53,6 +53,7 @@ merge:
 policies:
   - { type: signed-commits }
   - { type: trusted-committers }
+  - { type: sensitive-paths, paths: [".github/**", "Makefile"], exempt: [] }
 repositories:
   - { name: your-account/*, ops: [approve, merge, policy-check] }
 ```
@@ -128,6 +129,20 @@ jobs:
     # The client App key reaches the called job only through inherit.
     # jactionlint ignore=secrets-inherit
     uses: civitaspo/csm-ci-actions/.github/workflows/client-approve.yml@<sha>
+    secrets: inherit
+```
+
+`.github/workflows/csm-ci-policy-check.yml` evaluates pull request policies:
+
+```yaml
+name: csm-ci-policy-check
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+permissions: {}
+jobs:
+  policy-check:
+    uses: civitaspo/csm-ci-actions/.github/workflows/client-policy-check.yml@<sha>
     secrets: inherit
 ```
 
