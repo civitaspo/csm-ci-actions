@@ -1,0 +1,664 @@
+# csm-ci-actions implementation plan
+
+## Context
+
+`civitaspo/securefix-server` has been built twice, and both attempts hit a dead end.
+
+- **Old implementation**: a combination of shell and csm-actions. The YAML was duplicated.
+- **Current implementation**: a rewrite in Rust. The code grew to about 4MB. It carries control revisions, runtime distribution and attestation, two protocols, and about 40 testing workflows. Both build and download are slow.
+
+We rebuild this in TypeScript as a general-purpose OSS project, **`civitaspo/csm-ci-actions`**. All personal values (App IDs, user IDs, bot names and so on) move out into the server-side configuration.
+
+The previous attempts failed because "the goal kept moving, and abstractions piled up that could not be verified". So this time each feature gets its own independent phase, and **we fix the DoD (acceptance scenarios) and the "Not in scope" list before starting work**.
+
+**Decisions already made**
+
+- The transport is the label method (`label: created`).
+- `/approve` takes no argument. It is the command for approvers to approve a "PR that has only trusted commits" (the same meaning as in the Rust version). `/approve` does not approve untrusted commits either. For a PR from an external contributor, the owner approves it from the GitHub UI. The first idea was to "also force-approve untrusted commits". We changed it in Phase 1, because without an argument we cannot prevent commit swapping.
+- Policies are configured declaratively from built-in types. The configuration is **global only**. v1 has no mechanism to override policy, trust, or merge per repo. The only per-repo settings are the enabled ops and the release build type.
+- `/recheck` can re-run policy-check and the automatic approve.
+- Release builds in an unprivileged server job and includes release-pr.
+- We use zod to validate the configuration.
+- A triggering comment gets a 🚀 reaction.
+- goreleaser and cargo artifacts get an attestation.
+- JS actions run check-dist.
+- repo-settings runs **with `administration: write` on the Server App (`csm-ci-server`)**. We retire the current admin PAT. There are only two Apps, client and server.
+
+## How to implement
+
+- Implement with **both `/poteto-mode` and `/ponytail` enabled**. The user runs both when goal mode starts. poteto-mode cannot be invoked by the model, so the user must run it.
+- What ponytail covers: keep each change minimal. Do not add features that are not in this plan. Record debt in `shortcut:` comments.
+- What poteto-mode covers: follow the playbook (each phase is a Feature). Design from the data shape. Decide with explicit principles. Verify the real thing with unit tests and e2e.
+- Priority when the two sets of instructions conflict: the DoD and S1 to S7 in this plan > ponytail's "do not add" > the weight of poteto-mode's procedure.
+  - Example: poteto-mode's 10-lane UI verification does not apply, because GitHub Actions has no screen. We verify with e2e API asserts instead.
+
+## Overall architecture
+
+```
+client repo                         server repo (csm-ci-server)
+caller workflow (a few lines)       csm-ci.yaml (the only configuration)
+ └ uses csm-ci-actions/             .github/workflows/csm-ci.yml (a few lines)
+   .github/workflows/client-*.yml@sha   on: label created
+     ├ (comment ops) pre-filter the     → uses csm-ci-actions/.github/workflows/server.yml@sha
+     │  body and commenter                ├ intake job: validate → normalized output
+     ├ create-github-app-token            ├ op job (environment: csm-ci, serialization key
+     │  (Client App, installed on         │   comes from the intake's normalized output)
+     │   the server repo only,            ├ create-github-app-token (Server App,
+     │   issues:write)                    │   one target repo, least privilege per step)
+     └ create label                       └ delete label (always)
+       name: csm-ci-<op>-<rand>
+       desc: owner/repo/<args>
+```
+
+### Technology choices
+
+- **build**
+  - Install, test, and build all run with bun. `bun build --target=node` writes one file per action, `dist/<name>.js`.
+  - Actions run as `node24` JS actions (GitHub has no bun runtime).
+  - We commit `dist/`. We **do not build** any runtime distribution or download mechanism.
+- **check-dist**: CI runs the following and checks that the output is empty. We use `git status --porcelain` because `git diff` misses new untracked files.
+  ```
+  bun install --frozen-lockfile --ignore-scripts && bun run build && git status --porcelain dist/
+  ```
+- **Runtime dependencies**: limited to the allowlist below. When you add one, you must update the reason column in the README.
+  - `@actions/core`
+  - `@octokit/core`, `@octokit/plugin-rest-endpoint-methods`, `@octokit/plugin-paginate-rest`
+  - `zod`
+  - `yaml`
+  - `picomatch`
+- **Dev dependencies**: `typescript`, `@types/node`, `@types/bun` (the official types that wrap `bun-types`), `@types/picomatch`. Tests use `bun test`.
+- **App token**
+  - Use the official `actions/create-github-app-token`. The private key never reaches any code we write.
+  - Mint a write token only in a step that runs after validation has passed.
+- **How a reusable workflow calls an action**: a reusable workflow job first checks out csm-ci-actions itself with `actions/checkout` (`repository: ${{ job.workflow_repository }}`, `ref: ${{ job.workflow_sha }}`, `path: .csm-ci-actions`). Then it uses the action from the same commit with `uses: ./.csm-ci-actions/actions/<name>`. We confirmed that these two contexts exist in run 40099821184 of testing-csm-ci-client.
+- **Caller secrets**: the caller sets `secrets: inherit`. The reusable workflow reads the variables and secrets in the "Naming list" under those exact names.
+  - Without `inherit`, an environment secret is empty in the called job (run 40099955263 of testing-csm-ci-server). With `inherit`, it arrives (run 40100014166).
+  - Variables are visible without `inherit`.
+- **artifact**: only the securefix diff is passed with the official upload-artifact / download-artifact.
+- **External actions**: pin all of them to a full SHA.
+- **Static checks in CI**
+  - Run **jactionlint** (jdx/jactionlint). It inherits the actionlint checks and also includes the zizmor audits (template-injection, cache-poisoning and so on).
+  - CI adds `--online`, which also checks that a pin does not point to an impostor commit. Only if the jactionlint rules cannot detect cache use, we add our own small check for the ban on cache in server workflows.
+  - Pass `${{ github.event.* }}` only through env.
+  - **Server-side workflows use no cache at all**. CI checks this.
+- **License**: MIT.
+
+### Layout
+
+```
+src/lib/        config.ts, request.ts, github.ts, trust.ts, policies/*.ts,
+                commit.ts, notify.ts
+src/<feature>/  approve, merge, policy-check, securefix, release, repo-settings
+actions/<feature>/action.yml → dist/<feature>.js
+actions/release-build/<build_type>/action.yml   (one composite per build system)
+.github/workflows/server.yml, server-repo-settings.yml, client-<feature>.yml
+docs/, e2e/
+```
+
+### Configuration `csm-ci.yaml` (every value is user-defined)
+
+```yaml
+owners: [owner]
+server_repository: owner/csm-ci-server
+apps: { client_bot_id: 0, server_app_id: 0, server_bot_id: 0 }
+approver: { id: 0, login: my-bot }                  # the PAT is an env secret
+trust:                                              # all matched by immutable id
+  committers: [{ id: 1, login: owner }, { id: 2, login: renovate[bot] }]
+  approvers:  [{ id: 1, login: owner }]
+  mergers:    [{ id: 1, login: owner }]
+  bot_mergers: [{ id: 2, login: renovate[bot] }]
+merge:
+  required_checks: [{ name: status-check, app_id: 15368 }]
+  deadline_minutes: 60
+policies:                                           # global only
+  - { type: signed-commits }
+  - { type: trusted-committers }
+  - { type: sensitive-paths, paths: [<the full default set from the Rust version>], exempt: [{ id: 2 }] }
+securefix:                                          # global only
+  allow_workflow_changes: false
+  routes:
+    - { name: release-pr, from: default, to: release/next,
+        workflow: .github/workflows/csm-ci-release-pr.yml,
+        paths: { CHANGELOG.md: any, .release-version: semver,
+                 Cargo.toml: version-only, Cargo.lock: version-only,
+                 package.json: version-only, pyproject.toml: version-only } }
+repositories:                                       # per repo, only ops and the release build type
+  - name: owner/*                                   # first match wins
+    ops: [approve, merge, policy-check, securefix, release]
+    release: { build_type: none | js-action | goreleaser | cargo, targets: [...] }
+```
+
+- Read the file as of the server's `GITHUB_SHA`, and validate it with zod strict mode (unknown keys are errors).
+- Reject the following combinations at configuration validation time.
+  - **The server repo and the csm-ci-actions repo are always treated as `sensitive-paths: ["**"]` in code, and exempt and `bot_mergers` do not apply to them**. This is a fixed rule that configuration cannot change (in the Rust version too, the server repo had every path as sensitive).
+  - Putting the Server bot in a trust list is not allowed.
+
+---
+
+## Security design
+
+### S1. Trust boundary
+
+- The server's decisions do not depend on values passed from the client or on the integrity of the client run.
+  - The label description is used only as a locator.
+  - The server re-fetches every fact from the GitHub API with the Server App token.
+  - So we no longer need the client-run provenance proofs (manifest, reusable pin, attestation) that the old implementation and the Rust version had.
+- The one exception is the content of the securefix diff. We handle it with the binding in S4.
+
+### S2. intake (`src/lib/request.ts`, a separate intake job)
+
+1. The event repo id matches the server repo.
+2. The label's `sender.id` is the Client App bot, and `type == Bot`. The workflow `if:` also filters on this first.
+3. The label name matches `^csm-ci-<op>-[a-z0-9]+$` and is at most 50 characters. `<op>` is one of the ops. The description holds a number of values. An automatic request has 1 (a PR number or a run id). A comment command has 2 (a PR number and a comment id). The count of numbers per op is defined in a table (`REQUEST_KINDS`).
+4. Lowercase the description, then validate it with a regex per op. Leading zeros are not allowed in numbers.
+5. The repo is in `repositories[]`, the op is enabled for it, and the owner is in `owners`.
+6. Re-fetch the live label and confirm it matches, and confirm `GITHUB_RUN_ATTEMPT == 1`.
+7. Emit the normalized `{repo, number}` as a job output, and use it as the `concurrency` key of the op job (this prevents parallel runs caused by spelling variants).
+8. Always delete the label.
+
+### S3. Trust rules (`src/lib/trust.ts`)
+
+- There must be fewer than 250 commits. The last item of listCommits must match the pinned head.
+- Every commit must be `verification.verified`.
+- The effective identity is the committer's **user id**. Reject the commit if both committer and author are null.
+- For a `web-flow` commit, the effective identity is the author. Confirm the following with GraphQL.
+  - `committedViaWeb`
+  - `signature.isValid`
+  - `wasSignedByGitHub`
+  - It matches the REST author.
+- A **Server bot commit** counts as server-made, and is treated as trusted, only when all three conditions hold: `author.id == server_bot_id`, committer `web-flow`, and `wasSignedByGitHub`.
+  - The basis is that every path through which the server writes satisfies the S4 binding.
+  - We do not use trailers.
+
+### S4. Binding of the paths the server writes
+
+- **securefix PR mode**
+  - `run.pull_requests` has exactly 1 entry, it is the target PR, and its `base.ref` is the default branch.
+  - Reject if the head branch has 2 or more open PRs.
+  - This closes the path where someone opens another PR from the same branch to a malicious base and runs the attacker's workflow (a hole that the existing implementations do not cover either).
+  - The server cannot create PRs or edit the title or body.
+- **securefix route mode**
+  - `run.path` matches the route's workflow.
+  - The event is `push` or `workflow_dispatch`.
+  - The run's head matches the current head of default.
+  - Changes stay within `paths`. For files marked `version-only`, we do not use a parser per format. We check only a line-level diff: every changed line must match `^\s*"?version"?\s*[=:]`. This one function covers Cargo, pyproject, and package.json. `.release-version` must be semver.
+- **Server-owned branches** (`release/next`, `csm-ci/repo-settings`)
+  - Confirm that every commit after the merge-base is server-made and is a change within range.
+  - Then reset to the head of default and write.
+
+### S5. Comment commands (`/approve`, `/merge`)
+
+- **Client side**: only a comment that passes the body and commenter pre-filter mints a token. This prevents label spam by fork commenters.
+- **Server-side acceptance conditions**
+  - The comment belongs to the target PR.
+  - The body matches the command regex exactly.
+  - It is unedited (`updated_at == created_at`) and no more than 60 minutes old.
+  - The author's id and `type` match.
+- Once accepted, add 🚀.
+- At the end, on both success and failure, post a comment with the marker `<!-- csm-ci:<op>:<comment_id> -->`.
+- **replay**: reject if a marker **authored by the Server bot** already exists.
+  - A collaborator who deletes the marker can replay. The result is only "a retry of re-approving or re-merging the same head with the same comment", which does no harm.
+- **Pinning the head**
+  - The command takes no argument. The server pins to the head it observed. Then it rejects in two cases: a `head_ref_force_pushed` timeline event exists after the comment was created, or the head commit's committer date is newer than the comment.
+  - Someone who can create commits can forge the date. But `/approve` requires every commit to be signed by a trusted committer. So only commits by a trusted committer can get in through a swap.
+  - We do not accept a sha argument. A 7-character short sha can be brute-forced: an attacker builds a commit with a matching prefix and pushes it. Making people type 40 characters is too heavy in practice.
+- **kill switch**: while waiting, re-fetch the comment on every poll. If it was edited or deleted, abort.
+- **`/recheck`**: for re-running when policy-check or the automatic approve failed because of a temporary GitHub-side failure.
+  - The client sends it only when the commenter's `author_association` is OWNER, MEMBER, or COLLABORATOR. This prevents abuse from forks.
+  - The server confirms that the comment exists and the body matches exactly, then adds 🚀.
+  - Then it redoes the policy-check and automatic approve decision for the current head (the same as the automatic path in Phase 1).
+  - The result depends only on the current state from the API, so running it many times gives the same result. The 60-minute limit and the replay rejection do not apply.
+  - It does not perform forced approval.
+
+### S6. Placement of secrets and permissions
+
+- **environment `csm-ci`** (deploys from the default branch only): holds the Server App key and the approver PAT.
+- The build job declares no environment.
+- **Client App** is installed only on the server repo. Its permission is `issues: write`.
+- **Server App** permissions
+  - `contents: write`
+  - `pull_requests: write`
+  - `issues: write`
+  - `checks: write`
+  - `actions: read`
+  - `workflows: write`: minted only when securefix allows it and for managed files.
+  - `attestations: write`: only if the spike shows it is needed.
+  - `administration: write`: minted only in the repo-settings job.
+    - Advantages over the old classic admin PAT:
+      - It expires in 1 hour and can be limited to one repo.
+      - It is not tied to a human account.
+      - It needs no renewal routine.
+- **ruleset** (synced in Phase 6. In Phase 2 we apply the same one by hand.)
+  - `integrity` (default branch): `deletion`, `non_fast_forward`, `required_linear_history`, `required_signatures`. No bypass.
+  - `review-and-checks`: approval 1, `dismiss_stale_reviews_on_push`, `csm-ci/policy` (integration_id is the Server App) and `required_checks`, squash only.
+  - `controlled-merges`: the `update` rule only. The bypass is the Server App only, with `bypass_mode: pull_request` (`always` would allow direct pushes).
+  - `release-tags` (`refs/tags/v*`): forbids `creation`, `update`, and `deletion`. The bypass is the Server App only.
+
+### S7. Known compromises (document them)
+
+- The Client App key lives in a secret of the client repo. Anyone with write access can create any label, but S1 limits the impact.
+- The approver is an App (decided in the Phase 1 spike). For an App's approval to count as a required approval, the approver App needs `contents: write`. So one approver key can both approve and push. The key sits in the same environment `csm-ci` as the Server App key, and the Server App already has `contents: write`. So the damage if the key leaks does not change much.
+- For required checks that come from GitHub Actions, a PR author with write access can modify the workflow. The real gates are the approval and `csm-ci/policy`.
+- Fork PRs are out of scope for securefix. approve and policy-check run on `pull_request_target`, but they do not check out the PR's code.
+- Remaining risk of head pinning: if the sha is omitted, we cannot detect a push by a trusted committer that forged `committedDate`.
+- **All server jobs share the Server App key**. So a compromise of any job can mint an `administration: write` token. Narrowing the token permissions per job is only operational discipline, not a boundary. We accept this compromise (the user's decision). If we want to separate it in the future, we can add a third App and split the environment.
+
+---
+
+## Phases
+
+**DoD (common to all phases)**
+
+- Unit tests are green.
+  - Reproduce the GitHub API with a hand-written fake that injects `request.fetch`.
+  - **Table-driven tests cover every item in the list of rejection conditions**.
+- In the testing environment, the e2e success and rejection cases pass.
+- `docs/<feature>.md` exists.
+- check-dist passes.
+
+After Phase 0, phases 1, 2, 3, 4, 5a, and 6 can proceed independently in parallel. 5b comes after 4.
+
+### Phase 0: Foundation
+
+- **scaffold**
+  - strict tsconfig (including `noUncheckedIndexedAccess`)
+  - CI (typecheck, test, check-dist, jactionlint `--online`). Install jactionlint with mise.
+  - Renovate. We do not add pinact, because jactionlint `--online` detects both references not pinned by SHA and pins to impostor commits.
+- **lib**: implement `src/lib/*` (config, request, github, trust, the policies skeleton, notify), each with tests.
+- **Skeleton of server.yml**: intake job, routing, label deletion, environment.
+- **CI for the server repo**: provide a reusable workflow `server-check.yml`. It contains jactionlint `--online` (which also detects pins to impostor commits) and the zod validation of `csm-ci.yaml` by the `check-config` action. Both just call existing mechanisms.
+- **README**
+  - At the top, state that the project **strongly inherits the Client-Server Model idea of csm-actions/securefix-action**.
+  - Describe the differences. It keeps the label transport, adds merge, release, policy-check, and repo-settings, and strengthens TOCTOU and path binding.
+  - Include the permission table and S7.
+- **Testing environment**: provide `docs/setup.md` and a wizard (`scripts/setup-wizard.sh`), which the user runs by hand. The wizard takes the App name prefix as input so that it works for both testing and production.
+  - repos: `testing-csm-ci-{server,client}`
+  - Apps: `testing-csm-ci-{client,server}`
+  - an owner fine-grained PAT for e2e (see "Division of roles" below)
+- **e2e harness**
+  - The caller in the testing repos references the **`e2e` branch** of csm-ci-actions. It is for testing only, so we document it as an exception to SHA pinning.
+  - The harness first force-pushes the `e2e` branch to the SHA under test. Then it runs the scenarios and asserts the results through the API. No commit to the testing repos is needed.
+  - It starts with `workflow_dispatch` and runs serially through `concurrency`.
+
+### Phase 1: approve
+
+- **spike (the first PR)**
+  - What to confirm: whether an APPROVE from a dedicated App with `pull_requests: write` (the Approver App) satisfies the ruleset's `required_approving_review_count`.
+  - If it does: make the approver an App, and drop the approver bot PAT and the test bot user.
+  - If it does not: use the approver bot PAT.
+  - **Result (2026-10-24)**: whether an App's approval counts depends on that App's `contents` permission. We tried it by putting a ruleset with required approval 1 on testing-csm-ci-client.
+    - The APPROVE from an approver App with `contents: read` does not count. `reviewDecision` stays `REVIEW_REQUIRED`, and the merge fails with 405 and "At least 1 approving review is required by reviewers with write access." (run 40104472870 of testing-csm-ci-server).
+    - The APPROVE from the Server App, which has `contents: write`, counts. `reviewDecision` becomes `APPROVED` and the merge succeeds (run 40104538521).
+    - So the App approach needs `contents: write` on the approver App. The user chose the App approach and gave testing-csm-ci-approver `contents: write`.
+    - After that, the approver App's APPROVE counts (runs 40104932016 and 40104965007). The decision depends on the permissions attached to the App, not on the permissions of the token it issues. So the op job issues the approver token with `pull_requests: write` only.
+    - This removes the approver bot PAT, the test bot user, and the collaborator sync.
+- **client**
+  - On `pull_request_target`: `owner/repo/<pr>`
+  - On `/approve`: `owner/repo/<pr>/<comment_id>`
+  - On `/recheck`: `owner/repo/<pr>/<comment_id>` (S5)
+- **server (automatic approve)**
+  1. The PR is open, not a draft, from the same repo, and its base is the default branch.
+  2. S3 and all policies pass.
+  3. Pin the head.
+  4. Call `GET /user` with the approver PAT. Confirm it matches the configured approver and differs from the PR author.
+  5. Run `createReview(APPROVE, commit_id=head)`.
+  6. **Re-fetch the head. If it moved, dismiss that review**.
+  7. Update policy-check.
+- **server (`/approve`)**
+  - Run the S5 validation.
+  - Run the same trust and policy evaluation as the automatic approve. Every commit must be signed by a trusted committer.
+  - Put `<!-- csm-ci:approve:command:<comment_id> -->` in the review body. The sensitive-paths policy in Phase 3 treats this marker as an approval by an approver.
+- **Always evaluate the S3 trust policy, whatever `policies` in `csm-ci.yaml` contains** (a finding from the independent review).
+- **The policy-check update (step 7 of the automatic approve) is done in Phase 3**. Until Phase 3 adds the code that creates the check run `csm-ci/policy`, there is nothing to update.
+- **`/recheck` is sent as an `approve` request**. The server reads the comment body to decide the command. In Phase 3, we add the policy-check re-evaluation to this path.
+- **e2e**
+  - A trusted PR is approved automatically. An untrusted PR is not approved automatically.
+  - `/approve` succeeds on a trusted PR and is rejected for untrusted commits.
+  - A non-approver, an edited comment, and a replay of the same comment are rejected. A comment older than 60 minutes is checked in a unit test.
+  - An unsigned commit is rejected.
+  - A push right after approval causes a dismiss.
+  - 🚀 is added.
+  - `/recheck` recovers from a failed state.
+  - When an external commenter runs `/recheck`, no label is created.
+- **Not in scope**: the owner marker comment, per-control markers.
+
+### Phase 2: merge
+
+- **client**: on `/merge [sha]`, `owner/repo/<pr>/<comment_id>`
+- **server**
+  1. Validate S5. The author is in `mergers`, or in `bot_mergers` with the PR author and the effective identity of every commit being that same bot.
+  2. Check the PR state, pass S3, and pin the head.
+  3. Poll for readiness. Poll every 30 seconds, up to `deadline_minutes`. Each time, re-validate the PR state, the head, and the comment. All of the following must hold.
+     - The approver's latest review is an APPROVE on this head. Do not look at `reviewDecision`, because the ruleset and the merge API already block a human's changes requested.
+     - **Policies are re-evaluated inside the server and pass**. Do not use the check run result, so that we judge with the latest configuration even if it changed.
+     - `required_checks` are success or skipped, with the specified app as the producer.
+  4. Mint the write token only after the PR is ready, then run `pulls.merge(sha=head, squash)`.
+     - The commit message carries the PR body's `Co-authored-by` lines with duplicates removed.
+     - Retry 405, 422, and 503 with a re-validation in between.
+     - Fail immediately on 409.
+     - Confirm the response has `merged: true`.
+  5. Notify the result with a comment.
+- **e2e**
+  - The success case merges.
+  - A `/merge` from a non-merger is rejected.
+  - Even with the ruleset removed, a PR that is not approved is rejected (defense in depth).
+  - It aborts on a head change, a force-push, or a comment edit or deletion while waiting.
+  - It aborts when the deadline passes.
+  - A replay is rejected.
+  - A bot can merge only its own PR.
+- **Not in scope**: the client manifest, Renovate rebase recovery.
+
+### Phase 3: policy-check
+
+- **client**: on `pull_request_target` (opened / synchronize / reopened / ready_for_review / edited), `owner/repo/<pr>`
+- **server**
+  - Evaluate the global `policies` against the current head.
+  - Create the check run `csm-ci/policy` with the Server App. Set `external_id=<head>` and attach a result table.
+- **Built-in policies (v1)**
+  - `signed-commits`
+  - `trusted-committers`
+  - `sensitive-paths`
+    - Match against both `filename` and `previous_filename`.
+    - If 3000 or more files changed, reject (fail closed).
+    - exempt applies only when the PR author and every commit are the same principal.
+    - Otherwise it needs the `/approve` marker (`approve:command`). The marker is valid only when all of the following hold (forgery protection).
+      - The review's `user.id == approver.id`
+      - `state == APPROVED`
+      - `commit_id == head`
+      - When we re-fetch the comment the marker points to, its author is in approvers
+- **Policy implementation form**: a pair of a zod discriminated union and `evaluate(ctx)`. Adding one takes one file and one line in the union.
+- **Put the Rust version's default sensitive paths in the docs and examples**: manifests and lockfiles, `Makefile`, `Dockerfile*`, `.goreleaser.*`, `scripts/**`, `build.rs`, `.cargo/**`, `.github/**`.
+- **e2e**
+  - Pass and fail for each policy
+  - `/recheck` triggers a re-evaluation
+  - Fake markers (a review by a non-approver, a COMMENT review) are invalid
+  - The producer of the check is the Server App
+- **Not in scope**: external scripts, minimizing failure comments.
+
+### Phase 4: securefix
+
+- **client**
+  - Check path safety. Forbid absolute paths, `..`, `.git` segments, control characters, symlinks, and submodules.
+  - Size limits are 512 files, 8MB per file, and 10MB in total.
+  - Build the artifact and send `owner/repo/<run_id>`.
+- **server**
+  1. For the run, confirm `run_attempt == 1` and the same repo (no forks). In PR mode the only event is `pull_request`, and `pull_request_target` is rejected.
+  2. Confirm the **S4 path binding** (PR mode or route mode).
+  3. Confirm that exactly 1 artifact matches the name. Confirm it is not expired and is within the size limits. After download, re-validate the paths, sizes, and symlinks. Confirm that the metadata repo and run match, and that the message does not contain `csm-ci-`.
+  4. If `.github/workflows/**` has changes, mint `workflows: write` only when `allow_workflow_changes` is set.
+  5. **TOCTOU**: if the PR's current head differs from `run.head_sha`, reject it as "the branch moved after the request". Write with a CAS through `createCommitOnBranch(expectedHeadOid=run.head_sha)`.
+  6. Idempotency: on a retry, if the head is a commit whose parent is `run.head_sha`, that is server-made, and whose content matches the artifact, treat it as success.
+  7. Only in route mode, create the PR and update the title and body. This makes release-pr-sync unnecessary.
+- **Constraint**: `createCommitOnBranch` cannot set the executable bit. Document this.
+- **e2e**
+  - The push happens.
+  - Each of the following cases is rejected.
+    - The branch moved
+    - A forbidden path, a symlink, or exceeding a limit
+    - A write to the default branch
+    - `pull_request_target`
+    - A workflow change that is not allowed
+    - **A path that uses a PR from the same branch to a different base**
+    - A change outside the route's scope
+    - A manifest change other than the version line
+
+### Phase 5: release
+
+#### 5a. publish (tag → verify/build → attest → release)
+
+- **client**: when a PR from release/next is closed as merged, send `owner/repo/<pr>`.
+- **server: `plan` job (read token)**
+  - Check the PR.
+    - It is merged.
+    - `merged_by` is the Server bot.
+    - The head repo and base repo are the same.
+    - The head is `release/next` and the base is the default branch.
+  - Confirm that `.release-version` in the merge commit is semver.
+  - **Reject if an existing release is not server-made.**
+  - Handling of the tag.
+    - If it does not exist, the server creates an annotated tag. Because of the tag ruleset, only the Server App can create it.
+    - If it exists and points to the same commit, succeed idempotently.
+    - If it points to a different commit, reject.
+- **server: `build` job**
+  - Run it with these constraints.
+    - `permissions: {}`
+    - No secrets, no environment, no cache
+    - `persist-credentials: false`
+    - Only for a private repo, check out with a `contents: read` token for `repositories: [client]`
+  - The handling per `build_type` is implemented on the csm-ci-actions side as a composite action. The contract is that artifacts go in `assets/`. A new build system needs only a new `actions/release-build/<type>/` and one line in the dispatcher. The types provided in v1 are as follows.
+    - `none`
+    - `js-action`: runs check-dist. It installs from the lockfile, builds, and confirms that `git status --porcelain <dist>` is empty. This guarantees that "dist was built from the released source". It produces no assets.
+    - `goreleaser`: skips publish, sign, and announce.
+    - `cargo`: builds with a matrix of targets and runners.
+  - **Even if we implement the build on the csm-ci-actions side, we still need to separate the build and signing jobs**. Whoever implements the build system, the client's code and its dependencies run during the build. Examples are `build.rs`, proc-macros, `go generate`, goreleaser hooks, npm lifecycle scripts, and crate or module supply chains.
+    - So we give the build job neither `id-token` nor secrets. If we did, one malicious dependency could attach a genuine attestation or GPG signature to any artifact.
+    - The separation is contained inside the reusable workflow, so users see only a choice of `build_type`.
+- **server: `publish` job (does not run client code)**
+  1. Create SHA256SUMS. v1 does not do GPG signing. When we add the terraform-provider build type, we add it to this job only.
+  2. Attach the attestation.
+     - Use `actions/attest`, and attach it to every asset with a **predicate that contains the client repo, the merge SHA, and the tag**. The server workflow name alone cannot tell which client an asset belongs to.
+     - Give `id-token: write` and `attestations: write` to this job only.
+  3. Create a draft.
+     - Enable generate notes.
+     - If the version contains `-`, mark it a prerelease.
+     - Set `make_latest` only when that version is the highest.
+  4. Upload the assets (no overwrite).
+  5. Publish only after confirming that the **set of assets exactly matches the expectation**.
+  6. Re-fetch and confirm the following.
+     - `immutable: true`
+     - The digests
+     - The set of assets
+     - The tag points to the merge SHA
+- **spike (the first PR of 5a)**: settle the attestation details in practice.
+  - The storage location
+  - The predicate format
+  - The verification command (`gh attestation verify --owner ... --signer-workflow ...`, plus a field check of the predicate)
+
+#### 5b. release-pr (depends on Phase 4)
+
+- It runs in a reusable workflow on the client.
+  - Triggers are a push to default and `workflow_dispatch(version)`.
+  - git-cliff produces the version and the CHANGELOG.
+  - It writes `.release-version`.
+  - It bumps the root version.
+- Writes go through the securefix route `release-pr` (the S4 version-only check applies).
+
+#### e2e
+
+- For each build_type, an immutable release is created and the attestation can be verified.
+- It aborts when check-dist does not match.
+- The following cases are rejected.
+  - The merge was done by someone other than the Server bot
+  - The version does not match
+  - A tag or release created beforehand by someone else exists
+  - The tag is created by someone other than the Server App (rejected by the ruleset)
+- When release-pr is pushed again, the PR is updated.
+
+### Phase 6: repo-settings
+
+- **Trigger and permissions**
+  - `server-repo-settings.yml` starts on a schedule and on `workflow_dispatch(repository?)`.
+  - The environment is `csm-ci`.
+  - Mint the Server App token per target repo with `administration: write` only. Mint a separate token for managed files.
+- **What gets synced** (all validated with zod)
+  - Repository settings
+  - The 4 rulesets in S6. Upsert by name and `source_type == Repository`, and replace the whole ruleset. If more than one ruleset has the same name, raise an error.
+  - Enabling immutable releases (we do not disable it)
+  - Collaborators: handled only when the approver uses the PAT approach. If the Phase 1 spike lands on the App approach, they are not needed.
+- **controlled-merges**
+  - A schedule run **does not create it and does not change it from `disabled → active`**. This respects the emergency stop.
+  - Enabling happens only on dispatch, after a preflight. The preflight confirms the following:
+    - The caller has been distributed.
+    - The approver bot has write permission.
+    - The auto-merge queue is empty.
+    - The only bypass is the Server App's `pull_request`.
+  - Disable it with `disabled`, not by deleting the ruleset.
+  - Process the server repo last.
+- **managed files**
+  - Writes use the Server App's contents / workflows permissions.
+  - Apply the S4 server-owned branch rule to the branch `csm-ci/repo-settings`, write with `createCommitOnBranch`, and create a PR.
+  - A human merges it with `/merge`.
+- **e2e**
+  - Drift is repaired.
+  - A managed PR is created.
+  - The second run is a no-op.
+  - The schedule does not re-enable a controlled-merges that was set to disabled.
+- **Not in scope**: creating repos, distributing secrets.
+
+### Phase 7: Production migration
+
+1. Create `csm-ci-server` and the `csm-ci-{client,server}` Apps.
+2. Replace the caller one repo at a time.
+3. When all repos are moved, archive securefix-server.
+
+---
+
+## Naming list
+
+This is the single source for names. The implementation, docs, and wizard use the names in this table.
+
+- The namespace is `csm-ci` for Apps and environments, and `CSM_CI_` for secrets and variables.
+- App credentials are a pair of `CSM_CI_<ROLE>_APP_CLIENT_ID` (a variable, passed to `client-id` of `actions/create-github-app-token`; `app-id` is deprecated) and `CSM_CI_<ROLE>_APP_PRIVATE_KEY` (a secret).
+- A PAT is `CSM_CI_<ROLE>_TOKEN`.
+- `<ROLE>` is the App name with `testing-csm-ci-` or `csm-ci-` removed, in upper snake case. Example: `testing-csm-ci-untrusted-committer` → `UNTRUSTED_COMMITTER`.
+- We tell uses apart by environment, and do not add a qualifier such as `E2E_` to variable names.
+- The App name limit is 34 characters.
+
+### App
+
+| Role | testing | production |
+|---|---|---|
+| client | `testing-csm-ci-client` | `csm-ci-client` |
+| server | `testing-csm-ci-server` | `csm-ci-server` |
+| approver (if the spike passes) | `testing-csm-ci-approver` | `csm-ci-approver` |
+| untrusted committer (e2e only) | `testing-csm-ci-untrusted-committer` (34 characters, exactly the limit) | none |
+
+### environment
+
+| Location | Name | Contents |
+|---|---|---|
+| server repo | `csm-ci` | server and approver credentials |
+| csm-ci-actions | `csm-ci-e2e` | e2e harness credentials |
+
+For both, deploys are allowed only from the default branch.
+
+### Environment `csm-ci` of the server repo
+
+| Kind | Name |
+|---|---|
+| variable | `CSM_CI_SERVER_APP_CLIENT_ID` |
+| secret | `CSM_CI_SERVER_APP_PRIVATE_KEY` |
+| variable | `CSM_CI_APPROVER_APP_CLIENT_ID` |
+| secret | `CSM_CI_APPROVER_APP_PRIVATE_KEY`. If the spike does not pass, put the PAT `CSM_CI_APPROVER_TOKEN` here instead |
+
+### Client repo (repo level)
+
+| Kind | Name |
+|---|---|
+| variable | `CSM_CI_CLIENT_APP_CLIENT_ID` |
+| secret | `CSM_CI_CLIENT_APP_PRIVATE_KEY` |
+| variable | `CSM_CI_SERVER_REPOSITORY` |
+
+### Environment `csm-ci-e2e` of csm-ci-actions
+
+| Kind | Name |
+|---|---|
+| variable | `CSM_CI_UNTRUSTED_COMMITTER_APP_CLIENT_ID` |
+| secret | `CSM_CI_UNTRUSTED_COMMITTER_APP_PRIVATE_KEY` |
+| secret | `CSM_CI_OWNER_TOKEN` |
+
+### Other identifiers (already unified under `csm-ci`)
+
+| Target | Name |
+|---|---|
+| label | `csm-ci-<op>-*` |
+| check | `csm-ci/policy` |
+| branch | `csm-ci/repo-settings`, `e2e` |
+| marker | `<!-- csm-ci:... -->` |
+| configuration file | `csm-ci.yaml` |
+
+## Division of roles (human / Claude)
+
+The only work that humans must do is creating and installing Apps in the browser, and handling private keys and PATs. The gh token has the `repo` and `workflow` scopes, so Claude does everything else with gh.
+
+**What the human does before implementation starts**
+
+1. Give a go for Claude to create the repos (creating a public repo is an externally visible action).
+2. Create 4 Apps for testing, install them, and issue the private keys.
+3. Register the private keys with `gh secret set`.
+4. Issue the owner's fine-grained PAT and register it.
+5. Install Renovate on csm-ci-actions.
+
+**What Claude does**
+
+- Create the repos.
+- Set the environments and variables.
+- Get the bots' user ids.
+- Apply the rulesets to the testing repos.
+- Install jactionlint.
+- Commit the plan to the repository. It now lives at `docs/first-release-plan.md`.
+- Carry out the implementation and e2e.
+
+**What the human does later**
+
+- Issue the approver bot PAT. Only if the Phase 1 spike shows that an approval by an App does not count.
+- Create the 2 production Apps (3 if the spike result requires adding the approver), and decide on the migration (Phase 7).
+
+## Differences from earlier implementations (features and operations)
+
+The differences in security rules are summarized in the comparison table in the next section. Here we list the differences in usability and structure.
+
+| Area | Before (old shell / Rust) | csm-ci |
+|---|---|---|
+| Execution form | Download and verify the Rust binary, then run it | Run the bundled JS (`dist/`) directly on node24. There is no runtime distribution |
+| Configuration | `policy.json`, TOML, `control/active.json`. Generations managed through activation PRs | One `csm-ci.yaml`. Identities are held by id. Control revisions and activation are removed |
+| client → server | Build a manifest or artifact per kind, and the server verifies the client run's provenance (pin, attestation) | The label carries only a locator, and the server re-fetches the facts from the API. The artifact is used only for the securefix diff |
+| client caller | Pin to the runtime SHA, and reject callers of an old runtime | Pin to a SHA of csm-ci-actions (updated by Renovate). The server does not check the caller's pin |
+| approve | Automatic for trusted commits. The owner's `/approve` approves sensitive paths. It adds an owner marker comment | The meaning is the same (`/approve` takes no argument and covers trusted commits only). The marker goes in the review body, and no owner marker comment is added. A push right after approval causes a dismiss |
+| Re-run | None | **`/recheck`** can redo policy-check and the automatic approve |
+| merge | The client records the acceptance time and head in a manifest and watches the timeline broadly. Renovate rebase recovery exists | Based on the comment creation time, and optionally accepts `/merge <sha>`. Policies are re-evaluated inside the server. No rebase recovery |
+| policy-check | The check name is `securefix-policy-check`. An approval of the current head is also a condition to pass. On failure it posts a comment and minimizes old ones | The check name is `csm-ci/policy`. Approval is not a condition (the ruleset and the merge side check it). Policies can be added declaratively. The result is only in the check summary, and no comment is posted |
+| securefix | The PR fix workflow path is fixed to `pull_request.yml`. It does not update the PR title and body (release-pr-sync fills the gap) | A PR-mode run is bound to the target PR and to the base being the default branch (the workflow path does not matter). Route mode is a general configuration and also updates the PR title and body. release-pr-sync is not needed |
+| release tag | Created with the client's `GITHUB_TOKEN` (`contents: write`) | **The server creates it**. The client needs no write permission. The tag ruleset allows only the Server App to create it |
+| release build | A Go matrix and cargo dedicated to terraform-provider. goreleaser is not used (it would not read the client's configuration) | `build_type` (none / js-action / goreleaser / cargo). goreleaser is used too (the build job has no credentials, so it is safe). For terraform-provider, we add a type when needed |
+| release verification | GPG-signed SHA256SUMS only | Replaced with an **attestation** (including the client repo, SHA, and tag) and with check-dist for JS actions. GPG is added when we support terraform-provider |
+| repo-settings | The owner's classic admin PAT. Managed files exist only on the native side | The Server App's `administration`. Managed files are distributed by PR, and caller distribution also uses this. It does not create repos |
+| Trust of the Server bot | Registered as a trusted committer | Not registered. We judge whether a commit is server-made. The server repo and csm-ci-actions always treat every path as sensitive |
+| Tests | A `testing-` namespace and about 40 workflows inside the production repo | Dedicated testing repos, testing Apps, and an e2e harness |
+| Removed | Control revisions, bootstrap and repair, runtime publishing, two protocols, native producer proof, owner marker comments, minimizing failure comments | — |
+
+## Comparison with past implementations (security rules)
+
+| Rule | Source | csm-ci |
+|---|---|---|
+| The sender is the Client App bot. The server repo id matches. Live re-read and deletion of the label. Rejection of a server rerun | Old, Rust | Kept (S2). We add spelling normalization and a serialization key |
+| Client run provenance (path, pin, attestation, manifest) | Old, Rust | **Removed** (S1) |
+| Exact comment match, unedited, id and type match, within 60 minutes | Old, Rust | Kept. We add re-validation while waiting (kill switch) and a pre-filter |
+| Replay rejection (a server-made receipt) | Old, Rust | Kept (we match the marker's author) |
+| Timeline watching | Old, Rust | Reduced. Replaced by force-push detection, a head newer than the comment, per-poll state re-validation, dismissing stale reviews, and `merge(sha)` |
+| Readiness check, minting the token after ready | Old, Rust | Kept. Policies are re-evaluated inside the server (follows configuration changes) |
+| verified, 250 or fewer commits, last item is the head, web-flow proof | Old, Rust | Kept. Matching changes to id-based |
+| Sensitive paths (the Rust default set) and the exempt condition | Rust | Kept. The marker is bound by author, state, and head |
+| Every path in the server repo is sensitive | Rust | Kept (enforced by the schema). csm-ci-actions is covered too |
+| The reusable pin is an ancestor of `main` | Old | Kept (a CI check of the server repo) |
+| Approver identity check, non-author, `commit_id`, re-read after approval | Rust | Kept. If the head moved, dismiss |
+| Make the Server bot a trusted committer | Old | **Removed**. The server-made judgment is S3, and the path binding is S4 |
+| securefix path, size, symlink, submodule, and metadata limits. Reject if the head moved. CAS. Same repo only. Default forbidden | Rust | Kept |
+| Mapping a securefix run to a PR (`pull_requests[0]`) | Rust | **Strengthened**. Exactly 1 entry, base is default, reject if ambiguous |
+| A route may change only version lines | Rust | Kept (a line diff independent of format) |
+| PR mode does not create or edit PRs | Rust | Kept |
+| Commits on a server-owned branch are server-made only | Rust | Kept. Applied to the managed branch too |
+| The release `merged_by`, the version, the tag points to the merge SHA, no credentials in build, signing separation, draft → publish → immutable | Old, Rust | Kept. We add rejection of an existing release, an exact match of the asset set, the cache ban, and the separation of attestation with client information attached |
+| Tag ruleset | Old, Rust | **Strengthened**. Creating `v*` is limited to the Server App |
+| integrity ruleset, `bypass_mode: pull_request` | Old | Kept (S6) |
+| Do not give the Server App administration, and use an admin PAT | Old, Rust | **Changed**. The Server App has administration, and the token is minted only in the repo-settings job (the S7 compromise) |
+| The schedule does not re-enable controlled-merges. Enabling comes after a preflight | Rust, Old | Kept |
+| Secrets live in an environment (default branch only) | Old | Kept (S6). The build job has no environment |
+| Control revisions, bootstrap, runtime distribution, dual protocol, the testing namespace | Rust | **Removed** |
+
+## Verification
+
+- **Local**: `bun install --frozen-lockfile --ignore-scripts && bun run typecheck && bun test && bun run build && test -z "$(git status --porcelain dist/)"`
+- **CI**: the above, plus jactionlint `--online`.
+- **e2e**: start it with `gh workflow run e2e.yml -f feature=<name> -f ref=<sha>`. The harness moves the `e2e` branch to `<sha>`, then runs the scenarios and asserts through the API. It covers review, check, merge, release, attestation, and ruleset.
+- **Production migration**: on a migrated repo, run `/approve` → `/merge` → release once around to confirm.
