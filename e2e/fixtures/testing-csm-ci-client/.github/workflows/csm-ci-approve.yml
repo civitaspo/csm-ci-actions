@@ -1,0 +1,18 @@
+name: csm-ci-approve
+# Each event is its own request, so none may cancel another.
+# The pull request is never checked out; the only secret is the Client App key, which can only
+# create labels in the server repository.
+# jactionlint ignore=concurrency-limits,dangerous-triggers
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+permissions: {}
+jobs:
+  approve:
+    # e2e branch is moved to the commit under test by csm-ci-actions/e2e/run.ts.
+    # The client App key reaches the called job only through inherit.
+    # jactionlint ignore=unpinned-uses,secrets-inherit
+    uses: civitaspo/csm-ci-actions/.github/workflows/client-approve.yml@e2e
+    secrets: inherit

@@ -1,0 +1,17 @@
+name: csm-ci
+# Label events must never cancel each other; the op job serializes per pull request instead.
+# jactionlint ignore=concurrency-limits
+on:
+  label:
+    types: [created]
+permissions: {}
+jobs:
+  server:
+    # e2e branch is moved to the commit under test by csm-ci-actions/e2e/run.ts.
+    # Environment secrets reach the called job only through inherit.
+    # jactionlint ignore=unpinned-uses,secrets-inherit
+    uses: civitaspo/csm-ci-actions/.github/workflows/server.yml@e2e
+    secrets: inherit
+    permissions:
+      contents: read
+      issues: write

@@ -1,0 +1,33 @@
+name: csm-ci-smoke
+on:
+  workflow_dispatch:
+    inputs:
+      kind:
+        description: Request kind.
+        required: true
+        type: string
+      args:
+        description: Request numbers joined by a slash.
+        required: true
+        type: string
+permissions: {}
+jobs:
+  request:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_CLIENT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}
+          repositories: ${{ vars.CSM_CI_SERVER_REPOSITORY }}
+          permission-issues: write
+      # e2e branch is moved to the commit under test by csm-ci-actions/e2e/run.ts.
+      # jactionlint ignore=unpinned-uses
+      - uses: civitaspo/csm-ci-actions/actions/request@e2e
+        with:
+          github-token: ${{ steps.token.outputs.token }}
+          server-repository: ${{ vars.CSM_CI_SERVER_REPOSITORY }}
+          kind: ${{ inputs.kind }}
+          args: ${{ inputs.args }}

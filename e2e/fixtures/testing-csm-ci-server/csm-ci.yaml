@@ -1,0 +1,17 @@
+owners: [civitaspo]
+server_repository: civitaspo/testing-csm-ci-server
+apps:
+  client_bot_id: 347395374 # testing-csm-ci-client[bot]
+  server_app_id: 5455185 # testing-csm-ci-server
+  server_bot_id: 347400474 # testing-csm-ci-server[bot]
+approver: { id: 347401524, login: "testing-csm-ci-approver[bot]" }
+trust:
+  committers:
+    - { id: 4525500, login: civitaspo }
+  approvers:
+    - { id: 4525500, login: civitaspo }
+policies:
+  - { type: signed-commits }
+  - { type: trusted-committers }
+repositories:
+  - { name: civitaspo/testing-csm-ci-client, ops: [approve, merge, policy-check] }

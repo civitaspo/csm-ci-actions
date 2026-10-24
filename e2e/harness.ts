@@ -1,0 +1,241 @@
+// Helpers shared by the e2e scenarios. GitHub is the system under test, so every check reads the API.
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
+import { parseArgs } from "node:util";
+import { type GitHub, splitRepository } from "../src/lib/github.ts";
+
+export const OWNER = "civitaspo";
+export const ACTIONS = `${OWNER}/csm-ci-actions`;
+export const SERVER = `${OWNER}/testing-csm-ci-server`;
+export const CLIENT = `${OWNER}/testing-csm-ci-client`;
+const FIXTURES = join(import.meta.dir, "fixtures");
+const POLL_MS = 5_000;
+const TIMEOUT_MS = 10 * 60_000;
+
+export type Run = { id: number; html_url: string; status: string | null; conclusion: string | null; created_at: string };
+export type Ctx = { gh: GitHub; urls: string[]; untrusted: GitHub | undefined };
+export type Scenario = { name: string; needsUntrusted?: boolean; run: (ctx: Ctx) => Promise<void> };
+
+export function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+export function hasStatus(e: unknown, status: number): boolean {
+  return typeof e === "object" && e !== null && "status" in e && e.status === status;
+}
+
+export function assert(ok: unknown, message: string): asserts ok {
+  if (!ok) throw new Error(message);
+}
+
+export async function until<T>(what: string, fn: () => Promise<T | undefined>): Promise<T> {
+  const deadline = Date.now() + TIMEOUT_MS;
+  for (;;) {
+    const value = await fn();
+    if (value !== undefined) return value;
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await sleep(POLL_MS);
+  }
+}
+
+export async function moveE2eBranch(gh: GitHub, sha: string): Promise<void> {
+  const repo = splitRepository(ACTIONS);
+  try {
+    await gh.rest.git.updateRef({ ...repo, ref: "heads/e2e", sha, force: true });
+  } catch (e) {
+    // GitHub answers 422 "Reference does not exist" when the branch is missing.
+    if (!hasStatus(e, 422)) throw e;
+    await gh.rest.git.createRef({ ...repo, ref: "refs/heads/e2e", sha });
+  }
+}
+
+function fixtureFiles(dir: string): string[] {
+  return readdirSync(dir).flatMap((name) => {
+    const path = join(dir, name);
+    return statSync(path).isDirectory() ? fixtureFiles(path) : [path];
+  });
+}
+
+export async function syncFixtures(gh: GitHub): Promise<void> {
+  for (const repository of [SERVER, CLIENT]) {
+    const root = join(FIXTURES, repository.split("/")[1] ?? "");
+    for (const file of fixtureFiles(root)) {
+      const path = relative(root, file);
+      const want = readFileSync(file, "utf8");
+      let sha: string | undefined;
+      let have: string | undefined;
+      try {
+        const { data } = await gh.rest.repos.getContent({ ...splitRepository(repository), path, ref: "main" });
+        if (!Array.isArray(data) && data.type === "file") {
+          sha = data.sha;
+          have = Buffer.from(data.content, "base64").toString("utf8");
+        }
+      } catch (e) {
+        if (!hasStatus(e, 404)) throw e;
+      }
+      if (have === want) continue;
+      await gh.rest.repos.createOrUpdateFileContents({
+        ...splitRepository(repository),
+        path,
+        message: `Sync csm-ci e2e fixture ${path}`,
+        content: Buffer.from(want).toString("base64"),
+        branch: "main",
+        ...(sha ? { sha } : {}),
+      });
+      console.log(`synced ${repository}/${path}`);
+    }
+  }
+}
+
+export async function dispatch(ctx: Ctx, repository: string, workflow: string, inputs: Record<string, string> = {}): Promise<Run> {
+  const since = new Date(Date.now() - 2_000);
+  await until(`dispatch of ${workflow}`, async () => {
+    try {
+      await ctx.gh.rest.actions.createWorkflowDispatch({ ...splitRepository(repository), workflow_id: workflow, ref: "main", inputs });
+      return true;
+    } catch (e) {
+      // A just-synced workflow is briefly unknown to the dispatch API.
+      if (hasStatus(e, 422)) return undefined;
+      throw e;
+    }
+  });
+  const run = await until(`a ${workflow} run`, async () => {
+    const { data } = await ctx.gh.rest.actions.listWorkflowRuns({ ...splitRepository(repository), workflow_id: workflow, event: "workflow_dispatch", per_page: 5 });
+    return data.workflow_runs.find((r) => new Date(r.created_at) >= since);
+  });
+  return waitRun(ctx, repository, run.id);
+}
+
+export async function waitRun(ctx: Ctx, repository: string, id: number): Promise<Run> {
+  const run = await until(`run ${id}`, async () => {
+    const { data } = await ctx.gh.rest.actions.getWorkflowRun({ ...splitRepository(repository), run_id: id });
+    return data.status === "completed" ? data : undefined;
+  });
+  ctx.urls.push(run.html_url);
+  return run;
+}
+
+export async function serverRun(ctx: Ctx, since: Date): Promise<Run> {
+  const run = await until("the server run for the label", async () => {
+    const { data } = await ctx.gh.rest.actions.listWorkflowRuns({ ...splitRepository(SERVER), workflow_id: "csm-ci.yml", event: "label", per_page: 10 });
+    const runs = data.workflow_runs.filter((r) => new Date(r.created_at) >= since);
+    assert(runs.length <= 1, `expected one server run since ${since.toISOString()}, found ${runs.length}`);
+    return runs[0];
+  });
+  return waitRun(ctx, SERVER, run.id);
+}
+
+export async function jobs(ctx: Ctx, repository: string, runId: number): Promise<Map<string, { id: number; conclusion: string | null }>> {
+  const { data } = await ctx.gh.rest.actions.listJobsForWorkflowRun({ ...splitRepository(repository), run_id: runId });
+  return new Map(data.jobs.map((j) => [j.name.split(" / ").at(-1) ?? j.name, { id: j.id, conclusion: j.conclusion }]));
+}
+
+export async function jobLog(ctx: Ctx, repository: string, jobId: number): Promise<string> {
+  const { data } = await ctx.gh.rest.actions.downloadJobLogsForWorkflowRun({ ...splitRepository(repository), job_id: jobId });
+  return String(data);
+}
+
+export async function requestLabels(ctx: Ctx): Promise<string[]> {
+  const labels = await ctx.gh.paginate(ctx.gh.rest.issues.listLabelsForRepo, { ...splitRepository(SERVER), per_page: 100 });
+  return labels.map((l) => l.name).filter((n) => n.startsWith("csm-ci-"));
+}
+
+export type Conclusion = "success" | "failure" | "skipped";
+
+export async function expectServer(ctx: Ctx, since: Date, intake: Conclusion, op: Conclusion, logPattern?: RegExp): Promise<void> {
+  const run = await serverRun(ctx, since);
+  const byName = await jobs(ctx, SERVER, run.id);
+  const intakeJob = byName.get("intake");
+  assert(intakeJob?.conclusion === intake, `intake job concluded ${intakeJob?.conclusion}, expected ${intake} (${run.html_url})`);
+  assert(byName.get("op")?.conclusion === op, `op job concluded ${byName.get("op")?.conclusion}, expected ${op} (${run.html_url})`);
+  assert(byName.get("cleanup")?.conclusion === "success", `cleanup job did not succeed (${run.html_url})`);
+  if (logPattern && intakeJob) {
+    const log = await jobLog(ctx, SERVER, intakeJob.id);
+    assert(logPattern.test(log), `intake log does not match ${logPattern} (${run.html_url})`);
+  }
+  const left = await requestLabels(ctx);
+  assert(left.length === 0, `request labels left in ${SERVER}: ${left.join(", ")}`);
+}
+
+export async function smokeRequest(ctx: Ctx, kind: string, args: string): Promise<Date> {
+  const run = await dispatch(ctx, CLIENT, "csm-ci-smoke.yml", { kind, args });
+  assert(run.conclusion === "success", `client request run concluded ${run.conclusion} (${run.html_url})`);
+  return new Date(new Date(run.created_at).getTime() - 2_000);
+}
+
+export const APPROVER_LOGIN = "testing-csm-ci-approver[bot]";
+export const SERVER_BOT_ID = 347400474;
+
+export type Pr = { number: number; head: string; branch: string };
+
+// signed: createCommitOnBranch, which GitHub signs as web-flow for the token's user.
+// Otherwise the REST contents API, whose commits GitHub leaves unsigned.
+export async function openPr(ctx: Ctx, kind: "signed" | "unsigned", as: GitHub = ctx.gh, author?: { name: string; email: string }): Promise<Pr> {
+  const repo = splitRepository(CLIENT);
+  const base = (await ctx.gh.rest.repos.getBranch({ ...repo, branch: "main" })).data.commit.sha;
+  const branch = `e2e-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  await ctx.gh.rest.git.createRef({ ...repo, ref: `refs/heads/${branch}`, sha: base });
+  const path = `e2e/${branch}.txt`;
+  let head: string;
+  if (kind === "signed") {
+    const data = await as.graphql<{ createCommitOnBranch: { commit: { oid: string } } }>(
+      "mutation($i: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $i) { commit { oid } } }",
+      {
+        i: {
+          branch: { repositoryNameWithOwner: CLIENT, branchName: branch },
+          message: { headline: `e2e ${branch}` },
+          expectedHeadOid: base,
+          fileChanges: { additions: [{ path, contents: Buffer.from(`${branch}\n`).toString("base64") }] },
+        },
+      },
+    );
+    head = data.createCommitOnBranch.commit.oid;
+  } else {
+    const { data } = await as.rest.repos.createOrUpdateFileContents({
+      ...repo,
+      path,
+      branch,
+      message: `e2e ${branch}`,
+      content: Buffer.from(`${branch}\n`).toString("base64"),
+      ...(author ? { author, committer: author } : {}),
+    });
+    head = data.commit.sha ?? "";
+  }
+  const { data: pr } = await ctx.gh.rest.pulls.create({ ...repo, base: "main", head: branch, title: `e2e ${branch}` });
+  return { number: pr.number, head, branch };
+}
+
+export async function closePr(ctx: Ctx, pr: Pr): Promise<void> {
+  const repo = splitRepository(CLIENT);
+  await ctx.gh.rest.pulls.update({ ...repo, pull_number: pr.number, state: "closed" });
+  await ctx.gh.rest.git.deleteRef({ ...repo, ref: `heads/${pr.branch}` });
+}
+
+export async function postComment(ctx: Ctx, pr: Pr, body: string, as: GitHub = ctx.gh): Promise<{ id: number; since: Date }> {
+  const since = new Date(Date.now() - 2_000);
+  const { data } = await as.rest.issues.createComment({ ...splitRepository(CLIENT), issue_number: pr.number, body });
+  return { id: Number(data.id), since };
+}
+
+export async function approverReviews(ctx: Ctx, pr: Pr): Promise<{ id: number; state: string; commit_id: string | null; body: string }[]> {
+  const reviews = await ctx.gh.paginate(ctx.gh.rest.pulls.listReviews, { ...splitRepository(CLIENT), pull_number: pr.number, per_page: 100 });
+  return reviews.filter((r) => r.user?.login === APPROVER_LOGIN).map((r) => ({ id: Number(r.id), state: r.state, commit_id: r.commit_id, body: r.body }));
+}
+
+export async function serverComments(ctx: Ctx, pr: Pr): Promise<string[]> {
+  const comments = await ctx.gh.paginate(ctx.gh.rest.issues.listComments, { ...splitRepository(CLIENT), issue_number: pr.number, per_page: 100 });
+  return comments.filter((c) => Number(c.user?.id) === SERVER_BOT_ID).map((c) => c.body ?? "");
+}
+
+// Waits for the one server run started since `since` and checks its op job.
+export async function expectOp(ctx: Ctx, since: Date, op: Conclusion, logPattern?: RegExp): Promise<void> {
+  const run = await serverRun(ctx, since);
+  const byName = await jobs(ctx, SERVER, run.id);
+  const opJob = byName.get("op");
+  assert(byName.get("intake")?.conclusion === "success", `intake job concluded ${byName.get("intake")?.conclusion} (${run.html_url})`);
+  assert(opJob?.conclusion === op, `op job concluded ${opJob?.conclusion}, expected ${op} (${run.html_url})`);
+  if (logPattern && opJob) {
+    const log = await jobLog(ctx, SERVER, opJob.id);
+    assert(logPattern.test(log), `op log does not match ${logPattern} (${run.html_url})`);
+  }
+}
