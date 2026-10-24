@@ -33,8 +33,8 @@ export const smoke: Scenario[] = [
   {
     name: "a request for an op the repository does not enable is rejected and deleted",
     run: async (ctx) => {
-      const request = await smokeRequest(ctx, "securefix", "1");
-      await expectServer(ctx, { kind: "securefix", repository: CLIENT, args: { run_id: 1 }, label: request.label }, request.since, "failure", "skipped", /does not enable securefix/);
+      const request = await smokeRequest(ctx, "release", "1");
+      await expectServer(ctx, { kind: "release", repository: CLIENT, args: { pull_number: 1 }, label: request.label }, request.since, "failure", "skipped", /does not enable release/);
     },
   },
   {
