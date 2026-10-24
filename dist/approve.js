@@ -30634,7 +30634,7 @@ function validateComment(c, repository, pullNumber, now) {
     throw new Rejection(`comment ${c.id} is not exactly /approve or /recheck`);
   if (command.name === "recheck")
     return command;
-  if (c.createdAt !== c.updatedAt)
+  if (c.lastEditedAt !== null || c.createdAt !== c.updatedAt)
     throw new Rejection(`comment ${c.id} was edited after it was posted`);
   const age = now.getTime() - new Date(c.createdAt).getTime();
   if (!(age >= 0 && age <= COMMAND_TTL_MS))
@@ -34618,9 +34618,78 @@ function legacyRestEndpointMethods(octokit) {
 legacyRestEndpointMethods.VERSION = VERSION6;
 
 // src/lib/github.ts
+import { setTimeout as delay } from "node:timers/promises";
 var Octokit2 = Octokit.plugin(restEndpointMethods, paginateRest);
-function github(token, fetch) {
-  return new Octokit2({ auth: token, userAgent: "csm-ci-actions", ...fetch ? { request: { fetch } } : {} });
+function github(token, fetch, retryOptions = {}) {
+  const octokit = new Octokit2({ auth: token, userAgent: "csm-ci-actions", ...fetch ? { request: { fetch } } : {} });
+  const timeoutMs = retryOptions.timeoutMs ?? 30000;
+  const backoffMs = retryOptions.backoffMs ?? [250, 1000];
+  octokit.hook.wrap("request", async (request, options) => {
+    const endpoint = octokit.request.endpoint.parse(options);
+    const retryable = isReadOnly(endpoint.method, endpoint.url, endpoint.body);
+    const originalRequest = options.request;
+    const callerSignal = originalRequest.signal;
+    for (let attempt = 0;; attempt++) {
+      const controller = new AbortController;
+      const abortFromCaller = () => controller.abort(callerSignal?.reason);
+      if (callerSignal?.aborted)
+        abortFromCaller();
+      else
+        callerSignal?.addEventListener("abort", abortFromCaller, { once: true });
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort(new DOMException("GitHub request timed out", "TimeoutError"));
+      }, timeoutMs);
+      try {
+        if (controller.signal.aborted)
+          throw controller.signal.reason ?? new DOMException("Aborted", "AbortError");
+        options.request = { ...originalRequest, signal: controller.signal };
+        const aborted = new Promise((_, reject) => {
+          controller.signal.addEventListener("abort", () => reject(controller.signal.reason ?? new DOMException("Aborted", "AbortError")), { once: true });
+        });
+        const call = request(options);
+        const result = await Promise.race([call, aborted]);
+        return result;
+      } catch (error) {
+        clearTimeout(timer);
+        callerSignal?.removeEventListener("abort", abortFromCaller);
+        if (callerSignal?.aborted || !retryable || attempt >= backoffMs.length || !isRetryableError(error, timedOut))
+          throw error;
+        await delay(backoffMs[attempt], undefined, callerSignal ? { signal: callerSignal } : {});
+      } finally {
+        options.request = originalRequest;
+        clearTimeout(timer);
+        callerSignal?.removeEventListener("abort", abortFromCaller);
+      }
+    }
+  });
+  return octokit;
+}
+function isReadOnly(method, url, body) {
+  if (method === "GET" || method === "HEAD")
+    return true;
+  if (method !== "POST" || !url.endsWith("/graphql"))
+    return false;
+  const query = typeof body === "object" && body !== null && "query" in body && typeof body.query === "string" ? body.query : null;
+  if (query === null)
+    return false;
+  if (/\b(?:mutation|subscription)\b/i.test(query))
+    return false;
+  const operations = query.match(/\bquery\b/gi)?.length ?? 0;
+  return /^\s*\{/i.test(query) ? operations === 0 : /^\s*query\b/i.test(query) && operations === 1;
+}
+function isRetryableError(error, timedOut) {
+  if (timedOut)
+    return true;
+  if (typeof error !== "object" || error === null)
+    return false;
+  if ("status" in error && (error.status === 502 || error.status === 503 || error.status === 504))
+    return true;
+  if (!("cause" in error))
+    return false;
+  const cause = error.cause;
+  return cause instanceof TypeError || cause instanceof Error && ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EAI_AGAIN", "ENETUNREACH"].some((code) => cause.message.includes(code));
 }
 function splitRepository(fullName) {
   const [owner, repo, ...rest] = fullName.split("/");
@@ -34774,12 +34843,17 @@ async function fetchPull(gh, repository, pullNumber) {
 }
 async function fetchComment(gh, repository, commentId) {
   const { data: c } = await gh.rest.issues.getComment({ ...splitRepository(repository), comment_id: commentId });
+  const { node } = await gh.graphql("query($id: ID!) { node(id: $id) { ... on IssueComment { databaseId lastEditedAt } } }", { id: c.node_id });
+  if (!node || node.databaseId !== Number(c.id) || !(node.lastEditedAt === null || typeof node.lastEditedAt === "string")) {
+    throw new Rejection(`cannot verify the edit history of comment ${commentId}`);
+  }
   return {
     id: Number(c.id),
     body: c.body ?? "",
     issueUrl: c.issue_url,
     createdAt: c.created_at,
     updatedAt: c.updated_at,
+    lastEditedAt: node.lastEditedAt,
     user: c.user ? { id: Number(c.user.id), login: c.user.login, type: c.user.type } : null
   };
 }
