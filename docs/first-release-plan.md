@@ -454,6 +454,7 @@ After Phase 0, phases 1, 2, 3, 4, 5a, and 6 can proceed independently in paralle
   - The storage location
   - The predicate format
   - The verification command (`gh attestation verify --owner ... --signer-workflow ...`, plus a field check of the predicate)
+  - Verified result: [release attestation spike](release-attestation.md). Store attestations in the server repository using its workflow token. Use the custom release predicate with `client_repository`, `merge_sha`, and `tag`; check all three fields after signature verification.
 
 #### 5b. release-pr (depends on Phase 4)
 
