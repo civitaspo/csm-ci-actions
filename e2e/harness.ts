@@ -286,7 +286,7 @@ export const withoutReleaseOperation = (text: string): string => {
   return changed;
 };
 
-export async function openReleasePr(ctx: Ctx, version: string, additions: Record<string, string> = {}): Promise<Pr & { openedAt: Date }> {
+export async function openReleasePr(ctx: Ctx, version: string, additions: Record<string, string | null> = {}): Promise<Pr & { openedAt: Date }> {
   const repo = splitRepository(CLIENT);
   try {
     await ctx.gh.rest.git.getRef({ ...repo, ref: "heads/release/next" });
@@ -304,7 +304,10 @@ export async function openReleasePr(ctx: Ctx, version: string, additions: Record
     const data = await ctx.gh.graphql<{ createCommitOnBranch: { commit: { oid: string } } }>(
       "mutation($i: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $i) { commit { oid } } }",
       { i: { branch: { repositoryNameWithOwner: CLIENT, branchName: branch }, message: { headline: `e2e release ${version}` }, expectedHeadOid: base,
-        fileChanges: { additions: Object.entries(files).map(([path, content]) => ({ path, contents: Buffer.from(content).toString("base64") })) } } },
+        fileChanges: {
+          additions: Object.entries(files).flatMap(([path, content]) => content === null ? [] : [{ path, contents: Buffer.from(content).toString("base64") }]),
+          deletions: Object.entries(files).flatMap(([path, content]) => content === null ? [{ path }] : []),
+        } } },
     );
     ownedHead = data.createCommitOnBranch.commit.oid;
     const { data: pr } = await ctx.gh.rest.pulls.create({ ...repo, base: "main", head: branch, title: `e2e release ${version}` });

@@ -10,7 +10,7 @@ function version(): string {
   return `1.0.${Date.now()}`;
 }
 
-async function withPr<T>(ctx: Ctx, ver: string, body: (pr: ReleasePr) => Promise<T>, additions: Record<string, string> = {}): Promise<T> {
+async function withPr<T>(ctx: Ctx, ver: string, body: (pr: ReleasePr) => Promise<T>, additions: Record<string, string | null> = {}): Promise<T> {
   const pr = await openReleasePr(ctx, ver, additions);
   try {
     await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number } }, pr.openedAt, "success");
@@ -64,7 +64,7 @@ async function completedRelease(ctx: Ctx, ver: string, buildType: ReleaseBuildTy
     assert(clientRun.conclusion === "success", `client release request concluded ${clientRun.conclusion} (${clientRun.html_url})`);
     const pipeline = await releasePipeline(ctx, merged.since, pr);
     return { pipeline, pr, sha: merged.sha, clientRun };
-  }));
+  }, buildType === "goreleaser" ? { "dist/action.js": null } : {}));
 }
 
 function expectJob(result: ReleaseRun, name: string, conclusion: Conclusion): void {
