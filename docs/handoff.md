@@ -733,7 +733,7 @@ The first PR status check [40132605179](https://github.com/civitaspo/csm-ci-acti
 
 ## 15. Release attestation spike
 
-[PR 11](https://github.com/civitaspo/csm-ci-actions/pull/11) merged securefix as `0b4c80a82d908ab87f55d76aa756849d62959c8e` after [status-check](https://github.com/civitaspo/csm-ci-actions/actions/runs/40132736651) passed. Its post-merge main securefix and smoke e2e results will be recorded with the next implementation update.
+[PR 11](https://github.com/civitaspo/csm-ci-actions/pull/11) merged securefix as `0b4c80a82d908ab87f55d76aa756849d62959c8e` after [status-check](https://github.com/civitaspo/csm-ci-actions/actions/runs/40132736651) passed. Its post-merge [securefix e2e](https://github.com/civitaspo/csm-ci-actions/actions/runs/40132821986) passed 14/14 and [smoke e2e](https://github.com/civitaspo/csm-ci-actions/actions/runs/40132862932) passed 6/6, both with no skips.
 
 The attestation spike passed in [40117137591](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40117137591). The [attestation reference](release-attestation.md) records storage, the exact predicate, and the verified command. The server repository stores the attestation using its workflow token, so this choice does not require a new Server App permission. The publish job must supply validated client repository, merge SHA, and tag fields and must not execute client code.
 
