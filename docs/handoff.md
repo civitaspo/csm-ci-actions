@@ -563,6 +563,17 @@ The harness runs in this order.
 3. **The workflow dispatch API is deprecated** (section 3.7).
 4. **`require_extra_approval_for_unattributed_changes`** (section 2.5): verify in Phase 2 how it affects the approval of bot commits.
 5. **The client caller in docs/setup.md:** Each time you add a client workflow in Phase 2 or later, add a section.
+6. **Make the e2e scenarios of a feature run in parallel. Do this before Phase 2.**
+   - Today every scenario waits for real client and server runs, about one minute each, and the scenarios run one after another. approve takes 10 to 17 minutes, and a CI run with the untrusted committer scenarios takes about 17.
+   - The scenarios are serial because `serverRun(ctx, since)` assumes that exactly one server run starts after `since`. Two scenarios at once would see each other's runs.
+   - Fix it by matching each server run to its request instead of by time. Read the label from the cleanup job's `LABEL:` env line, or the `accepted <kind> for <repo> {args}` line of the intake log. Match it to the pull request number and comment id that the scenario created. Do the same for `expectEveryOp`, `expectNoServerRun` and `expectClientSkipped`.
+   - Then run the scenarios of one feature with `Promise.all`, so each one opens its own pull request. Keep the feature-level lock (section 7.2), because features still share the fixtures.
+   - Done when approve finishes in a few minutes and every scenario still asserts the same things.
+7. **Give every GitHub API call a timeout and a retry.**
+   - Observed on 2026-10-25: a server intake job that usually takes about 10 seconds ran for 6.5 minutes and hit its 5-minute `timeout-minutes` (testing-csm-ci-server run 40113558825). In the same period the API returned HTTP 502 and some local `gh` calls timed out. githubstatus.com showed all systems operational. The intake log was not available, so the hanging call is not known.
+   - The octokit client in `src/lib/github.ts` has no request timeout, so a stalled request waits until the job timeout and the request is lost.
+   - Fix it in the `github()` factory: an `AbortSignal.timeout` per request (for example 30 seconds) and a bounded retry with backoff for network errors, 502, 503 and 504. Retry only idempotent calls. Do not retry writes such as `createReview`, `pulls.merge` or `createCommitOnBranch`, because a write that succeeded but whose response was lost must not run twice. The approve and merge flows already re-read the state, which covers that case.
+   - Add table-driven tests with the fake fetch: a hang that times out, a 502 then a success, a write that is not retried.
 
 ---
 
