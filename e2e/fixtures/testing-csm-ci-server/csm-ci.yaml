@@ -15,7 +15,7 @@ trust:
   bot_mergers: []
 merge:
   required_checks:
-    - { name: status-check, app_id: 15368 }
+    - { name: csm-ci/policy, app_id: 5455185 }
   deadline_minutes: 1
 policies:
   - { type: signed-commits }

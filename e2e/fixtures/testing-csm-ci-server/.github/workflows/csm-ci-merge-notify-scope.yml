@@ -86,6 +86,7 @@ jobs:
             });
             const mergeBody = await json(merge);
             if (merge.status !== 403) throw new Error(`expected merge to be denied with HTTP 403, received HTTP ${merge.status}`);
+            if (mergeBody?.message !== "Resource not accessible by integration") throw new Error(`unexpected merge denial: ${mergeBody?.message}`);
             console.log(`notification reaction: HTTP ${reaction.status}; notification comment: HTTP ${created.status}; merge denied: HTTP ${merge.status} (${mergeBody?.message ?? "no message"})`);
 
             const afterResponse = await api(`/pulls/${pullNumber}`);
