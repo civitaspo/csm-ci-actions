@@ -56,12 +56,15 @@ async function releaseLock(gh: GitHub, holder: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const { values } = parseArgs({ options: { ref: { type: "string" }, feature: { type: "string", default: "smoke" } } });
+  const { values } = parseArgs({ options: { ref: { type: "string" }, feature: { type: "string", default: "smoke" }, scenario: { type: "string" } } });
   const token = process.env.GH_TOKEN;
   assert(token, "GH_TOKEN is not set");
   assert(values.ref && /^[0-9a-f]{40}$/.test(values.ref), "--ref must be a full commit sha");
-  const scenarios = FEATURES[values.feature ?? ""];
-  assert(scenarios, `unknown feature ${values.feature}; known: ${Object.keys(FEATURES).join(", ")}`);
+  const featureScenarios = FEATURES[values.feature ?? ""];
+  assert(featureScenarios, `unknown feature ${values.feature}; known: ${Object.keys(FEATURES).join(", ")}`);
+  assert(values.scenario === undefined || values.scenario.length > 0, "--scenario must be a non-empty substring");
+  const scenarios = values.scenario ? featureScenarios.filter((scenario) => scenario.name.includes(values.scenario!)) : featureScenarios;
+  assert(scenarios.length > 0, `no ${values.feature} scenario matches ${JSON.stringify(values.scenario)}`);
 
   const gh = github(token);
   const actions = github(process.env.CSM_CI_ACTIONS_TOKEN || token);

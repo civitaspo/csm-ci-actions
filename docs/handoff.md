@@ -514,11 +514,13 @@ This phase is mostly human work. A human creates and installs the Apps, register
 
 ```bash
 # From your machine. GH_TOKEN is the owner's gh token
-GH_TOKEN=$(gh auth token) bun e2e/run.ts --ref <full sha of the PR head> --feature <smoke|approve|...>
+GH_TOKEN=$(gh auth token) bun e2e/run.ts --ref <full sha of the PR head> --feature <smoke|approve|...> [--scenario <name substring>]
 
 # From CI (the harness on main runs. The untrusted scenarios also run)
 gh workflow run e2e.yml --repo civitaspo/csm-ci-actions --ref main -f ref=<sha> -f feature=<feature>
 ```
+
+Use `--scenario` to run a representative scenario while iterating, for example `--feature approve --scenario "edited after posting"`. The filter is a case-sensitive substring of the scenario name; it must match at least one scenario. Omitting it runs the full feature. CI runs still execute the full feature.
 
 The harness runs in this order.
 
