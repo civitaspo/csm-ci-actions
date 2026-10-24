@@ -115,14 +115,25 @@ export async function waitRun(ctx: Ctx, repository: string, id: number): Promise
   return run;
 }
 
-export async function serverRun(ctx: Ctx, since: Date): Promise<Run> {
-  const run = await until("the server run for the label", async () => {
+export async function serverRuns(ctx: Ctx, match: RequestMatch, since?: Date, pattern?: RegExp): Promise<Run[]> {
+  return until("the server run for the request", async () => {
     const { data } = await ctx.gh.rest.actions.listWorkflowRuns({ ...splitRepository(SERVER), workflow_id: "csm-ci.yml", event: "label", per_page: 10 });
-    const runs = data.workflow_runs.filter((r) => new Date(r.created_at) >= since);
-    assert(runs.length <= 1, `expected one server run since ${since.toISOString()}, found ${runs.length}`);
-    return runs[0];
+    const candidates = data.workflow_runs.filter((r) => (!since || new Date(r.created_at) >= since) && r.status === "completed");
+    const found: Run[] = [];
+    for (const run of candidates) {
+      const byName = await jobs(ctx, SERVER, run.id);
+      const intake = byName.get("intake");
+      if (!intake) continue;
+      const log = await jobLog(ctx, SERVER, intake.id);
+      const accepted = `accepted ${match.kind} for ${match.repository} ${JSON.stringify(match.args)}`;
+      if (log.includes(accepted) || (pattern && pattern.test(log))) found.push(run);
+      else if (match.label) {
+        const cleanup = byName.get("cleanup");
+        if (cleanup && (await jobLog(ctx, SERVER, cleanup.id)).includes(`LABEL: ${match.label}`)) found.push(run);
+      }
+    }
+    return found.length ? found : undefined;
   });
-  return waitRun(ctx, SERVER, run.id);
 }
 
 export async function jobs(ctx: Ctx, repository: string, runId: number): Promise<Map<string, { id: number; conclusion: string | null }>> {
@@ -142,8 +153,9 @@ export async function requestLabels(ctx: Ctx): Promise<string[]> {
 
 export type Conclusion = "success" | "failure" | "skipped";
 
-export async function expectServer(ctx: Ctx, since: Date, intake: Conclusion, op: Conclusion, logPattern?: RegExp): Promise<void> {
-  const run = await serverRun(ctx, since);
+export async function expectServer(ctx: Ctx, match: RequestMatch, since: Date | undefined, intake: Conclusion, op: Conclusion, logPattern?: RegExp): Promise<void> {
+  const run = (await serverRuns(ctx, match, since, logPattern))[0]!;
+  await waitRun(ctx, SERVER, run.id);
   const byName = await jobs(ctx, SERVER, run.id);
   const intakeJob = byName.get("intake");
   assert(intakeJob?.conclusion === intake, `intake job concluded ${intakeJob?.conclusion}, expected ${intake} (${run.html_url})`);
@@ -167,6 +179,7 @@ export const APPROVER_LOGIN = "testing-csm-ci-approver[bot]";
 export const SERVER_BOT_ID = 347400474;
 
 export type Pr = { number: number; head: string; branch: string };
+export type RequestMatch = { kind: string; repository: string; args: Record<string, number>; label?: string };
 
 // signed: createCommitOnBranch, which GitHub signs as web-flow for the token's user.
 // Otherwise the REST contents API, whose commits GitHub leaves unsigned.
@@ -228,8 +241,9 @@ export async function serverComments(ctx: Ctx, pr: Pr): Promise<string[]> {
 }
 
 // Waits for the one server run started since `since` and checks its op job.
-export async function expectOp(ctx: Ctx, since: Date, op: Conclusion, logPattern?: RegExp): Promise<void> {
-  const run = await serverRun(ctx, since);
+export async function expectOp(ctx: Ctx, match: RequestMatch, since: Date, op: Conclusion, logPattern?: RegExp): Promise<void> {
+  const run = (await serverRuns(ctx, match, since))[0]!;
+  await waitRun(ctx, SERVER, run.id);
   const byName = await jobs(ctx, SERVER, run.id);
   const opJob = byName.get("op");
   assert(byName.get("intake")?.conclusion === "success", `intake job concluded ${byName.get("intake")?.conclusion} (${run.html_url})`);

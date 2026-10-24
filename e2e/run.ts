@@ -74,22 +74,25 @@ async function main(): Promise<void> {
   try {
     await moveE2eBranch(actions, values.ref);
     await syncFixtures(gh);
-    for (const scenario of scenarios) {
+    const results = await Promise.all(scenarios.map(async (scenario) => {
       if (scenario.needsUntrusted && !untrustedToken) {
         console.log(`SKIP ${scenario.name}: needs CSM_CI_UNTRUSTED_COMMITTER_TOKEN, which only the e2e workflow has`);
-        skipped++;
-        continue;
+        return { failed: false, skipped: true };
       }
       const ctx: Ctx = { gh, urls: [], untrusted: untrustedToken ? github(untrustedToken) : undefined };
       try {
         await scenario.run(ctx);
         console.log(`PASS ${scenario.name}`);
+        for (const url of ctx.urls) console.log(`  ${url}`);
+        return { failed: false, skipped: false };
       } catch (e) {
-        failed++;
         console.log(`FAIL ${scenario.name}: ${e instanceof Error ? e.message : String(e)}`);
+        for (const url of ctx.urls) console.log(`  ${url}`);
+        return { failed: true, skipped: false };
       }
-      for (const url of ctx.urls) console.log(`  ${url}`);
-    }
+    }));
+    failed = results.filter((r) => r.failed).length;
+    skipped = results.filter((r) => r.skipped).length;
   } finally {
     await releaseLock(actions, holder);
   }

@@ -525,7 +525,7 @@ The harness runs in this order.
 1. Take the lock.
 2. Force-push the `e2e` branch of csm-ci-actions to `--ref`. The testing callers reference `@e2e`.
 3. Sync the fixtures to `main` of the testing repos (commit if there is a diff).
-4. Run the scenarios in order, and print PASS / FAIL / SKIP with the run URLs.
+4. Run scenarios concurrently, and print PASS / FAIL / SKIP with the run URLs.
 5. Release the lock.
 
 ### 7.2 The lock
@@ -543,10 +543,8 @@ The harness runs in this order.
   for n in $(gh pr list --repo civitaspo/testing-csm-ci-client --state open --json number,headRefName --jq '.[] | select(.headRefName|startswith("e2e-")) | .number'); do gh pr close $n --repo civitaspo/testing-csm-ci-client --delete-branch; done
   ```
 
-- **`serverRun(ctx, since)` assumes there is exactly one server run after `since`.**
-  - When you open a PR, one auto approve run starts. Wait for that run to finish, do the next operation, and take `since` again (`withPr` does this).
-  - When you create a label directly (`labelFor`), use the time just before the dispatch as `since`.
-  - When the client itself may also send a request (section 3.6), check all of them with `expectEveryOp`.
+- Match server runs to the accepted request in the intake log, including its operation, repository, PR number and comment id. Directly created labels are matched by label name in the cleanup log. The time bound only limits the search to the scenario's own activity.
+- Client issue-comment workflow run names include the PR number and comment id so a skipped request can be matched to the exact comment.
 - **The server's receipt comment also triggers issue_comment.** The prefilter rejects that client run because of the bot's association (`NONE`), so it skips. The server runs do not increase.
 - **For scenarios that need a second identity,** set `needsUntrusted: true`. They are SKIPped on your machine and run only in the CI e2e workflow.
 - **`labelFor`** (the dispatch of `csm-ci-smoke.yml`) lets you create any request with the Client App. You can use it to simulate "an attacker who holds the Client App's key".
@@ -563,12 +561,10 @@ The harness runs in this order.
 3. **The workflow dispatch API is deprecated** (section 3.7).
 4. **`require_extra_approval_for_unattributed_changes`** (section 2.5): verify in Phase 2 how it affects the approval of bot commits.
 5. **The client caller in docs/setup.md:** Each time you add a client workflow in Phase 2 or later, add a section.
-6. **Make the e2e scenarios of a feature run in parallel. Do this before Phase 2.**
-   - Today every scenario waits for real client and server runs, about one minute each, and the scenarios run one after another. approve takes 10 to 17 minutes, and a CI run with the untrusted committer scenarios takes about 17.
-   - The scenarios are serial because `serverRun(ctx, since)` assumes that exactly one server run starts after `since`. Two scenarios at once would see each other's runs.
-   - Fix it by matching each server run to its request instead of by time. Read the label from the cleanup job's `LABEL:` env line, or the `accepted <kind> for <repo> {args}` line of the intake log. Match it to the pull request number and comment id that the scenario created. Do the same for `expectEveryOp`, `expectNoServerRun` and `expectClientSkipped`.
-   - Then run the scenarios of one feature with `Promise.all`, so each one opens its own pull request. Keep the feature-level lock (section 7.2), because features still share the fixtures.
-   - Done when approve finishes in a few minutes and every scenario still asserts the same things.
+6. **Make the e2e scenarios of a feature run in parallel.** (Implemented.)
+   - Scenarios use separate pull requests and run concurrently under the feature-level lock. Server runs are matched to the intake request, and skipped client runs are matched by PR and comment id.
+   - Keep the feature-level lock because features share the fixtures.
+
 7. **Give every GitHub API call a timeout and a retry.**
    - Observed on 2026-10-25: a server intake job that usually takes about 10 seconds ran for 6.5 minutes and hit its 5-minute `timeout-minutes` (testing-csm-ci-server run 40113558825). In the same period the API returned HTTP 502 and some local `gh` calls timed out. githubstatus.com showed all systems operational. The intake log was not available, so the hanging call is not known.
    - The octokit client in `src/lib/github.ts` has no request timeout, so a stalled request waits until the job timeout and the request is lost.
@@ -576,6 +572,12 @@ The harness runs in this order.
    - Add table-driven tests with the fake fetch: a hang that times out, a 502 then a success, a write that is not retried.
 
 ---
+
+### Follow-up
+
+| Condition | Impact | Current limitation | Proposed fix |
+|---|---|---|---|
+| Intake rejects a request before logging its parsed arguments | A malformed/rejected request cannot be correlated from the intake log | The smoke rejection case matches its rejection log pattern; direct labels match the cleanup label | Emit the normalized request identity before validation where safe, or retain the label name from client output |
 
 ## 9. Verification record (key runs)
 
