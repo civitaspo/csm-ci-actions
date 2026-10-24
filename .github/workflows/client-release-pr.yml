@@ -1,0 +1,61 @@
+name: csm-ci client release PR
+
+on:
+  workflow_call:
+    secrets:
+      CSM_CI_CLIENT_APP_PRIVATE_KEY:
+        required: true
+    inputs:
+      version:
+        description: Optional semantic version without the v prefix; git-cliff infers it when omitted.
+        type: string
+        required: false
+        default: ""
+
+permissions: {}
+
+jobs:
+  generate:
+    if: >-
+      contains(fromJSON('["push", "workflow_dispatch"]'), github.event_name) &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      has-changes: ${{ steps.package.outputs.has-changes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          path: client
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .csm-ci-actions
+          persist-credentials: false
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2
+        with:
+          tool: git-cliff@2.14.2
+          fallback: none
+      - id: prepare
+        uses: ./.csm-ci-actions/actions/release-pr
+        with:
+          workspace: ${{ github.workspace }}/client
+          version: ${{ inputs.version }}
+      - id: package
+        uses: ./.csm-ci-actions/actions/securefix-client
+        with:
+          workspace: ${{ github.workspace }}/client
+          message: "chore(release): v${{ steps.prepare.outputs.version }}"
+  request:
+    needs: generate
+    if: needs.generate.outputs.has-changes == 'true'
+    permissions: {}
+    uses: ./.github/workflows/client-securefix.yml
+    secrets:
+      CSM_CI_CLIENT_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}

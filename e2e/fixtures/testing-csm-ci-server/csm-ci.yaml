@@ -24,6 +24,11 @@ policies:
 securefix:
   allow_workflow_changes: false
   routes:
+    - name: release-pr
+      from: default
+      to: release/next
+      workflow: .github/workflows/csm-ci-release-pr.yml
+      paths: { CHANGELOG.md: any, .release-version: semver, Cargo.toml: version-only, Cargo.lock: version-only, package.json: version-only, pyproject.toml: version-only }
     - name: e2e-route
       from: default
       to: e2e-securefix-route

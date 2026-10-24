@@ -222,3 +222,30 @@ jobs:
 ```
 
 The server verifies the merged pull request before it creates a tag or release. Its build job runs without credentials, secrets or an environment. The `release-tags` ruleset must restrict `v*` tags to the Server App.
+
+To prepare release PRs, configure the [release-pr securefix route](release-pr.md) and add `.github/workflows/csm-ci-release-pr.yml`. Replace `main` with the repository's default branch:
+
+```yaml
+name: csm-ci-release-pr
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Optional semantic version without a v prefix.
+        type: string
+        required: false
+permissions: {}
+jobs:
+  release-pr:
+    permissions:
+      contents: read
+    uses: civitaspo/csm-ci-actions/.github/workflows/client-release-pr.yml@<sha>
+    with:
+      version: ${{ inputs.version || '' }}
+    secrets:
+      CSM_CI_CLIENT_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}
+```
+
+Pushes infer the version through git-cliff. Manual dispatches may supply an exact version. Generation packages the changelog and root version edits; the server applies them to `release/next` through securefix and maintains its PR. No client App credential is passed to the generation job.

@@ -1,0 +1,42 @@
+# Release pull requests
+
+`client-release-pr.yml` generates a release pull request from the client's default branch. It uses git-cliff 2.14.2 to infer a version from Git history and generate `CHANGELOG.md`. A manual dispatch can instead supply an explicit semantic version without the `v` prefix.
+
+The generation job checks out the triggering commit with full history and a read-only workflow token. It has no App token or environment secrets. git-cliff runs with `--no-exec`; package-manager scripts and client build scripts are not run. A separate job receives only the Client App key and requests the existing securefix operation.
+
+## Generated files
+
+The preparation action writes `.release-version` and `CHANGELOG.md`. It updates existing root version fields in `package.json`, `Cargo.toml` (`[package]`), and `pyproject.toml` (`[project]`). When Cargo has a lockfile, it updates only the root package's version in `Cargo.lock`. A repository without these manifests still gets the release version and changelog.
+
+Version edits preserve the other file contents. Existing manifests must have an unambiguous supported root version field. Dependency versions, lockfile dependencies, and nested workspace packages are not bumped. TOML manifests containing triple-quoted strings are rejected because their contents can resemble table headers or version fields. Unsupported or ambiguous files fail generation before a request is sent. The server independently enforces the route's line-level `version-only` rule, so JSON version fields must occupy their own line.
+
+## Server route
+
+Enable `securefix` for the client repository and add this route to the global securefix configuration:
+
+```yaml
+securefix:
+  allow_workflow_changes: false
+  routes:
+    - name: release-pr
+      from: default
+      to: release/next
+      workflow: .github/workflows/csm-ci-release-pr.yml
+      paths:
+        CHANGELOG.md: any
+        .release-version: semver
+        Cargo.toml: version-only
+        Cargo.lock: version-only
+        package.json: version-only
+        pyproject.toml: version-only
+```
+
+The caller's workflow path must match this route. The server re-fetches its run and requires the run's head to equal the current default-branch head. A concurrent push can therefore make an older request fail; the newer push generates the current release PR.
+
+All writes use securefix's bounded artifact and server-owned branch checks. The server creates or updates the single `release/next` PR, including its title and body. An exact repeated generation reuses the existing commit and refreshes the PR metadata. A changed generation first verifies the existing branch's server-made commits and allowed paths, then conditionally resets it to the current default branch before writing. See [securefix](securefix.md) for the write and retry contract.
+
+If generation produces no file changes, no artifact or request is sent. This workflow only prepares a PR. Merging an approved release PR uses the separate [release publishing](release.md) workflow.
+
+## Client caller
+
+See [setup](setup.md) for the default-branch push and manual-dispatch caller. Pin its reusable workflow reference to a reviewed commit SHA.
