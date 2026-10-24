@@ -36464,40 +36464,6 @@ function signedCommits(_, { trust }) {
 
 // src/lib/policies/sensitive-paths.ts
 var import_picomatch = __toESM(require_picomatch2(), 1);
-var DEFAULT_SENSITIVE_PATHS = [
-  "package.json",
-  "package-lock.json",
-  "npm-shrinkwrap.json",
-  "bun.lock",
-  "bun.lockb",
-  "pnpm-lock.yaml",
-  "yarn.lock",
-  "Cargo.toml",
-  "Cargo.lock",
-  "go.mod",
-  "go.sum",
-  "pyproject.toml",
-  "requirements*.txt",
-  "Pipfile*",
-  "poetry.lock",
-  "uv.lock",
-  "Gemfile*",
-  "composer.json",
-  "composer.lock",
-  "pom.xml",
-  "build.gradle*",
-  "settings.gradle*",
-  "gradle.lockfile",
-  "mix.exs",
-  "mix.lock",
-  "Makefile",
-  "Dockerfile*",
-  ".goreleaser.*",
-  "scripts/**",
-  "build.rs",
-  ".cargo/**",
-  ".github/**"
-];
 var MARKER = /<!-- csm-ci:approve:command:(\d+) -->/g;
 var MAX_FILES = 3000;
 async function sensitivePaths(policy, ctx) {
@@ -36506,7 +36472,7 @@ async function sensitivePaths(policy, ctx) {
   if (files.length >= MAX_FILES)
     return [`pull request changes ${MAX_FILES} or more files; sensitive-paths cannot verify every file`];
   const forceAll = ctx.repository.toLowerCase() === ctx.config.server_repository || ctx.repository.toLowerCase() === "civitaspo/csm-ci-actions";
-  const patterns = forceAll ? ["**"] : [...DEFAULT_SENSITIVE_PATHS, ...policy.paths];
+  const patterns = forceAll ? ["**"] : policy.paths;
   const match = import_picomatch.default(patterns, { dot: true });
   const changed = files.filter((f) => match(f.filename) || f.previous_filename !== undefined && match(f.previous_filename));
   if (changed.length === 0)
@@ -36526,7 +36492,7 @@ async function sensitivePaths(policy, ctx) {
       const commentId = Number(marker[1]);
       try {
         const { data: comment } = await ctx.gh.rest.issues.getComment({ owner, repo, comment_id: commentId });
-        if (comment.body !== "/approve" || !ctx.config.trust.approvers.some((p) => p.id === Number(comment.user?.id)))
+        if (comment.body !== "/approve" || comment.issue_url !== `https://api.github.com/repos/${owner}/${repo}/issues/${ctx.pullNumber}` || comment.user?.type !== "User" || !ctx.config.trust.approvers.some((p) => p.id === Number(comment.user?.id)) || !comment.node_id || comment.created_at !== comment.updated_at)
           continue;
         if (!comment.node_id)
           continue;
@@ -36655,7 +36621,12 @@ async function fetchCommitFacts(gh, repository, pullNumber) {
 var ALWAYS = [{ type: "signed-commits" }, { type: "trusted-committers" }];
 async function evaluatePullPolicies(ctx, commandApproval) {
   const trust = evaluateTrust(await fetchCommitFacts(ctx.server, ctx.repository, ctx.pull.number), ctx.pull.headSha, ctx.config);
-  const policies = [...ALWAYS, ...ctx.config.policies.filter((p) => !ALWAYS.some((a) => a.type === p.type))];
+  const protectedRepository = ctx.repository.toLowerCase() === ctx.config.server_repository || ctx.repository.toLowerCase() === "civitaspo/csm-ci-actions";
+  const hasSensitivePaths = ctx.config.policies.some((p) => p.type === "sensitive-paths");
+  const configured = [...ctx.config.policies.filter((p) => !ALWAYS.some((a) => a.type === p.type))];
+  if (protectedRepository && !hasSensitivePaths)
+    configured.push({ type: "sensitive-paths", paths: ["**"], exempt: [] });
+  const policies = [...ALWAYS, ...configured];
   return evaluatePolicies(policies, {
     trust,
     gh: ctx.server,
@@ -36671,19 +36642,17 @@ async function evaluatePullPolicies(ctx, commandApproval) {
 // src/lib/approve.ts
 async function fetchComment(gh, repository, commentId) {
   const { data: c } = await gh.rest.issues.getComment({ ...splitRepository(repository), comment_id: commentId });
-  if (!c.node_id)
-    throw new Error(`comment ${commentId} has no GraphQL node id`);
-  const node = await gh.graphql("query($id: ID!) { node(id: $id) { ... on IssueComment { databaseId lastEditedAt } } }", { id: c.node_id });
-  const issueComment = node.node;
-  if (!issueComment || issueComment.databaseId !== commentId || issueComment.lastEditedAt === undefined)
-    throw new Rejection(`comment ${commentId} has no matching GraphQL issue comment`);
+  const { node } = await gh.graphql("query($id: ID!) { node(id: $id) { ... on IssueComment { databaseId lastEditedAt } } }", { id: c.node_id });
+  if (!node || node.databaseId !== Number(c.id) || !(node.lastEditedAt === null || typeof node.lastEditedAt === "string")) {
+    throw new Rejection(`cannot verify the edit history of comment ${commentId}`);
+  }
   return {
     id: Number(c.id),
     body: c.body ?? "",
     issueUrl: c.issue_url,
     createdAt: c.created_at,
     updatedAt: c.updated_at,
-    lastEditedAt: issueComment.lastEditedAt,
+    lastEditedAt: node.lastEditedAt,
     user: c.user ? { id: Number(c.user.id), login: c.user.login, type: c.user.type } : null
   };
 }
