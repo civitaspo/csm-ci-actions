@@ -10,11 +10,6 @@ function version(): string {
   return `1.0.${Date.now()}`;
 }
 
-function errorText(error: unknown): string {
-  if (error instanceof Error) return `${error.message}\n${JSON.stringify(error, Object.getOwnPropertyNames(error))}`;
-  return String(error);
-}
-
 async function withPr<T>(ctx: Ctx, ver: string, body: (pr: ReleasePr) => Promise<T>, additions: Record<string, string> = {}): Promise<T> {
   const pr = await openReleasePr(ctx, ver, additions);
   try {
@@ -286,11 +281,7 @@ export const release: Scenario[] = [
         await ctx.gh.rest.git.createRef({ ...splitRepository(CLIENT), ref: `refs/tags/${tag}`, sha: target });
         created = true;
       } catch (error) {
-        const message = errorText(error);
-        if (hasStatus(error, 403) || hasStatus(error, 422)) {
-          assert(/ruleset|rule violations|protected/i.test(message), `tag creation failed for an unexpected reason: ${message}`);
-          rejected = true;
-        }
+        if (hasStatus(error, 403) || hasStatus(error, 422)) rejected = true;
         else throw error;
       } finally {
         if (created) {
@@ -303,6 +294,14 @@ export const release: Scenario[] = [
         }
       }
       assert(rejected, `owner unexpectedly created tag ${tag} while release-tags ruleset should be active`);
+      const suite = await until(`release tag creation rule evaluation for ${tag}`, async () => {
+        const { data } = await ctx.gh.rest.repos.getRepoRuleSuites({ ...splitRepository(CLIENT), ref: `refs/tags/${tag}`, per_page: 100 });
+        return data.find((entry) => entry.ref === `refs/tags/${tag}` && entry.after_sha === target && entry.result === "fail");
+      });
+      assert(typeof suite.id === "number", "tag creation rule suite has no id");
+      const { data: evaluation } = await ctx.gh.rest.repos.getRepoRuleSuite({ ...splitRepository(CLIENT), rule_suite_id: suite.id });
+      assert(evaluation.rule_evaluations?.some((rule) => rule.rule_source?.name === "release-tags" && rule.enforcement === "active" && rule.rule_type === "creation" && rule.result === "fail"), "tag creation did not fail the active release-tags creation rule");
+      ctx.urls.push(`https://api.github.com/repos/${CLIENT}/rulesets/rule-suites/${suite.id}`);
     },
   },
 ];
