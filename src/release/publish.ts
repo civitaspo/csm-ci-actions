@@ -3,6 +3,7 @@ import { type GitHub, splitRepository } from "../lib/github.ts";
 import { Rejection } from "../lib/request.ts";
 import { type AssetDigest, prepareAssets } from "./assets.ts";
 import { type ReleasePlan, ReleasePlanSchema, verifyReleaseTag } from "./plan.ts";
+import { compareSemVer, parseSemVer } from "./semver.ts";
 import { z } from "zod";
 
 const ExpectedAssets = z.array(z.strictObject({ name: z.string().min(1), sha256: z.string().regex(/^[a-f0-9]{64}$/) }));
@@ -20,9 +21,13 @@ export async function publishRelease(
 ): Promise<void> {
   const plan = ReleasePlanSchema.parse(input.plan);
   const expected = ExpectedAssets.parse(input.expectedAssets);
+  if (new Set(expected.map(({ name }) => name)).size !== expected.length) {
+    throw new Rejection("release asset manifest contains duplicate names");
+  }
   const local = await prepareAssets(input.directory);
   assertSameAssets(expected, local);
   const repo = splitRepository(plan.repository);
+  await assertReleaseTag(gh, plan);
   let release = await findRelease(gh, repo, plan.tag);
   if (release) assertServerRelease(release, plan);
   if (!release) {
@@ -35,7 +40,7 @@ export async function publishRelease(
         generate_release_notes: true,
         draft: true,
         prerelease: plan.prerelease,
-        make_latest: plan.makeLatest ? "true" : "false",
+        make_latest: "false",
       }));
     } catch (error) {
       if (status(error) !== 422) throw error;
@@ -72,10 +77,23 @@ export async function publishRelease(
     });
   }
   await assertRemoteAssets(gh, repo, release.id, local);
-  ({ data: release } = await gh.rest.repos.updateRelease({ ...repo, release_id: release.id, draft: false }));
+  await assertReleaseTag(gh, plan);
+  ({ data: release } = await gh.rest.repos.updateRelease({
+    ...repo,
+    release_id: release.id,
+    draft: false,
+    make_latest: await shouldMakeLatest(gh, repo, plan),
+  }));
   snapshot = ReleaseSnapshot.parse(release);
   if (snapshot.draft) throw new Rejection(`release ${plan.tag} is still a draft after publishing`);
   await verifyPublishedRelease(gh, plan, release.id, local);
+}
+
+async function assertReleaseTag(gh: GitHub, plan: ReleasePlan): Promise<void> {
+  const repo = splitRepository(plan.repository);
+  if (!(await verifyReleaseTag(gh, repo, plan.tag, { id: plan.serverBotId, login: plan.serverBotLogin }, plan.mergeSha))) {
+    throw new Rejection(`tag ${plan.tag} is missing or points to a different commit`);
+  }
 }
 
 async function verifyPublishedRelease(gh: GitHub, plan: ReleasePlan, releaseId: number, expected: AssetDigest[]): Promise<void> {
@@ -94,6 +112,9 @@ async function verifyPublishedRelease(gh: GitHub, plan: ReleasePlan, releaseId: 
 async function assertRemoteAssets(gh: GitHub, repo: ReturnType<typeof splitRepository>, releaseId: number, expected: AssetDigest[]): Promise<void> {
   const remote = await gh.paginate(gh.rest.repos.listReleaseAssets, { ...repo, release_id: releaseId, per_page: 100 });
   const parsed = remote.map((asset) => RemoteAsset.parse(asset));
+  if (new Set(parsed.map(({ name }) => name)).size !== parsed.length) {
+    throw new Rejection("release contains duplicate asset names");
+  }
   if (parsed.length !== expected.length) throw new Rejection(`release has ${parsed.length} asset(s), expected exactly ${expected.length}`);
   const expectedByName = new Map(expected.map((asset) => [asset.name, asset.sha256]));
   for (const asset of parsed) {
@@ -101,6 +122,19 @@ async function assertRemoteAssets(gh: GitHub, repo: ReturnType<typeof splitRepos
       throw new Rejection(`release asset ${asset.name} has an unexpected digest`);
     }
   }
+}
+
+async function shouldMakeLatest(gh: GitHub, repo: ReturnType<typeof splitRepository>, plan: ReleasePlan): Promise<"true" | "false"> {
+  if (plan.prerelease) return "false";
+  const version = parseSemVer(plan.version);
+  if (!version) throw new Rejection(`release version ${plan.version} is not semver`);
+  const releases = await gh.paginate(gh.rest.repos.listReleases, { ...repo, per_page: 100 });
+  const isHighest = releases.every((release) => {
+    if (release.draft || release.tag_name === plan.tag) return true;
+    const released = parseSemVer(release.tag_name.startsWith("v") ? release.tag_name.slice(1) : release.tag_name);
+    return !released || compareSemVer(version, released) >= 0;
+  });
+  return isHighest ? "true" : "false";
 }
 
 function assertSameAssets(expected: z.infer<typeof ExpectedAssets>, actual: AssetDigest[]): void {

@@ -488,13 +488,14 @@ Implementation decision: `/approve` first checks all always-run and configured p
 
 ### 6.5 Phase 5a: release (publish)
 
-- **spike (the first PR):** Settle the attestation storage location, the predicate shape and the verification command against real runs.
+- The attestation spike passed in [testing server run 40117137591](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40117137591). Its storage location, predicate shape and verification command are recorded in [release-attestation.md](release-attestation.md).
+- A repository that enables `release` must have a strict `release: { build_type: ... }` entry. `cargo` also requires a unique, non-empty list of supported target triples mapped to fixed runner labels in `src/release/runners.ts`.
 - **Job separation**
-  - **plan:** Read token. Check that the PR is merged, that `merged_by` is the Server bot, that it is a PR from `release/next` to the default branch, and that `.release-version` is a semver. The server creates the tag.
-  - **build:** `permissions: {}`, no secrets, no environment and no cache. Use a composite action per `build_type` (`actions/release-build/<type>/`).
-  - **publish:** Checksum, attestation, draft creation, upload, confirmation that the asset set matches exactly, publish, and confirmation that the release is immutable.
-- **Tag ruleset:** Add `release-tags` to testing-csm-ci-client (forbid creating, updating and deleting `refs/tags/v*`. The only bypass is the Server App).
-- **build_type:** none, js-action (check-dist), goreleaser, cargo. In the e2e, start with none and js-action. goreleaser and cargo need testing client material (small Go and Rust programs). Place them as fixtures.
+  - **plan:** Read the PR, `.release-version`, tag and release with a Server App contents:read token. Mint contents:write only when a missing annotated tag must be created. Archive tracked source at the merge SHA.
+  - **build:** Download only the source archive and run a composite action per `build_type`. Use `permissions: {}` with no secrets, environment, cache or OIDC permission.
+  - **publish:** Validate flat regular files, write `SHA256SUMS`, attest every asset with the plan facts, then create or resume a draft. Upload without overwriting. Confirm the exact asset set and digests before publishing. Re-fetch the release and tag and confirm immutability and the merge SHA.
+- **Tag ruleset:** Add `release-tags` to testing-csm-ci-client. Forbid creating, updating and deleting `refs/tags/v*`. The Server App is the only bypass. Tagger fields alone do not prove tag ownership.
+- **build_type:** none, js-action (check-dist), goreleaser and cargo. The testing client has minimal JavaScript, GoReleaser and Cargo fixtures. Run all four build types against the testing client before calling Phase 5a verified.
 
 ### 6.6 Phase 5b: release-pr (after Phase 4)
 
@@ -738,3 +739,15 @@ The first PR status check [40132605179](https://github.com/civitaspo/csm-ci-acti
 The attestation spike passed in [40117137591](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40117137591). The [attestation reference](release-attestation.md) records storage, the exact predicate, and the verified command. The server repository stores the attestation using its workflow token, so this choice does not require a new Server App permission. The publish job must supply validated client repository, merge SHA, and tag fields and must not execute client code.
 
 The temporary probe workflow was removed after verification. It used a fixed file and created no release or tag. On the hosted runner, signature verification accepted the expected subject and rejected a modified subject. The separate predicate check matched the expected client and did not match a wrong client. Local Sigstore initialization failed, so local signature verification is not claimed. The final reusable workflow identity, build types, asset publication, and immutable release behavior remain Phase 5a implementation gates.
+
+## 16. Release publishing
+
+Phase 5a adds the release caller and server plan/build/publish jobs. The plan archives tracked source with a read token and creates a missing protected annotated tag with a separate write token. Builds receive no App token, environment, secrets, cache or OIDC permission. Publication validates flat regular files, creates SHA256SUMS, attests every asset with the client/merge/tag predicate, and verifies the immutable release and exact remote asset digests.
+
+The testing client now has immutable releases enabled and active tag ruleset `release-tags` (25798106) protecting `refs/tags/v*` creation, update and deletion, with only Server App integration 5455185 bypassing it. Tagger name/email alone are forgeable; this ruleset supplies creation authority. These settings apply only to the testing repository.
+
+Independent review found that computing `make_latest` before the build allowed an older release to overwrite Latest after a newer release published. The serialized publish job now compares current published versions immediately before publishing; drafts and prereleases never become Latest. A regression covers stale ordering. Another review found that the hosted attestation check could select an earlier dispatch; the verifier now uses a unique request input and exact run title.
+
+GoReleaser publishes only archive entries from its artifact manifest, excluding internal binaries and metadata. Cargo installs its configured target and uses portable executable detection. The e2e suite covers all four build types, all five Cargo targets, immutable retries, check-dist failure, invalid versions, wrong merger, tag/release collisions, and denial by the active tag ruleset. A hosted verifier checks every asset signature and the exact predicate. Live results are recorded below when available.
+
+Mutation checks removed each reachable release rejection guard: planning 14/14, assets 4/4, tag creation 1/1, release configuration 8/8, and publication 14/14 were detected. Three redundant publisher guards remain protected by earlier invariants: the typed create result is defined, release ownership validation already checks its tag, and the plan schema already validates semver. Publisher tests distinguish manifest length from digest mismatches and cover draft creation, resumption and completed retries.

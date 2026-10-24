@@ -36,9 +36,9 @@ describe("planRelease", () => {
       mergeSha,
       tag: "v1.2.3",
       version: "1.2.3",
+      tagExists: false,
       serverBotLogin: "server[bot]",
       privateRepository: false,
-      makeLatest: true,
       prerelease: false,
     });
   });
@@ -47,15 +47,29 @@ describe("planRelease", () => {
     ["unmerged PR", undefined, { ...pull, merged_at: null }, /is not merged/],
     ["wrong merger", undefined, { ...pull, merged_by: { id: 5, login: "alice" } }, /not merged by the Server bot/],
     ["fork head", undefined, { ...pull, head: { ...pull.head, repo: { full_name: "attacker/repo" } } }, /head repository is not the managed repository/],
+    ["fork base", undefined, { ...pull, base: { ...pull.base, repo: { full_name: "attacker/repo" } } }, /base repository is not the managed repository/],
     ["wrong head branch", undefined, { ...pull, head: { ...pull.head, ref: "main" } }, /not release\/next/],
     ["wrong base", undefined, { ...pull, base: { ...pull.base, ref: "release/next" } }, /not the default branch/],
     ["missing merge commit", undefined, { ...pull, merge_commit_sha: null }, /has no merge commit/],
+    ["version is not a file", 123, pull, /\.release-version at the merge commit is not a file/],
     ["invalid version", "v1.2.3", pull, /is not semver/],
     ["foreign release", undefined, pull, /release v1.2.3 already exists and was not created by the Server bot/],
   ];
   test.each(rejects)("rejects %s", async (name, version, pullValue, message) => {
     const release = name === "foreign release" ? { tag_name: "v1.2.3", author: { id: 4000 } } : undefined;
     await expect(planRelease(github("t", routes({ version, pull: pullValue, release })), input)).rejects.toThrow(message);
+  });
+
+  test("rejects a Server release when its tag is missing", async () => {
+    const fetch = routes({ release: { tag_name: "v1.2.3", author: { id: 3000 } } });
+    await expect(planRelease(github("t", fetch), input)).rejects.toThrow("release v1.2.3 exists without its server-made tag");
+  });
+
+  test.each([
+    ["lightweight tag", { object: { type: "commit", sha: mergeSha } }, undefined, /is not an annotated tag/],
+    ["mismatched annotated tag name", { object: { type: "tag", sha: "tag-sha" } }, { tag: "v1.2.4", tagger: { name: "server[bot]", email: "3000+server[bot]@users.noreply.github.com" }, object: { type: "commit", sha: mergeSha } }, /was not created by the Server bot/],
+  ])("rejects %s", async (_name, ref, tag, message) => {
+    await expect(planRelease(github("t", routes({ ref, tag })), input)).rejects.toThrow(message);
   });
 
   test("rejects an existing tag from another identity even when it points to the merge commit", async () => {
@@ -72,6 +86,14 @@ describe("planRelease", () => {
       tag: { tag: "v1.2.3", tagger: { name: "server[bot]", email: "3000+server[bot]@users.noreply.github.com" }, object: { type: "commit", sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } },
     });
     await expect(planRelease(github("t", fetch), input)).rejects.toThrow("tag v1.2.3 points to a different commit");
+  });
+
+  test("marks an existing verified tag so the workflow can skip its write token", async () => {
+    const fetch = routes({
+      ref: { object: { type: "tag", sha: "tag-sha" } },
+      tag: { tag: "v1.2.3", tagger: { name: "server[bot]", email: "3000+server[bot]@users.noreply.github.com" }, object: { type: "commit", sha: mergeSha } },
+    });
+    await expect(planRelease(github("t", fetch), input)).resolves.toMatchObject({ tagExists: true });
   });
 
   test("propagates API failures that do not mean a missing tag or release", async () => {

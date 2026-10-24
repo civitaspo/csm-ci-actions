@@ -24,12 +24,15 @@ runs:
         VERSION: ${{ inputs.version }}
       run: |
         cd "$CLIENT_PATH"
+        rustup target add "$TARGET"
         cargo build --locked --release --bins --target "$TARGET"
         mkdir -p ../assets/staging
         if [[ "$TARGET" == *windows* ]]; then
           while IFS= read -r -d '' file; do cp -- "$file" ../assets/staging/; done < <(find "target/$TARGET/release" -maxdepth 1 -type f -name '*.exe' -print0)
         else
-          while IFS= read -r -d '' file; do cp -- "$file" ../assets/staging/; done < <(find "target/$TARGET/release" -maxdepth 1 -type f -perm /111 -print0)
+          for file in "target/$TARGET/release"/*; do
+            if [ -f "$file" ] && [ -x "$file" ]; then cp -- "$file" ../assets/staging/; fi
+          done
         fi
         if [ -z "$(find ../assets/staging -type f -print -quit)" ]; then
           echo "Cargo produced no executable binaries for $TARGET" >&2

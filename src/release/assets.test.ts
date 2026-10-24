@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
@@ -45,5 +45,12 @@ describe("prepareAssets", () => {
     await writeFile(join(directory, "source"), "x");
     await symlink(join(directory, "source"), join(directory, "link"));
     await expect(prepareAssets(directory)).rejects.toThrow("not a regular file");
+  });
+
+  test.each(["link", "directory"])("rejects a non-file checksum entry (%s)", async (kind) => {
+    const directory = await tempDirectory();
+    if (kind === "link") await symlink("missing-target", join(directory, "SHA256SUMS"));
+    else await mkdir(join(directory, "SHA256SUMS"));
+    await expect(prepareAssets(directory)).rejects.toThrow('asset "SHA256SUMS" is not a regular file');
   });
 });

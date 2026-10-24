@@ -1,0 +1,80 @@
+name: csm-ci release attestation verification
+run-name: csm-ci-release-verify ${{ inputs.correlation }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      correlation:
+        required: true
+        type: string
+      tag:
+        required: true
+        type: string
+      merge_sha:
+        required: true
+        type: string
+      client_repository:
+        required: true
+        type: string
+      signer_workflow:
+        required: true
+        type: string
+      predicate_type:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Download public release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLIENT_REPOSITORY: ${{ inputs.client_repository }}
+          TAG: ${{ inputs.tag }}
+          RELEASE_DIR: ${{ runner.temp }}/release-assets
+        run: gh release download "$TAG" --repo "$CLIENT_REPOSITORY" --dir "$RELEASE_DIR"
+      - name: Verify the published SHA256SUMS
+        env:
+          RELEASE_DIR: ${{ runner.temp }}/release-assets
+        run: |
+          cd "$RELEASE_DIR"
+          if [ ! -f SHA256SUMS ]; then
+            echo "release has no SHA256SUMS" >&2
+            exit 1
+          fi
+          if [ -s SHA256SUMS ]; then
+            sha256sum --check SHA256SUMS
+          fi
+      - name: Verify each signature and release predicate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLIENT_REPOSITORY: ${{ inputs.client_repository }}
+          MERGE_SHA: ${{ inputs.merge_sha }}
+          TAG: ${{ inputs.tag }}
+          SIGNER_WORKFLOW: ${{ inputs.signer_workflow }}
+          PREDICATE_TYPE: ${{ inputs.predicate_type }}
+          RELEASE_DIR: ${{ runner.temp }}/release-assets
+        run: |
+          shopt -s nullglob
+          assets=("$RELEASE_DIR"/*)
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "release has no assets" >&2
+            exit 1
+          fi
+          for asset in "${assets[@]}"; do
+            gh attestation verify "$asset" \
+              --owner "${SIGNER_WORKFLOW%%/*}" \
+              --signer-workflow "$SIGNER_WORKFLOW" \
+              --predicate-type "$PREDICATE_TYPE" \
+              --deny-self-hosted-runners \
+              --format json > "$RUNNER_TEMP/attestation.json"
+            jq -e --arg repository "$CLIENT_REPOSITORY" --arg sha "$MERGE_SHA" --arg tag "$TAG" \
+              'any(.[].verificationResult.statement; .predicate.client_repository == $repository and .predicate.merge_sha == $sha and .predicate.tag == $tag)' \
+              "$RUNNER_TEMP/attestation.json" >/dev/null
+            echo "verified $(basename "$asset")"
+          done

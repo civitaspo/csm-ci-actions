@@ -61,6 +61,17 @@ describe("parseConfig", () => {
     ].map((path) => [`unsafe securefix path glob ${JSON.stringify(path)}`, routeConfig(`{ name: release-pr, from: default, to: release/next, workflow: .github/workflows/release-pr.yml, paths: { '${path}': any } }`), /safe relative path or glob/] as [string, string, RegExp]),
     ...["!README.md", "src/!(generated).ts", "src/[!a].ts"].map((path) => [`negated securefix path glob ${path}`, routeConfig(`{ name: release-pr, from: default, to: release/next, workflow: .github/workflows/release-pr.yml, paths: { '${path}': any } }`), /safe relative path or glob/] as [string, string, RegExp]),
     ["unknown securefix path rule", routeConfig("{ name: release-pr, from: default, to: release/next, workflow: .github/workflows/release-pr.yml, paths: { CHANGELOG.md: no-such-rule } }"), /Invalid option/],
+    ["release without build settings", CONFIG_YAML.replace("ops: [approve, merge, policy-check]", "ops: [approve, merge, policy-check, release]"), /release settings must be present/],
+    ["release settings without release op", CONFIG_YAML.replace("ops: [approve, merge, policy-check]", "ops: [approve, merge, policy-check], release: { build_type: none }"), /release settings must be present/],
+    ["unknown release build type", releaseConfig("{ build_type: custom }"), /build_type/],
+    ["release build with an unknown key", releaseConfig("{ build_type: none, target: linux }"), /Unrecognized key/],
+    ["js-action release rejects unknown keys", releaseConfig("{ build_type: js-action, target: linux }"), /Unrecognized key/],
+    ["GoReleaser release rejects unknown keys", releaseConfig("{ build_type: goreleaser, target: linux }"), /Unrecognized key/],
+    ["Cargo release rejects unknown keys", releaseConfig("{ build_type: cargo, targets: [x86_64-unknown-linux-gnu], target: linux }"), /Unrecognized key/],
+    ["cargo with no target triples", releaseConfig("{ build_type: cargo, targets: [] }"), /Too small/],
+    ["cargo with unsupported target triple", releaseConfig("{ build_type: cargo, targets: [custom-runner] }"), /Invalid option/],
+    ["cargo with duplicate target triples", releaseConfig("{ build_type: cargo, targets: [x86_64-unknown-linux-gnu, x86_64-unknown-linux-gnu] }"), /duplicate cargo target/],
+    ["non-cargo build with target triples", releaseConfig("{ build_type: none, targets: [x86_64-unknown-linux-gnu] }"), /Unrecognized key/],
   ];
   test.each(rejects)("rejects %s", (_, yaml, message) => {
     expect(() => parseConfig(yaml)).toThrow(message);
@@ -69,6 +80,13 @@ describe("parseConfig", () => {
 
 function routeConfig(route: string): string {
   return CONFIG_YAML.replace("repositories:", `securefix:\n  allow_workflow_changes: false\n  routes:\n    - ${route}\nrepositories:`);
+}
+
+function releaseConfig(settings: string): string {
+  return CONFIG_YAML.replace(
+    "ops: [approve, merge, policy-check]",
+    `ops: [approve, merge, policy-check, release], release: ${settings}`,
+  );
 }
 
 describe("repositoryEntry", () => {
@@ -86,5 +104,13 @@ describe("repositoryEntry", () => {
     const c = parseConfig(CONFIG_YAML.replace("name: owner/*", "name: '*/*'"));
     expect(repositoryEntry(c, "owner/repo")?.ops).toEqual(["approve", "merge", "policy-check"]);
     expect(repositoryEntry(c, "other/repo")).toBeUndefined();
+  });
+
+  test("keeps release build settings on the matching repository", () => {
+    const c = parseConfig(releaseConfig("{ build_type: cargo, targets: [x86_64-unknown-linux-gnu, aarch64-apple-darwin] }"));
+    expect(repositoryEntry(c, "owner/repo")?.release).toEqual({
+      build_type: "cargo",
+      targets: ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin"],
+    });
   });
 });

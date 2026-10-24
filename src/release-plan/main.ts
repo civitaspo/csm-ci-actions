@@ -21,6 +21,7 @@ async function main(): Promise<void> {
   core.setOutput("tag", plan.tag);
   core.setOutput("version", plan.version);
   core.setOutput("build-type", release.build_type);
+  core.setOutput("tag-exists", String(plan.tagExists));
   core.setOutput("matrix", JSON.stringify(matrix));
   core.info(`planned ${plan.tag} from ${repository}@${plan.mergeSha}`);
 }

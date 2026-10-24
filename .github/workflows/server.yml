@@ -342,7 +342,7 @@ jobs:
           server-bot-id: ${{ needs.intake.outputs.server-bot-id }}
           release-config: ${{ needs.intake.outputs.release }}
       - id: tag-token
-        if: needs.intake.outputs.kind == 'release'
+        if: steps.plan.outputs.tag-exists != 'true'
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
@@ -351,6 +351,7 @@ jobs:
           repositories: ${{ needs.intake.outputs.name }}
           permission-contents: write
       - uses: ./.csm-ci-actions/actions/release-tag
+        if: steps.plan.outputs.tag-exists != 'true'
         with:
           github-token: ${{ steps.tag-token.outputs.token }}
           plan: ${{ steps.plan.outputs.plan }}
@@ -452,7 +453,7 @@ jobs:
           path: .csm-ci-actions
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        if: needs.release-plan.outputs.build-type != 'none'
+        if: contains(fromJSON('["cargo", "goreleaser"]'), needs.release-plan.outputs.build-type)
         with:
           pattern: release-assets-*
           path: assets

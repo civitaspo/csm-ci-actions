@@ -1,7 +1,7 @@
 import { ReleaseSchema, type Release } from "../lib/config.ts";
 import { type GitHub, splitRepository } from "../lib/github.ts";
 import { Rejection } from "../lib/request.ts";
-import { compareSemVer, parseSemVer } from "./semver.ts";
+import { parseSemVer } from "./semver.ts";
 import { z } from "zod";
 
 export type ReleasePlan = {
@@ -12,9 +12,9 @@ export type ReleasePlan = {
   version: string;
   serverBotId: number;
   serverBotLogin: string;
+  tagExists: boolean;
   privateRepository: boolean;
   release: Release;
-  makeLatest: boolean;
   prerelease: boolean;
 };
 
@@ -33,9 +33,9 @@ export const ReleasePlanSchema = z.strictObject({
   version: z.string().refine((version) => parseSemVer(version) !== undefined),
   serverBotId: z.number().int().positive(),
   serverBotLogin: z.string().min(1),
+  tagExists: z.boolean(),
   privateRepository: z.boolean(),
   release: ReleaseSchema,
-  makeLatest: z.boolean(),
   prerelease: z.boolean(),
 });
 
@@ -73,12 +73,6 @@ export async function planRelease(gh: GitHub, input: ReleasePlanInput): Promise<
     throw new Rejection(`release ${tag} already exists and was not created by the Server bot`);
   }
   if (existingRelease && !existingTag) throw new Rejection(`release ${tag} exists without its server-made tag`);
-  const releases = await gh.paginate(gh.rest.repos.listReleases, { ...repo, per_page: 100 });
-  const makeLatest = releases.every((release) => {
-    if (release.draft || release.tag_name === tag) return true;
-    const releasedVersion = parseSemVer(release.tag_name.startsWith("v") ? release.tag_name.slice(1) : release.tag_name);
-    return !releasedVersion || compareSemVer(semver, releasedVersion) >= 0;
-  });
   return {
     repository: input.repository,
     pullNumber: input.pullNumber,
@@ -87,9 +81,9 @@ export async function planRelease(gh: GitHub, input: ReleasePlanInput): Promise<
     version,
     serverBotId: input.serverBotId,
     serverBotLogin: mergedBy.login,
+    tagExists: existingTag,
     privateRepository: repository.private,
     release: input.release,
-    makeLatest,
     prerelease: version.includes("-"),
   };
 }

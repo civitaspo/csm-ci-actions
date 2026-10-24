@@ -111,6 +111,8 @@ jobs:
     permissions:
       contents: read
       issues: write
+      id-token: write
+      attestations: write
 ```
 
 `secrets: inherit` is required. Without it, the environment secrets are empty in the called job.
@@ -202,3 +204,21 @@ jobs:
 ```
 
 The command is exactly `/merge`. The server waits for the latest approver review, current policies, and configured checks. After readiness succeeds, the workflow mints fresh read and notification tokens plus a contents and pull-requests write token, then revalidates and merges. If an accepted wait fails, the workflow mints a fresh notification token for the failure receipt.
+
+For releases, enable the `release` op and choose its build type in `csm-ci.yaml`. Add a caller that requests a release when a `release/next` pull request is merged:
+
+```yaml
+name: csm-ci-release
+on:
+  pull_request:
+    types: [closed]
+permissions: {}
+jobs:
+  release:
+    # The reusable workflow needs the Client App key from the client repository.
+    # jactionlint ignore=secrets-inherit
+    uses: civitaspo/csm-ci-actions/.github/workflows/client-release.yml@<sha>
+    secrets: inherit
+```
+
+The server verifies the merged pull request before it creates a tag or release. Its build job runs without credentials, secrets or an environment. The `release-tags` ruleset must restrict `v*` tags to the Server App.

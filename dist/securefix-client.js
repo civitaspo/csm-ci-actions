@@ -30894,6 +30894,22 @@ var Login = string2().min(1);
 var Principal = strictObject({ id: Id, login: Login });
 var RepoName = string2().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/).transform((s) => s.toLowerCase());
 var Owner = string2().regex(/^[A-Za-z0-9-]+$/).transform((s) => s.toLowerCase());
+var CARGO_TARGETS = [
+  "aarch64-apple-darwin",
+  "aarch64-unknown-linux-gnu",
+  "x86_64-apple-darwin",
+  "x86_64-pc-windows-msvc",
+  "x86_64-unknown-linux-gnu"
+];
+var ReleaseSchema = discriminatedUnion("build_type", [
+  strictObject({ build_type: literal("none") }),
+  strictObject({ build_type: literal("js-action") }),
+  strictObject({ build_type: literal("goreleaser") }),
+  strictObject({
+    build_type: literal("cargo"),
+    targets: array(_enum(CARGO_TARGETS)).min(1).refine((targets) => new Set(targets).size === targets.length, "duplicate cargo target")
+  })
+]);
 var OPS = ["approve", "merge", "policy-check", "securefix", "release"];
 var PolicySchema = discriminatedUnion("type", [
   strictObject({ type: literal("signed-commits") }),
@@ -30914,7 +30930,12 @@ var SecurefixSchema = strictObject({
 });
 var RepositoryEntry = strictObject({
   name: string2().min(1).transform((s) => s.toLowerCase()),
-  ops: array(_enum(OPS)).refine((ops) => new Set(ops).size === ops.length, "duplicate op")
+  ops: array(_enum(OPS)).refine((ops) => new Set(ops).size === ops.length, "duplicate op"),
+  release: ReleaseSchema.optional()
+}).superRefine((entry, ctx) => {
+  if (entry.ops.includes("release") !== (entry.release !== undefined)) {
+    ctx.addIssue({ code: "custom", path: ["release"], message: "release settings must be present exactly when release is enabled" });
+  }
 });
 var ConfigSchema = strictObject({
   owners: array(Owner).min(1),

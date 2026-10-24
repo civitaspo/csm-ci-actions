@@ -8,7 +8,10 @@ export type AssetDigest = { name: string; sha256: string; path: string };
 export async function prepareAssets(directory: string): Promise<AssetDigest[]> {
   await mkdir(directory, { recursive: true });
   const names = (await readdir(directory)).sort();
-  const existingSums = names.includes("SHA256SUMS") ? await readFile(join(directory, "SHA256SUMS"), "utf8") : undefined;
+  const sumsPath = join(directory, "SHA256SUMS");
+  const sumsInfo = names.includes("SHA256SUMS") ? await lstat(sumsPath) : undefined;
+  if (sumsInfo && !sumsInfo.isFile()) throw new Rejection('asset "SHA256SUMS" is not a regular file');
+  const existingSums = sumsInfo ? await readFile(sumsPath, "utf8") : undefined;
   const assets: AssetDigest[] = [];
   for (const name of names) {
     if (name === "SHA256SUMS") continue;
@@ -22,8 +25,8 @@ export async function prepareAssets(directory: string): Promise<AssetDigest[]> {
   const sums = assets.map(({ name, sha256 }) => `${sha256}  ${name}`).join("\n");
   const content = `${sums}${sums ? "\n" : ""}`;
   if (existingSums !== undefined && existingSums !== content) throw new Rejection("existing SHA256SUMS does not match the build outputs");
-  if (existingSums === undefined) await writeFile(join(directory, "SHA256SUMS"), content);
-  const checksums = await readFile(join(directory, "SHA256SUMS"));
-  assets.push({ name: "SHA256SUMS", path: join(directory, "SHA256SUMS"), sha256: createHash("sha256").update(checksums).digest("hex") });
+  if (existingSums === undefined) await writeFile(sumsPath, content, { flag: "wx" });
+  const checksums = await readFile(sumsPath);
+  assets.push({ name: "SHA256SUMS", path: sumsPath, sha256: createHash("sha256").update(checksums).digest("hex") });
   return assets;
 }
