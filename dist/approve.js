@@ -30634,7 +30634,7 @@ function validateComment(c, repository, pullNumber, now) {
     throw new Rejection(`comment ${c.id} is not exactly /approve or /recheck`);
   if (command.name === "recheck")
     return command;
-  if (c.createdAt !== c.updatedAt)
+  if (c.lastEditedAt !== null || c.createdAt !== c.updatedAt)
     throw new Rejection(`comment ${c.id} was edited after it was posted`);
   const age = now.getTime() - new Date(c.createdAt).getTime();
   if (!(age >= 0 && age <= COMMAND_TTL_MS))
@@ -34843,12 +34843,17 @@ async function fetchPull(gh, repository, pullNumber) {
 }
 async function fetchComment(gh, repository, commentId) {
   const { data: c } = await gh.rest.issues.getComment({ ...splitRepository(repository), comment_id: commentId });
+  const { node } = await gh.graphql("query($id: ID!) { node(id: $id) { ... on IssueComment { databaseId lastEditedAt } } }", { id: c.node_id });
+  if (!node || node.databaseId !== Number(c.id) || !(node.lastEditedAt === null || typeof node.lastEditedAt === "string")) {
+    throw new Rejection(`cannot verify the edit history of comment ${commentId}`);
+  }
   return {
     id: Number(c.id),
     body: c.body ?? "",
     issueUrl: c.issue_url,
     createdAt: c.created_at,
     updatedAt: c.updated_at,
+    lastEditedAt: node.lastEditedAt,
     user: c.user ? { id: Number(c.user.id), login: c.user.login, type: c.user.type } : null
   };
 }

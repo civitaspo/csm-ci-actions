@@ -10,7 +10,7 @@ approve gives a pull request the approval that the repository's ruleset requires
 | A comment `/approve` | `csm-ci-approve-*`, `owner/repo/<pr>/<comment id>` | approver command |
 | A comment `/recheck` | `csm-ci-approve-*`, `owner/repo/<pr>/<comment id>` | automatic again |
 
-The client workflow sends a comment request only when the commenter's association is OWNER, MEMBER or COLLABORATOR and the body is exactly a command. The server reads the comment body again and decides the command from it. The client filter is not a security check. The event payload can already carry an edited body, so a comment posted as plain text and edited into `/approve` within a second can still start a request. The server's unedited check rejects it.
+The client workflow sends a comment request only when the commenter's association is OWNER, MEMBER or COLLABORATOR and the body is exactly a command. The server reads the comment body again and decides the command from it. The client filter is not a security check. The event payload can already carry an edited body, so a comment posted as plain text and edited into `/approve` within a second can still start a request. The server checks both REST timestamps and GraphQL `IssueComment.lastEditedAt`. REST timestamps have one-second precision, so equal timestamps alone cannot prove that a comment was never edited.
 
 ## Automatic path
 

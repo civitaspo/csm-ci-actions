@@ -26,12 +26,20 @@ export async function fetchPull(gh: GitHub, repository: string, pullNumber: numb
 
 export async function fetchComment(gh: GitHub, repository: string, commentId: number): Promise<CommentFacts> {
   const { data: c } = await gh.rest.issues.getComment({ ...splitRepository(repository), comment_id: commentId });
+  const { node } = await gh.graphql<{ node: { databaseId: number; lastEditedAt: string | null } | null }>(
+    "query($id: ID!) { node(id: $id) { ... on IssueComment { databaseId lastEditedAt } } }",
+    { id: c.node_id },
+  );
+  if (!node || node.databaseId !== Number(c.id) || !(node.lastEditedAt === null || typeof node.lastEditedAt === "string")) {
+    throw new Rejection(`cannot verify the edit history of comment ${commentId}`);
+  }
   return {
     id: Number(c.id),
     body: c.body ?? "",
     issueUrl: c.issue_url,
     createdAt: c.created_at,
     updatedAt: c.updated_at,
+    lastEditedAt: node.lastEditedAt,
     user: c.user ? { id: Number(c.user.id), login: c.user.login, type: c.user.type } : null,
   };
 }

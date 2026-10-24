@@ -192,7 +192,7 @@ repositories:                                       # per repo, only ops and the
 - **Server-side acceptance conditions**
   - The comment belongs to the target PR.
   - The body matches the command regex exactly.
-  - It is unedited (`updated_at == created_at`) and no more than 60 minutes old.
+  - It is unedited (`updated_at == created_at` and GraphQL `lastEditedAt == null`) and no more than 60 minutes old.
   - The author's id and `type` match.
 - Once accepted, add 🚀.
 - At the end, on both success and failure, post a comment with the marker `<!-- csm-ci:<op>:<comment_id> -->`.
