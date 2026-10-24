@@ -1,7 +1,7 @@
 import { marker } from "../src/lib/notify.ts";
 import { parseConfig } from "../src/lib/config.ts";
 import { splitRepository } from "../src/lib/github.ts";
-import { assert, CLIENT, closePr, dispatch, expectOp, openPr, type Pr, postComment, type Scenario, SERVER, serverComments, until } from "./harness.ts";
+import { assert, CLIENT, closePr, dispatch, expectOp, openPr, type Pr, postComment, type Scenario, SERVER, SERVER_BOT_ID, serverComments, until } from "./harness.ts";
 
 const RULESET_ID = 25785295;
 const TEST_BOT_ID = 347402450;
@@ -168,6 +168,24 @@ export const merge: Scenario[] = [
       assert(merged.merged && merged.merge_commit_sha, `pull request #${pr.number} was not merged`);
       const receipts = (await serverComments(ctx, pr)).filter((body) => body.includes(marker("merge", comment.id)));
       assert(receipts.length === 1 && receipts[0]?.includes("merged as"), `expected one merge receipt, found ${receipts.length}`);
+    }),
+  },
+  {
+    name: "the notification-only Server App token can react and comment but cannot merge an approved pull request",
+    serial: true,
+    run: (ctx) => withSignedPr(ctx, async (pr) => {
+      const comment = await postComment(ctx, pr, "notification permission probe");
+      const run = await dispatch(ctx, SERVER, "csm-ci-merge-notify-scope.yml", {
+        pull_number: String(pr.number),
+        head_sha: pr.head,
+        comment_id: String(comment.id),
+      });
+      assert(run.conclusion === "success", `notification-only token probe concluded ${run.conclusion} (${run.html_url})`);
+      const reactions = await ctx.gh.paginate(ctx.gh.rest.reactions.listForIssueComment, {
+        owner: "civitaspo", repo: "testing-csm-ci-client", comment_id: comment.id, per_page: 100,
+      });
+      assert(reactions.some((reaction) => reaction.content === "rocket" && reaction.user?.id === SERVER_BOT_ID), "notification-only token did not add the Server App rocket reaction");
+      await noMerge(ctx, pr);
     }),
   },
   {
