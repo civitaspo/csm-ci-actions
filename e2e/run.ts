@@ -8,10 +8,11 @@ import { randomBytes } from "node:crypto";
 import { parseArgs } from "node:util";
 import { type GitHub, github, splitRepository } from "../src/lib/github.ts";
 import { approve } from "./approve.ts";
+import { merge } from "./merge.ts";
 import { ACTIONS, assert, type Ctx, hasStatus, moveE2eBranch, type Scenario, sleep, syncFixtures } from "./harness.ts";
 import { smoke } from "./smoke.ts";
 
-const FEATURES: Record<string, Scenario[]> = { smoke, approve };
+const FEATURES: Record<string, Scenario[]> = { smoke, approve, merge };
 
 const LOCK = "e2e-lock";
 const LOCK_TTL_MS = 60 * 60_000;

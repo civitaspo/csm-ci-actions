@@ -32313,11 +32313,15 @@ var ConfigSchema = strictObject({
   server_repository: RepoName,
   apps: strictObject({ client_bot_id: Id, server_app_id: Id, server_bot_id: Id }),
   approver: Principal,
-  trust: strictObject({ committers: array(Principal), approvers: array(Principal) }),
+  trust: strictObject({ committers: array(Principal), approvers: array(Principal), mergers: array(Principal), bot_mergers: array(Principal) }),
+  merge: strictObject({
+    required_checks: array(strictObject({ name: string2().min(1), app_id: Id })),
+    deadline_minutes: number2().int().positive().default(60)
+  }),
   policies: array(PolicySchema),
   repositories: array(RepositoryEntry).min(1)
 }).superRefine((c, ctx) => {
-  for (const list of ["committers", "approvers"]) {
+  for (const list of ["committers", "approvers", "mergers", "bot_mergers"]) {
     if (c.trust[list].some((p) => p.id === c.apps.server_bot_id || p.id === c.approver.id)) {
       ctx.addIssue({ code: "custom", path: ["trust", list], message: "the server and approver bots must not be in a trust list" });
     }
@@ -32359,6 +32363,8 @@ function parseCommand(body) {
   const text = body.trim();
   if (text === "/approve")
     return { name: "approve" };
+  if (text === "/merge")
+    return { name: "merge" };
   if (text === "/recheck")
     return { name: "recheck" };
   return;
@@ -32369,7 +32375,7 @@ function validateComment(c, repository, pullNumber, now) {
   }
   const command = parseCommand(c.body);
   if (!command)
-    throw new Rejection(`comment ${c.id} is not exactly /approve or /recheck`);
+    throw new Rejection(`comment ${c.id} is not exactly /approve, /merge or /recheck`);
   if (command.name === "recheck")
     return command;
   if (c.lastEditedAt !== null || c.createdAt !== c.updatedAt)
@@ -36704,16 +36710,17 @@ async function fetchComment(gh, repository, commentId) {
   const { data: c } = await gh.rest.issues.getComment({ ...splitRepository(repository), comment_id: commentId });
   if (!c.node_id)
     throw new Error(`comment ${commentId} has no GraphQL node id`);
-  const edit = await gh.graphql("query($id: ID!) { node(id: $id) { ... on IssueComment { lastEditedAt } } }", { id: c.node_id });
-  if (!edit.node)
-    throw new Rejection(`comment ${commentId} no longer exists`);
+  const node = await gh.graphql("query($id: ID!) { node(id: $id) { ... on IssueComment { databaseId lastEditedAt } } }", { id: c.node_id });
+  const issueComment = node.node;
+  if (!issueComment || issueComment.databaseId !== commentId || issueComment.lastEditedAt === undefined)
+    throw new Rejection(`comment ${commentId} has no matching GraphQL issue comment`);
   return {
     id: Number(c.id),
     body: c.body ?? "",
     issueUrl: c.issue_url,
     createdAt: c.created_at,
     updatedAt: c.updated_at,
-    lastEditedAt: edit.node.lastEditedAt,
+    lastEditedAt: issueComment.lastEditedAt,
     user: c.user ? { id: Number(c.user.id), login: c.user.login, type: c.user.type } : null
   };
 }

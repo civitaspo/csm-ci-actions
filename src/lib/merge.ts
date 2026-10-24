@@ -78,6 +78,7 @@ async function pinAndValidate(ctx: MergeContext, args: MergeArgs, head: string):
   const comment = await fetchComment(ctx.server, ctx.repository, args.comment_id);
   const command = validateComment(comment, ctx.repository, pull.number, ctx.now());
   if (command.name !== "merge") throw new Rejection(`comment ${comment.id} is no longer /merge`);
+  await checkHeadPredatesComment(ctx, pull, comment);
   await verifyMerger(ctx, pull, comment);
   return { pull, comment };
 }
@@ -96,17 +97,16 @@ async function checkHeadPredatesComment(ctx: MergeContext, pull: PullFacts, comm
 async function latestApproval(ctx: MergeContext, pull: PullFacts): Promise<boolean> {
   const reviews = await ctx.server.paginate(ctx.server.rest.pulls.listReviews, { ...splitRepository(ctx.repository), pull_number: pull.number, per_page: 100 });
   const latest = reviews.filter((r) => Number(r.user?.id) === ctx.config.approver.id && r.submitted_at)
-    .sort((a, b) => String(b.submitted_at).localeCompare(String(a.submitted_at)))[0];
+    .reduce<(typeof reviews)[number] | undefined>((current, review) => !current || String(review.submitted_at) >= String(current.submitted_at) ? review : current, undefined);
   return latest?.state === "APPROVED" && latest.commit_id === pull.headSha;
 }
 
 async function requiredChecks(ctx: MergeContext, pull: PullFacts): Promise<{ ok: boolean; problems: string[] }> {
-  const { data } = await ctx.server.rest.checks.listForRef({ ...splitRepository(ctx.repository), ref: pull.headSha, per_page: 100 });
+  const runs = await ctx.server.paginate(ctx.server.rest.checks.listForRef, { ...splitRepository(ctx.repository), ref: pull.headSha, per_page: 100 });
   const problems: string[] = [];
   for (const required of ctx.config.merge.required_checks) {
-    const runs = data.check_runs.filter((r) => r.name === required.name && r.app?.id === required.app_id)
-      .sort((a, b) => String(b.started_at ?? "").localeCompare(String(a.started_at ?? "")));
-    const latest = runs[0];
+    const latest = runs.filter((r) => r.name === required.name && r.app?.id === required.app_id)
+      .reduce<(typeof runs)[number] | undefined>((current, run) => !current || String(run.started_at ?? "") >= String(current.started_at ?? "") ? run : current, undefined);
     if (!latest || latest.status !== "completed" || !["success", "skipped"].includes(latest.conclusion ?? "")) {
       problems.push(`${required.name} from app ${required.app_id} is not success or skipped`);
     }
