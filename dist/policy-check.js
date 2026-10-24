@@ -32339,6 +32339,10 @@ var REQUEST_KINDS = {
   securefix: [["run_id"]],
   release: [["pull_number"]]
 };
+
+class Rejection extends Error {
+  name = "Rejection";
+}
 var LABEL_PREFIX = "csm-ci-";
 var KINDS = Object.keys(REQUEST_KINDS);
 var LABEL_NAME = new RegExp(`^${LABEL_PREFIX}(${KINDS.join("|")})-([a-z0-9]+)$`);
@@ -36405,6 +36409,28 @@ function signedCommits(_, { trust }) {
 
 // src/lib/policies/sensitive-paths.ts
 var import_picomatch = __toESM(require_picomatch2(), 1);
+
+// src/lib/github-comment.ts
+async function fetchComment(gh, repository, commentId) {
+  const { data: comment } = await gh.rest.issues.getComment({ ...splitRepository(repository), comment_id: commentId });
+  if (!comment.node_id)
+    throw new Rejection(`cannot verify the edit history of comment ${commentId}`);
+  const { node } = await gh.graphql("query($id: ID!) { node(id: $id) { ... on IssueComment { databaseId lastEditedAt } } }", { id: comment.node_id });
+  if (!node || node.databaseId !== Number(comment.id) || !(node.lastEditedAt === null || typeof node.lastEditedAt === "string")) {
+    throw new Rejection(`cannot verify the edit history of comment ${commentId}`);
+  }
+  return {
+    id: Number(comment.id),
+    body: comment.body ?? "",
+    issueUrl: comment.issue_url,
+    createdAt: comment.created_at,
+    updatedAt: comment.updated_at,
+    lastEditedAt: node.lastEditedAt,
+    user: comment.user ? { id: Number(comment.user.id), login: comment.user.login, type: comment.user.type } : null
+  };
+}
+
+// src/lib/policies/sensitive-paths.ts
 var MARKER = /<!-- csm-ci:approve:command:(\d+) -->/g;
 var MAX_FILES = 3000;
 async function sensitivePaths(policy, ctx) {
@@ -36432,16 +36458,15 @@ async function sensitivePaths(policy, ctx) {
     for (const marker of markers) {
       const commentId = Number(marker[1]);
       try {
-        const { data: comment } = await ctx.gh.rest.issues.getComment({ owner, repo, comment_id: commentId });
-        if (comment.body !== "/approve" || comment.issue_url !== `https://api.github.com/repos/${owner}/${repo}/issues/${ctx.pullNumber}` || comment.user?.type !== "User" || !ctx.config.trust.approvers.some((p) => p.id === Number(comment.user?.id)) || !comment.node_id || comment.created_at !== comment.updated_at)
+        const comment = await fetchComment(ctx.gh, ctx.repository, commentId);
+        const belongsToPull = comment.issueUrl.toLowerCase() === `https://api.github.com/repos/${owner}/${repo}/issues/${ctx.pullNumber}`;
+        if (comment.body !== "/approve" || !belongsToPull || comment.user?.type !== "User" || !ctx.config.trust.approvers.some((p) => p.id === comment.user?.id) || comment.createdAt !== comment.updatedAt || comment.lastEditedAt !== null)
           continue;
-        if (!comment.node_id)
-          continue;
-        const edit = await ctx.gh.graphql("query($id: ID!) { node(id: $id) { ... on IssueComment { lastEditedAt } } }", { id: comment.node_id });
-        if (edit.node?.lastEditedAt === null)
-          return [];
+        return [];
       } catch (error) {
         if (typeof error === "object" && error !== null && "status" in error && error.status === 404)
+          continue;
+        if (error instanceof Rejection)
           continue;
         throw error;
       }

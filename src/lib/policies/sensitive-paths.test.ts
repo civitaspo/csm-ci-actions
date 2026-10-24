@@ -9,14 +9,14 @@ import { sensitivePaths } from "./sensitive-paths.ts";
 const alice = { id: 10, login: "alice" };
 const policy = { type: "sensitive-paths" as const, paths: ["Makefile"], exempt: [{ id: 10, login: "alice" }] };
 
-type Overrides = Pick<Partial<PolicyContext>, "authorId" | "trust" | "commandApproval"> & { reviews?: unknown[]; sourceComment?: unknown; sourceStatus?: number; lastEditedAt?: string | null };
+type Overrides = Pick<Partial<PolicyContext>, "authorId" | "trust" | "commandApproval"> & { reviews?: unknown[]; sourceComment?: unknown; sourceStatus?: number; sourceNode?: unknown; graphqlStatus?: number; lastEditedAt?: string | null };
 function context(files: unknown[], extra: Overrides = {}): PolicyContext {
   const sourceComment = { id: 9, body: "/approve", issue_url: "https://api.github.com/repos/owner/repo/issues/1", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", user: { id: 10, type: "User" }, node_id: "comment-node" };
   const gh = github("token", fakeFetch([
     { method: "GET", path: "/repos/owner/repo/pulls/1/files", body: files },
     { method: "GET", path: "/repos/owner/repo/pulls/1/reviews", body: extra.reviews ?? [] },
     { method: "GET", path: "/repos/owner/repo/issues/comments/9", ...(extra.sourceStatus === undefined ? {} : { status: extra.sourceStatus }), body: extra.sourceComment ?? sourceComment },
-    { method: "POST", path: "/graphql", body: { data: { node: { lastEditedAt: extra.lastEditedAt ?? null } } } },
+    { method: "POST", path: "/graphql", ...(extra.graphqlStatus === undefined ? {} : { status: extra.graphqlStatus }), body: { data: { node: extra.sourceNode === undefined ? { databaseId: 9, lastEditedAt: extra.lastEditedAt ?? null } : extra.sourceNode } } },
   ]));
   const trust: TrustResult = { head: "head", problems: [], commits: [{ sha: "head", signed: true, identity: { kind: "user", principal: alice }, trusted: true }] };
   return { trust, gh, config: config(), repository: "owner/repo", pullNumber: 1, head: "head", authorId: 10, ...(extra.authorId === undefined ? {} : { authorId: extra.authorId }), ...(extra.trust ? { trust: extra.trust } : {}), ...(extra.commandApproval ? { commandApproval: extra.commandApproval } : {}) };
@@ -71,6 +71,8 @@ describe("sensitive-paths", () => {
       ["stale head", { reviews: [{ ...review, commit_id: "old" }] }],
       ["edited approval comment", { lastEditedAt: "2026-10-24T11:30:00Z" }],
       ["missing source comment", { sourceStatus: 404 }],
+      ["missing source node", { sourceNode: null }],
+      ["node id resolves to another comment", { sourceNode: { databaseId: 10, lastEditedAt: null } }],
     ];
     for (const [reason, overrides] of rejected) {
       const problems = await sensitivePaths(policy, context(files, { authorId: 66, reviews: [review], ...overrides }));
@@ -80,6 +82,10 @@ describe("sensitive-paths", () => {
 
   test("propagates non-404 source comment API errors", async () => {
     await expect(sensitivePaths(policy, context([{ filename: "Makefile" }], { authorId: 66, reviews: [{ user: { id: 4000 }, state: "APPROVED", commit_id: "head", body: "<!-- csm-ci:approve:command:9 -->" }], sourceStatus: 500 }))).rejects.toThrow();
+  });
+
+  test("propagates edit-history API errors", async () => {
+    await expect(sensitivePaths(policy, context([{ filename: "Makefile" }], { authorId: 66, reviews: [{ user: { id: 4000 }, state: "APPROVED", commit_id: "head", body: "<!-- csm-ci:approve:command:9 -->" }], graphqlStatus: 500 }))).rejects.toMatchObject({ status: 500 });
   });
 });
 

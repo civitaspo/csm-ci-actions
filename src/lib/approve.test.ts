@@ -51,19 +51,21 @@ type Setup = {
   reviewer?: unknown;
   headDate?: string;
   timeline?: unknown[];
-  lastEditedAt?: string | null;
+  editNode?: unknown;
+  editNodeAfter?: unknown;
+  editStatus?: number;
   files?: unknown[];
   config?: ReturnType<typeof config>;
 };
 
 function context(s: Setup = {}) {
   const server = fakeFetch([
+    { method: "POST", path: "/graphql", status: s.editStatus ?? 200, body: { data: { node: s.editNode === undefined ? { databaseId: 9, lastEditedAt: null } : s.editNode } }, then: [{ data: { node: s.editNodeAfter ?? s.editNode ?? { databaseId: 9, lastEditedAt: null } } }] },
     { method: "GET", path: `${P}/pulls/12`, body: s.pull ?? pull(), then: [s.pullAfter ?? s.pull ?? pull()] },
     { method: "GET", path: `${P}/pulls/12/commits`, body: s.commits ?? [commit(HEAD)] },
     { method: "GET", path: `${P}/pulls/12/reviews`, body: s.reviews ?? [] },
     ...(s.files ? [{ method: "GET", path: `${P}/pulls/12/files`, body: s.files }] : []),
     { method: "GET", path: `${P}/issues/comments/9`, body: s.comment ?? comment(), then: [s.commentAfter ?? s.comment ?? comment()] },
-    { method: "POST", path: "/graphql", body: { data: { node: { lastEditedAt: s.lastEditedAt ?? null } } } },
     { method: "POST", path: `${P}/issues/comments/9/reactions`, status: 201, body: { content: "rocket" } },
     { method: "GET", path: `${P}/issues/12/comments`, body: s.issueComments ?? [] },
     { method: "POST", path: `${P}/issues/12/comments`, status: 201, body: { id: 1 } },
@@ -132,6 +134,13 @@ describe("runApprove automatic", () => {
 });
 
 describe("runApprove commands", () => {
+  test.each([403, 500])("propagates edit-history API failure %s without approving", async (status) => {
+    const { ctx, server, approver } = context({ editStatus: status });
+    await expect(runApprove(ctx, { pull_number: 12, comment_id: 9 })).rejects.toMatchObject({ status });
+    expect(approver.calls).toEqual([]);
+    expect(server.calls).not.toContain(`POST ${P}/issues/comments/9/reactions`);
+  });
+
   test("/approve by an approver reacts, marks the review and posts a receipt", async () => {
     const { ctx, server, approver } = context();
     expect((await runApprove(ctx, { pull_number: 12, comment_id: 9 })).result).toBe("approved");
@@ -175,7 +184,11 @@ describe("runApprove commands", () => {
     ["an unsigned commit", { commits: [commit(HEAD, { commit: { verification: { verified: false } } })] }, /cannot proceed because policy checks failed: signed-commits: .* is not signed/, true],
     ["a replayed comment", { issueComments: [{ user: { id: SERVER_BOT_ID }, body: `${marker("approve", 9)}\ndone` }] }, /already handled/, false],
     ["a comment edited before approving", { commentAfter: comment({ updated_at: "2026-10-24T11:45:00Z" }) }, /was edited/, true],
-    ["a same-second comment edit", { lastEditedAt: "2026-10-24T11:30:00Z" }, /was edited/, false],
+    ["a same-second comment edit", { editNode: { databaseId: 9, lastEditedAt: "2026-10-24T11:30:00Z" } }, /was edited/, false],
+    ["missing edit evidence", { editNode: null }, /cannot verify the edit history/, false],
+    ["wrong comment edit evidence", { editNode: { databaseId: 10, lastEditedAt: null } }, /cannot verify the edit history/, false],
+    ["incomplete edit evidence", { editNode: { databaseId: 9 } }, /cannot verify the edit history/, false],
+    ["same-second edit before approving", { editNodeAfter: { databaseId: 9, lastEditedAt: "2026-10-24T11:30:00Z" } }, /was edited/, true],
   ];
   test.each(rejects)("rejects %s", async (_, setup, message, receipt) => {
     const { ctx, server, approver } = context(setup);
@@ -218,7 +231,7 @@ describe("what approve sends", () => {
       { method: "GET", path: `${P}/pulls/12/commits`, body: [commit(HEAD)] },
       { method: "GET", path: `${P}/pulls/12/reviews`, body: [] },
       { method: "GET", path: `${P}/issues/comments/9`, body: comment({ body: "/recheck" }) },
-      { method: "POST", path: "/graphql", body: { data: { node: { lastEditedAt: null } } } },
+      { method: "POST", path: "/graphql", body: { data: { node: { databaseId: 9, lastEditedAt: null } } } },
       { method: "POST", path: `${P}/issues/comments/9/reactions`, status: 201, body: {} },
       { method: "GET", path: `${P}/commits/${HEAD}/check-runs`, body: [] },
       { method: "POST", path: `${P}/check-runs`, status: 201, body: { id: 88 } },

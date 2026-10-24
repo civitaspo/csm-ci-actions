@@ -4,6 +4,8 @@ import { type GitHub, splitRepository } from "./github.ts";
 import { hasServerMarker, marker, postResult } from "./notify.ts";
 import { evaluatePullPolicies, updatePolicyCheck } from "./policy-check.ts";
 import { Rejection } from "./request.ts";
+import { fetchComment } from "./github-comment.ts";
+export { fetchComment } from "./github-comment.ts";
 
 export type ApproveContext = { server: GitHub; approver: GitHub; config: Config; repository: string; now: () => Date };
 export type ApproveOutcome = { result: "approved" | "already-approved" | "declined" | "dismissed"; head: string; problems: string[] };
@@ -20,25 +22,6 @@ export async function fetchPull(gh: GitHub, repository: string, pullNumber: numb
     baseRef: p.base.ref,
     defaultBranch: p.base.repo.default_branch,
     authorId: Number(p.user.id),
-  };
-}
-
-export async function fetchComment(gh: GitHub, repository: string, commentId: number): Promise<CommentFacts> {
-  const { data: c } = await gh.rest.issues.getComment({ ...splitRepository(repository), comment_id: commentId });
-  if (!c.node_id) throw new Error(`comment ${commentId} has no GraphQL node id`);
-  const edit = await gh.graphql<{ node: { lastEditedAt: string | null } | null }>(
-    "query($id: ID!) { node(id: $id) { ... on IssueComment { lastEditedAt } } }",
-    { id: c.node_id },
-  );
-  if (!edit.node) throw new Rejection(`comment ${commentId} no longer exists`);
-  return {
-    id: Number(c.id),
-    body: c.body ?? "",
-    issueUrl: c.issue_url,
-    createdAt: c.created_at,
-    updatedAt: c.updated_at,
-    lastEditedAt: edit.node.lastEditedAt,
-    user: c.user ? { id: Number(c.user.id), login: c.user.login, type: c.user.type } : null,
   };
 }
 

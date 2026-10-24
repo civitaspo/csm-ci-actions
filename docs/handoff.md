@@ -618,3 +618,7 @@ The limits cover both the actions and the e2e runner. They do not affect externa
 Verification includes table-driven retry and no-retry cases, stalled headers and bodies, cancellation, and the final request payload after Octokit applies overrides. Fourteen mutations were detected, including removing the attempt bound, the read-only restriction, the full-response deadline, the fetch abort signal, and the GraphQL mutation restriction. An independent security review found no actionable issues.
 
 While preparing this change, the jobs API for [server run 40114635373](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40114635373) returned HTTP 502. That baseline run later completed as cancelled. The PR records the new local e2e runs; post-merge CI runs are recorded with the next handoff update.
+
+### Same-second comment edits discovered during retry validation
+
+The edited-comment scenario exposed an acceptance bug: REST returned identical `created_at` and `updated_at` values for a comment edited in its creation second, while GraphQL returned a non-null `lastEditedAt`. Comment reads now query both GraphQL `databaseId` and `lastEditedAt`, verify the database ID matches the REST comment, and fail closed when either value is missing or inconsistent. Sensitive-path approval markers use this shared comment reader. API errors propagate; a deleted or unverified marker is not accepted.
