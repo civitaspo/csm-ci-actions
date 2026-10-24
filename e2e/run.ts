@@ -90,7 +90,9 @@ async function main(): Promise<void> {
         for (const url of ctx.urls) console.log(`  ${url}`);
         return { failed: false, skipped: false };
       } catch (e) {
-        console.log(`FAIL ${scenario.name}: ${e instanceof Error ? e.message : String(e)}`);
+        const message = e instanceof Error ? e.message : String(e);
+        const status = typeof e === "object" && e !== null && "status" in e && typeof e.status === "number" ? ` (HTTP ${e.status})` : "";
+        console.log(`FAIL ${scenario.name}: ${message}${status}`);
         for (const url of ctx.urls) console.log(`  ${url}`);
         return { failed: true, skipped: false };
       }

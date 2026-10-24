@@ -17,6 +17,7 @@ import {
   jobs,
   SERVER,
   serverComments,
+  serverRuns,
   recentWorkflowRuns,
   sleep,
   until,
@@ -63,15 +64,7 @@ async function expectRejectedCommand(ctx: Ctx, pr: Pr, body: string, pattern: Re
 
 // The completed client runs determine how many labels must reach the server.
 async function expectEveryOp(ctx: Ctx, match: {kind:string; repository:string; args:Record<string,number>}, since: Date, expectedCount: number, op: "success" | "failure", logPattern: RegExp): Promise<void> {
-  const runs = await until("the server runs to finish", async () => {
-    const recent = await recentWorkflowRuns(ctx, SERVER, "csm-ci.yml", "label", since);
-    const found = [];
-    for (const run of recent) {
-      const intake = (await jobs(ctx, SERVER, run.id)).get("intake");
-      if (intake && intake.conclusion !== "skipped" && matchesAcceptedRequest(await jobLog(ctx, SERVER, intake.id), match)) found.push(run);
-    }
-    return completedRequestRuns(found, expectedCount);
-  });
+  const runs = await until("the server runs to finish", async () => completedRequestRuns(await serverRuns(ctx, match, since), expectedCount));
   for (const run of runs) {
     ctx.urls.push(run.html_url);
     const opJob = (await jobs(ctx, SERVER, run.id)).get("op");
@@ -118,7 +111,7 @@ async function expectNoServerRun(ctx: Ctx, since: Date, match: {kind:string; rep
   const runs = [];
   for (const run of recent) {
     const intake = (await jobs(ctx, SERVER, run.id)).get("intake");
-    if (intake && intake.conclusion !== "skipped" && matchesAcceptedRequest(await jobLog(ctx, SERVER, intake.id), match)) runs.push(run);
+    if (intake && intake.conclusion !== null && intake.conclusion !== "skipped" && matchesAcceptedRequest(await jobLog(ctx, SERVER, intake.id), match)) runs.push(run);
   }
   assert(runs.length === 0, `expected no server run, found ${runs.map((r) => r.html_url).join(", ")}`);
 }
@@ -180,7 +173,7 @@ export const approve: Scenario[] = [
   },
   {
     name: "/approve on an unsigned commit is rejected with a receipt",
-    run: (ctx) => withPr(ctx, "unsigned", (pr) => expectRejectedCommand(ctx, pr, "/approve", /needs every commit signed by a trusted committer/, true)),
+    run: (ctx) => withPr(ctx, "unsigned", (pr) => expectRejectedCommand(ctx, pr, "/approve", /policy checks failed: signed-commits: [0-9a-f]{40} is not signed and verified/, true)),
   },
   {
     name: "an /approve edited after posting is rejected without a receipt",
