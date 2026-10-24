@@ -66,7 +66,12 @@ function isRetryableError(error: unknown, timedOut: boolean): boolean {
   if (timedOut) return true;
   if (typeof error !== "object" || error === null) return false;
   if ("status" in error && (error.status === 502 || error.status === 503 || error.status === 504)) return true;
-  if (!("cause" in error)) return false;
+  return isNetworkFailure(error);
+}
+
+export function isNetworkFailure(error: unknown): boolean {
+  if (error instanceof TypeError) return true;
+  if (typeof error !== "object" || error === null || !("cause" in error)) return false;
   const cause = error.cause;
   return cause instanceof TypeError || (cause instanceof Error && ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EAI_AGAIN", "ENETUNREACH"].some((code) => cause.message.includes(code)));
 }
@@ -85,6 +90,15 @@ export async function loadConfig(gh: GitHub, repository: string, ref: string, pa
   const { data } = await gh.rest.repos.getContent({ ...splitRepository(repository), path, ref, mediaType: { format: "raw" } });
   if (typeof data !== "string") throw new Error(`${path} at ${repository}@${ref} is not a file`);
   return parseConfig(data);
+}
+
+export async function loadCurrentServerConfig(gh: GitHub, repository: string, path: string): Promise<Config> {
+  const { data: server } = await gh.rest.repos.get(splitRepository(repository));
+  const config = await loadConfig(gh, repository, server.default_branch, path);
+  if (config.server_repository !== repository.toLowerCase()) {
+    throw new Error(`current server configuration identifies ${config.server_repository}, not ${repository}`);
+  }
+  return config;
 }
 
 // The label must still exist with the same description, so a deleted

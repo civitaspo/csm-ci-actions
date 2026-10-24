@@ -1,0 +1,37 @@
+name: csm-ci client policy-check
+
+# Called from a client repository on pull_request_target with `secrets: inherit`.
+# It never checks out the pull request. It only asks the server to evaluate it.
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  request:
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      contains(fromJSON('["opened", "synchronize", "reopened", "ready_for_review", "edited"]'), github.event.action)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .csm-ci-actions
+          persist-credentials: false
+      - id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_CLIENT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}
+          repositories: ${{ vars.CSM_CI_SERVER_REPOSITORY }}
+          permission-issues: write
+      - uses: ./.csm-ci-actions/actions/request
+        with:
+          github-token: ${{ steps.token.outputs.token }}
+          server-repository: ${{ vars.CSM_CI_SERVER_REPOSITORY }}
+          kind: policy-check
+          args: ${{ github.event.pull_request.number }}

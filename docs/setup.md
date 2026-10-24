@@ -41,9 +41,47 @@ apps:
 trust:
   committers:
     - { id: 0, login: your-account }
+  approvers:
+    - { id: 0, login: your-account }
+  mergers:
+    - { id: 0, login: your-account }
+  bot_mergers: []
+merge:
+  required_checks:
+    - { name: status-check, app_id: 15368 }
+  deadline_minutes: 60
 policies:
   - { type: signed-commits }
   - { type: trusted-committers }
+  - type: sensitive-paths
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - "**/package.json"
+      - "**/package-lock.json"
+      - "**/npm-shrinkwrap.json"
+      - "**/bun.lock*"
+      - "**/yarn.lock"
+      - "**/pnpm-lock.yaml"
+      - "**/go.mod"
+      - "**/go.sum"
+      - "**/pyproject.toml"
+      - "**/requirements*.txt"
+      - "**/Pipfile*"
+      - "**/poetry.lock"
+      - "**/uv.lock"
+      - "**/Gemfile*"
+      - "**/composer.*"
+      - "**/Package.swift"
+      - "**/Package.resolved"
+      - Makefile
+      - "**/Dockerfile*"
+      - "**/.goreleaser.*"
+      - scripts/**
+      - "**/build.rs"
+      - .cargo/**
+      - .github/**
+    exempt: []
 repositories:
   - { name: your-account/*, ops: [approve, merge, policy-check] }
 ```
@@ -124,6 +162,20 @@ jobs:
     secrets: inherit
 ```
 
+`.github/workflows/csm-ci-policy-check.yml` evaluates pull request policies:
+
+```yaml
+name: csm-ci-policy-check
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+permissions: {}
+jobs:
+  policy-check:
+    uses: civitaspo/csm-ci-actions/.github/workflows/client-policy-check.yml@<sha>
+    secrets: inherit
+```
+
 Add the approver to `csm-ci.yaml`:
 
 ```yaml
@@ -132,3 +184,21 @@ trust:
   approvers:
     - { id: 0, login: your-account }
 ```
+
+`.github/workflows/csm-ci-merge.yml` lets a trusted merger request a squash merge:
+
+```yaml
+name: csm-ci-merge
+on:
+  issue_comment:
+    types: [created]
+permissions: {}
+jobs:
+  merge:
+    # The client App key reaches the called job only through inherit.
+    # jactionlint ignore=secrets-inherit
+    uses: civitaspo/csm-ci-actions/.github/workflows/client-merge.yml@<sha>
+    secrets: inherit
+```
+
+The command is exactly `/merge`. The server waits for the latest approver review, current policies, and configured checks. After readiness succeeds, the workflow mints fresh read and notification tokens plus a contents and pull-requests write token, then revalidates and merges. If an accepted wait fails, the workflow mints a fresh notification token for the failure receipt.

@@ -1,9 +1,8 @@
 import { type Config, type SecurefixRoute } from "./config.ts";
 import { type GitHub, splitRepository } from "./github.ts";
-import { MAX_SECUREFIX_FILE_SIZE, MAX_SECUREFIX_TOTAL_SIZE, SECUREFIX_ARTIFACT, bindSecurefixPullRequest, findSecurefixRoute, parseSecurefixManifest, readSecurefixArtifact, validateRouteChanges, validateSecurefixRouteCommitFile, validateSecurefixRouteHead, validateSecurefixRun, type SecurefixChange, type SecurefixManifest, type SecurefixRun, SecurefixRunSchema } from "./securefix.ts";
+import { MAX_SECUREFIX_FILE_SIZE, MAX_SECUREFIX_TOTAL_SIZE, SECUREFIX_ARTIFACT, bindSecurefixPullRequest, findSecurefixRoute, readSecurefixArtifact, validateRouteChanges, validateSecurefixRouteCommitFile, validateSecurefixRouteHead, validateSecurefixRun, type SecurefixChange, type SecurefixManifest, type SecurefixRun, SecurefixRunSchema } from "./securefix.ts";
 import { Rejection } from "./request.ts";
 import { GitRefChanged, resetBranchWithLease } from "./git-ref.ts";
-import picomatch from "picomatch";
 
 type Artifact = { id: number; name: string; expired: boolean; size_in_bytes: number };
 type Repo = { id: number | bigint; default_branch: string };
@@ -74,6 +73,7 @@ export async function inspectSecurefix(gh: GitHub, config: Config, repository: s
   const context = await loadContext(gh, config, repository, runId);
   const { manifest, changes } = await readSecurefixArtifact(artifactPath, { repository, runId, headSha: context.run.head_sha });
   if (changes.length === 0) throw new Rejection("securefix artifact contains no changes");
+  await validateSafeBasePaths(gh, context, changes);
   let originals = new Map<string, Buffer | null>();
   let routeTargetSha: string | null | undefined;
   if (context.route) {
@@ -83,7 +83,7 @@ export async function inspectSecurefix(gh: GitHub, config: Config, repository: s
   const alreadyApplied = await isAlreadyApplied(gh, config, context, changes);
   if (alreadyApplied) return { status: "already-applied", requiresWorkflowsWrite: false, context, manifest, changes };
   if (!context.route && context.pull?.head.sha !== context.run.head_sha) throw new Rejection("the branch moved after the request");
-  if (context.route) routeTargetSha = await validateRouteBranch(gh, config, context, changes);
+  if (context.route) routeTargetSha = await validateRouteBranch(gh, config, context);
   const requiresWorkflowsWrite = changes.some((change) => change.path.startsWith(".github/workflows/"));
   if (requiresWorkflowsWrite && !config.securefix?.allow_workflow_changes) throw new Rejection("workflow changes are disabled by securefix configuration");
   return { status: "ready", requiresWorkflowsWrite, context, manifest, changes, ...(routeTargetSha === undefined ? {} : { routeTargetSha }) };
@@ -120,6 +120,40 @@ export async function applySecurefix(gh: GitHub, config: Config, repository: str
   let pullRequest: number | undefined;
   if (context.route) pullRequest = await ensureRoutePullRequest(gh, context, context.route, manifest, branch);
   return pullRequest === undefined ? { status: "applied", commit } : { status: "applied", commit, pullRequest };
+}
+
+async function validateSafeBasePaths(gh: GitHub, context: Context, changes: readonly SecurefixChange[]): Promise<void> {
+  const { data: commit } = await gh.rest.repos.getCommit({ owner: context.owner, repo: context.repo, ref: context.run.head_sha });
+  const trees = new Map<string, Promise<Awaited<ReturnType<GitHub["rest"]["git"]["getTree"]>>["data"]>>();
+  const readTree = (sha: string) => {
+    let pending = trees.get(sha);
+    if (!pending) {
+      pending = gh.rest.git.getTree({ owner: context.owner, repo: context.repo, tree_sha: sha }).then(({ data }) => {
+        if (data.truncated) throw new Rejection("securefix could not safely inspect the base Git tree");
+        return data;
+      });
+      trees.set(sha, pending);
+    }
+    return pending;
+  };
+  for (const change of changes) {
+    const segments = change.path.split("/");
+    let treeSha = commit.commit.tree.sha;
+    for (const [index, segment] of segments.entries()) {
+      const tree = await readTree(treeSha);
+      const entry = tree.tree.find((candidate) => candidate.path === segment);
+      if (!entry) break;
+      const path = segments.slice(0, index + 1).join("/");
+      if (index < segments.length - 1) {
+        if (entry.type !== "tree" || entry.mode !== "040000" || !entry.sha) {
+          throw new Rejection(`securefix path ${JSON.stringify(change.path)} traverses a non-directory Git entry at ${JSON.stringify(path)}`);
+        }
+        treeSha = entry.sha;
+      } else if (entry.type !== "blob" || (entry.mode !== "100644" && entry.mode !== "100755")) {
+        throw new Rejection(`securefix path ${JSON.stringify(change.path)} is not a regular file in the base Git tree`);
+      }
+    }
+  }
 }
 
 async function readOriginalFiles(gh: GitHub, context: Context, changes: readonly SecurefixChange[]): Promise<Map<string, Buffer | null>> {
@@ -195,7 +229,16 @@ async function exactChangedPaths(
   const allPaths = new Set([...before.keys(), ...after.keys()]);
   const actual = new Set([...allPaths].filter((path) => before.get(path) !== after.get(path)));
   const expected = new Set(changes.map((change) => change.path));
-  return actual.size === expected.size && [...actual].every((path) => expected.has(path));
+  if (actual.size !== expected.size || [...actual].some((path) => !expected.has(path))) return false;
+  for (const change of changes) {
+    const entry = after.get(change.path);
+    if (change.kind === "delete") {
+      if (entry !== undefined) return false;
+    } else if (!entry || !/^blob:100(?:644|755):/u.test(entry)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 async function contentMatches(gh: GitHub, context: Context, ref: string, changes: readonly SecurefixChange[]): Promise<boolean> {
@@ -220,7 +263,7 @@ async function isServerMadeCommit(gh: GitHub, context: Context, sha: string, ser
   return facts?.signature?.isValid === true && facts.signature.wasSignedByGitHub === true;
 }
 
-async function validateRouteBranch(gh: GitHub, config: Config, context: Context, changes: readonly SecurefixChange[]): Promise<string | null> {
+async function validateRouteBranch(gh: GitHub, config: Config, context: Context): Promise<string | null> {
   const route = context.route;
   if (!route) return null;
   let targetSha: string;
@@ -241,7 +284,6 @@ async function validateRouteBranch(gh: GitHub, config: Config, context: Context,
     for (const file of data.files) {
       const beforeSha = data.parents[0]?.sha;
       if (!beforeSha) throw new Rejection("securefix route target branch contains a root commit");
-      const originals = new Map<string, Buffer | null>();
       const before = await readRepositoryFile(gh, context, file.filename, beforeSha);
       const after = file.status === "removed" ? null : await readRepositoryFile(gh, context, file.filename, commit.sha);
       validateSecurefixRouteCommitFile(route, file, before, after);

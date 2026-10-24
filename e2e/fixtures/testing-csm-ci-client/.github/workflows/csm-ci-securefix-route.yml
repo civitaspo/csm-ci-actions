@@ -1,0 +1,62 @@
+name: csm-ci-securefix-route
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Route artifact fixture mode.
+        required: true
+        type: choice
+        options:
+          - valid
+          - out-of-scope
+          - version-only
+permissions: {}
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Create a route artifact
+        run: |
+          mkdir -p securefix/files
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+          mkdirSync("securefix/files", { recursive: true });
+          const mode = process.env.MODE;
+          let content = Buffer.from("route update\\n");
+          if (mode === "out-of-scope") content = Buffer.from("out of scope\\n");
+          if (mode === "version-only") {
+            const packageJson = JSON.parse(readFileSync("e2e/securefix-version.json", "utf8"));
+            packageJson.description = `${packageJson.description ?? ""} e2e change`;
+            writeFileSync("e2e/securefix-version.json", `${JSON.stringify(packageJson, null, 2)}\\n`);
+            content = readFileSync("e2e/securefix-version.json");
+          }
+          writeFileSync("securefix/files/0000", content);
+          const path = mode === "out-of-scope" ? "README.md" : mode === "version-only" ? "e2e/securefix-version.json" : "e2e/securefix-route-result.txt";
+          writeFileSync("securefix/manifest.json", JSON.stringify({
+            version: 1,
+            repository: process.env.GITHUB_REPOSITORY,
+            run_id: Number(process.env.GITHUB_RUN_ID),
+            head_sha: process.env.GITHUB_SHA,
+            message: `e2e route ${mode}`,
+            files: [{ kind: "write", path, size: content.length, sha256: createHash("sha256").update(content).digest("hex") }],
+          }));
+          NODE
+        env:
+          MODE: ${{ inputs.mode }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: securefix
+          path: securefix/
+          if-no-files-found: error
+          retention-days: 1
+  request:
+    needs: package
+    uses: civitaspo/csm-ci-actions/.github/workflows/client-securefix.yml@e2e
+    secrets: inherit

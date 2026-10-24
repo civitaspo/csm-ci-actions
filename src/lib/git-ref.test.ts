@@ -34,6 +34,10 @@ describe("resetBranchWithLease", () => {
       await resetBranchWithLease({ remote, sourceBranch: "main", targetBranch: "release/next", sourceSha, expectedTargetSha: observedTargetSha, token: "not-a-real-token" });
       expect(git(workspace, "ls-remote", remote, "refs/heads/release/next").split("\t")[0]).toBe(sourceSha);
 
+      await expect(resetBranchWithLease({ remote, sourceBranch: "main", targetBranch: "release/next", sourceSha: "f".repeat(40), expectedTargetSha: sourceSha, token: "not-a-real-token" }))
+        .rejects.toThrow("git ref changed before the conditional update");
+      expect(git(workspace, "ls-remote", remote, "refs/heads/release/next").split("\t")[0]).toBe(sourceSha);
+
       await writeFile(join(workspace, "file"), "concurrent\n");
       git(workspace, "commit", "-am", "concurrent");
       const movedSha = git(workspace, "rev-parse", "HEAD");
@@ -70,18 +74,26 @@ describe("resetBranchWithLease", () => {
   });
 
   test.each([
-    { sourceBranch: "bad..branch", targetBranch: "release/next" },
-    { sourceBranch: "main", targetBranch: "bad..branch" },
-    { sourceBranch: "--upload-pack=evil", targetBranch: "release/next" },
-  ])("rejects unsafe branch names before fetching or pushing: $sourceBranch -> $targetBranch", async ({ sourceBranch, targetBranch }) => {
+    { sourceBranch: "bad..branch", targetBranch: "release/next", message: "check-ref-format" },
+    { sourceBranch: "main", targetBranch: "bad..branch", message: "check-ref-format" },
+    { sourceBranch: "--upload-pack=evil", targetBranch: "release/next", message: "couldn't find remote ref refs/heads/--upload-pack=evil" },
+  ])("rejects invalid or missing branch refs without updating the remote: $sourceBranch -> $targetBranch", async ({ sourceBranch, targetBranch, message }) => {
     const root = await mkdtemp(join(tmpdir(), "securefix-git-ref-invalid-test-"));
     const remote = join(root, "remote.git");
     try {
       execFileSync("git", ["init", "--bare", remote], { stdio: "ignore", timeout: 30_000 });
-      await expect(resetBranchWithLease({ remote, sourceBranch, targetBranch, sourceSha: "a".repeat(40), expectedTargetSha: null, token: "not-a-real-token" })).rejects.toThrow();
+      await expect(resetBranchWithLease({ remote, sourceBranch, targetBranch, sourceSha: "a".repeat(40), expectedTargetSha: null, token: "not-a-real-token" })).rejects.toThrow(message);
       expect(git(root, "--git-dir", remote, "for-each-ref", "--format=%(refname)")).toBe("");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  test.each([
+    { sourceSha: "short", expectedTargetSha: null },
+    { sourceSha: "a".repeat(40), expectedTargetSha: "short" },
+  ])("rejects an incomplete expected commit id", async ({ sourceSha, expectedTargetSha }) => {
+    await expect(resetBranchWithLease({ remote: "/unused", sourceBranch: "main", targetBranch: "release/next", sourceSha, expectedTargetSha, token: "not-a-real-token" }))
+      .rejects.toThrow("git ref update requires full commit shas");
   });
 });

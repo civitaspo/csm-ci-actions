@@ -36583,7 +36583,8 @@ var Owner = string2().regex(/^[A-Za-z0-9-]+$/).transform((s) => s.toLowerCase())
 var OPS = ["approve", "merge", "policy-check", "securefix", "release"];
 var PolicySchema = discriminatedUnion("type", [
   strictObject({ type: literal("signed-commits") }),
-  strictObject({ type: literal("trusted-committers") })
+  strictObject({ type: literal("trusted-committers") }),
+  strictObject({ type: literal("sensitive-paths"), paths: array(string2().min(1)), exempt: array(Principal).default([]) })
 ]);
 var SecurefixPathRule = _enum(["any", "semver", "version-only"]);
 var SecurefixRoute = strictObject({
@@ -36606,12 +36607,16 @@ var ConfigSchema = strictObject({
   server_repository: RepoName,
   apps: strictObject({ client_bot_id: Id, server_app_id: Id, server_bot_id: Id }),
   approver: Principal,
-  trust: strictObject({ committers: array(Principal), approvers: array(Principal) }),
+  trust: strictObject({ committers: array(Principal), approvers: array(Principal), mergers: array(Principal), bot_mergers: array(Principal) }),
+  merge: strictObject({
+    required_checks: array(strictObject({ name: string2().min(1), app_id: Id })),
+    deadline_minutes: number2().int().positive().default(60)
+  }),
   policies: array(PolicySchema),
   securefix: SecurefixSchema.optional(),
   repositories: array(RepositoryEntry).min(1)
 }).superRefine((c, ctx) => {
-  for (const list of ["committers", "approvers"]) {
+  for (const list of ["committers", "approvers", "mergers", "bot_mergers"]) {
     if (c.trust[list].some((p) => p.id === c.apps.server_bot_id || p.id === c.approver.id)) {
       ctx.addIssue({ code: "custom", path: ["trust", list], message: "the server and approver bots must not be in a trust list" });
     }
@@ -36738,7 +36743,12 @@ function isRetryableError(error, timedOut) {
     return false;
   if ("status" in error && (error.status === 502 || error.status === 503 || error.status === 504))
     return true;
-  if (!("cause" in error))
+  return isNetworkFailure(error);
+}
+function isNetworkFailure(error) {
+  if (error instanceof TypeError)
+    return true;
+  if (typeof error !== "object" || error === null || !("cause" in error))
     return false;
   const cause = error.cause;
   return cause instanceof TypeError || cause instanceof Error && ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EAI_AGAIN", "ENETUNREACH"].some((code) => cause.message.includes(code));
@@ -36858,6 +36868,7 @@ async function readSecurefixArtifact(root, expected) {
     throw error;
   }
   const manifest = parseSecurefixManifest(raw, expected);
+  const actualFiles = await listRegularFiles(root);
   const expectedFiles = new Set(["manifest.json"]);
   const changes = [];
   let total = 0;
@@ -36883,7 +36894,6 @@ async function readSecurefixArtifact(root, expected) {
   }
   if (total > MAX_SECUREFIX_TOTAL_SIZE)
     throw new Rejection("securefix payloads are larger than 10MB in total");
-  const actualFiles = await listRegularFiles(root);
   if (actualFiles.some((path) => !expectedFiles.has(path)) || [...expectedFiles].some((path) => !actualFiles.includes(path))) {
     throw new Rejection("securefix artifact contains files that are not listed in its manifest");
   }
@@ -36936,8 +36946,8 @@ function bindSecurefixPullRequest(run, defaultBranch, pull, openPullsFromHead, r
     throw new Rejection("securefix workflow is not bound to an open, ready pull request");
   if (pull.head.repo?.full_name.toLowerCase() !== repository.toLowerCase())
     throw new Rejection("securefix does not accept fork pull requests");
-  if (listed.head.sha !== run.head_sha || pull.head.sha !== run.head_sha)
-    throw new Rejection("the branch moved after the request");
+  if (listed.head.sha !== run.head_sha)
+    throw new Rejection("the workflow head does not match the pull request head recorded for the run");
   if (pull.base.ref !== defaultBranch || listed.base.ref !== defaultBranch)
     throw new Rejection("securefix PR must target the default branch");
   if (openPullsFromHead !== 1)
@@ -36965,6 +36975,7 @@ function validateSecurefixRouteHead(run, route, defaultBranch, currentDefaultSha
 }
 function validateRouteChanges(route, changes, original) {
   for (const change of changes) {
+    validateSecurefixPath(change.path);
     const rule = Object.entries(route.paths).find(([pattern]) => import_picomatch.default.isMatch(change.path, pattern, { dot: true }))?.[1];
     if (!rule)
       throw new Rejection(`securefix route does not allow path ${JSON.stringify(change.path)}`);
@@ -36984,6 +36995,21 @@ function validateRouteChanges(route, changes, original) {
       }
     }
   }
+}
+function validateSecurefixRouteCommitFile(route, file, before, after) {
+  if (file.status === "removed") {
+    validateRouteChanges(route, [{ kind: "delete", path: file.filename }], new Map);
+    return;
+  }
+  if (file.status === "renamed") {
+    const previous = file.previous_filename;
+    if (!previous)
+      throw new Rejection("securefix route rename has no previous filename");
+    validateRouteChanges(route, [{ kind: "delete", path: previous }], new Map);
+  }
+  if (!after)
+    throw new Rejection(`securefix route commit has no content for ${JSON.stringify(file.filename)}`);
+  validateRouteChanges(route, [{ kind: "write", path: file.filename, content: after }], new Map([[file.filename, before]]));
 }
 function versionLinesOnly(before, after) {
   const nonVersionLines = (text) => text.split(`
@@ -37115,17 +37141,20 @@ async function inspectSecurefix(gh, config, repository, runId, artifactPath) {
   const { manifest, changes } = await readSecurefixArtifact(artifactPath, { repository, runId, headSha: context.run.head_sha });
   if (changes.length === 0)
     throw new Rejection("securefix artifact contains no changes");
+  await validateSafeBasePaths(gh, context, changes);
   let originals = new Map;
   let routeTargetSha;
   if (context.route) {
     originals = await readOriginalFiles(gh, context, changes);
     validateRouteChanges(context.route, changes, originals);
   }
-  const alreadyApplied = await isAlreadyApplied(gh, config, context, manifest, changes);
+  const alreadyApplied = await isAlreadyApplied(gh, config, context, changes);
   if (alreadyApplied)
     return { status: "already-applied", requiresWorkflowsWrite: false, context, manifest, changes };
+  if (!context.route && context.pull?.head.sha !== context.run.head_sha)
+    throw new Rejection("the branch moved after the request");
   if (context.route)
-    routeTargetSha = await validateRouteBranch(gh, config, context, changes);
+    routeTargetSha = await validateRouteBranch(gh, config, context);
   const requiresWorkflowsWrite = changes.some((change) => change.path.startsWith(".github/workflows/"));
   if (requiresWorkflowsWrite && !config.securefix?.allow_workflow_changes)
     throw new Rejection("workflow changes are disabled by securefix configuration");
@@ -37149,9 +37178,15 @@ async function applySecurefix(gh, config, repository, runId, artifactPath, write
   try {
     commit = await createCommit(gh, context, branch, expectedHead, manifest.message, changes);
   } catch (error) {
-    const applied = await isAlreadyApplied(gh, config, context, manifest, changes);
-    if (applied)
-      return { status: "already-applied", commit: await branchHead(gh, context, branch) };
+    const applied = await isAlreadyApplied(gh, config, context, changes);
+    if (applied) {
+      const commit = await branchHead(gh, context, branch);
+      if (context.route) {
+        const pullRequest = await ensureRoutePullRequest(gh, context, context.route, manifest, branch);
+        return { status: "already-applied", commit, pullRequest };
+      }
+      return { status: "already-applied", commit };
+    }
     if (isCompareAndSwapFailure(error) || await branchHead(gh, context, branch) !== expectedHead)
       throw new Rejection("the branch moved after the request");
     throw error;
@@ -37161,14 +37196,47 @@ async function applySecurefix(gh, config, repository, runId, artifactPath, write
     pullRequest = await ensureRoutePullRequest(gh, context, context.route, manifest, branch);
   return pullRequest === undefined ? { status: "applied", commit } : { status: "applied", commit, pullRequest };
 }
+async function validateSafeBasePaths(gh, context, changes) {
+  const { data: commit } = await gh.rest.repos.getCommit({ owner: context.owner, repo: context.repo, ref: context.run.head_sha });
+  const trees = new Map;
+  const readTree = (sha) => {
+    let pending = trees.get(sha);
+    if (!pending) {
+      pending = gh.rest.git.getTree({ owner: context.owner, repo: context.repo, tree_sha: sha }).then(({ data }) => {
+        if (data.truncated)
+          throw new Rejection("securefix could not safely inspect the base Git tree");
+        return data;
+      });
+      trees.set(sha, pending);
+    }
+    return pending;
+  };
+  for (const change of changes) {
+    const segments = change.path.split("/");
+    let treeSha = commit.commit.tree.sha;
+    for (const [index, segment] of segments.entries()) {
+      const tree = await readTree(treeSha);
+      const entry = tree.tree.find((candidate) => candidate.path === segment);
+      if (!entry)
+        break;
+      const path = segments.slice(0, index + 1).join("/");
+      if (index < segments.length - 1) {
+        if (entry.type !== "tree" || entry.mode !== "040000" || !entry.sha) {
+          throw new Rejection(`securefix path ${JSON.stringify(change.path)} traverses a non-directory Git entry at ${JSON.stringify(path)}`);
+        }
+        treeSha = entry.sha;
+      } else if (entry.type !== "blob" || entry.mode !== "100644" && entry.mode !== "100755") {
+        throw new Rejection(`securefix path ${JSON.stringify(change.path)} is not a regular file in the base Git tree`);
+      }
+    }
+  }
+}
 async function readOriginalFiles(gh, context, changes) {
   const originals = new Map;
   const paths = changes.filter((change) => change.kind === "write").map((change) => change.path);
   const results = await Promise.all(paths.map(async (path) => {
     try {
       const content = await readRepositoryFile(gh, context, path, context.run.head_sha);
-      if (content === null)
-        throw new Rejection(`securefix route original ${JSON.stringify(path)} is not a file`);
       return [path, content];
     } catch (error) {
       if (httpStatus(error) === 404)
@@ -37201,7 +37269,7 @@ async function branchHead(gh, context, branch) {
   const { data } = await gh.rest.git.getRef({ owner: context.owner, repo: context.repo, ref: `heads/${branch}` });
   return data.object.sha;
 }
-async function isAlreadyApplied(gh, config, context, manifest, changes) {
+async function isAlreadyApplied(gh, config, context, changes) {
   const branch = context.route?.to ?? context.run.head_branch;
   let head;
   try {
@@ -37218,7 +37286,36 @@ async function isAlreadyApplied(gh, config, context, manifest, changes) {
     return false;
   if (!await isServerMadeCommit(gh, context, head, config.apps.server_bot_id))
     return false;
+  if (!await exactChangedPaths(gh, context, commit.parents[0].sha, commit.commit.tree.sha, changes))
+    return false;
   return await contentMatches(gh, context, head, changes);
+}
+async function exactChangedPaths(gh, context, parentSha, commitTreeSha, changes) {
+  const { data: parent } = await gh.rest.repos.getCommit({ owner: context.owner, repo: context.repo, ref: parentSha });
+  const [parentTree, commitTree] = await Promise.all([
+    gh.rest.git.getTree({ owner: context.owner, repo: context.repo, tree_sha: parent.commit.tree.sha, recursive: "1" }),
+    gh.rest.git.getTree({ owner: context.owner, repo: context.repo, tree_sha: commitTreeSha, recursive: "1" })
+  ]);
+  if (parentTree.data.truncated || commitTree.data.truncated)
+    return false;
+  const entries = (tree) => new Map(tree.tree.filter((entry) => entry.type !== "tree" && entry.path !== undefined).map((entry) => [entry.path, `${entry.type}:${entry.mode}:${entry.sha}`]));
+  const before = entries(parentTree.data);
+  const after = entries(commitTree.data);
+  const allPaths = new Set([...before.keys(), ...after.keys()]);
+  const actual = new Set([...allPaths].filter((path) => before.get(path) !== after.get(path)));
+  const expected = new Set(changes.map((change) => change.path));
+  if (actual.size !== expected.size || [...actual].some((path) => !expected.has(path)))
+    return false;
+  for (const change of changes) {
+    const entry = after.get(change.path);
+    if (change.kind === "delete") {
+      if (entry !== undefined)
+        return false;
+    } else if (!entry || !/^blob:100(?:644|755):/u.test(entry)) {
+      return false;
+    }
+  }
+  return true;
 }
 async function contentMatches(gh, context, ref, changes) {
   const results = await Promise.all(changes.map(async (change) => {
@@ -37238,7 +37335,7 @@ async function isServerMadeCommit(gh, context, sha, serverBotId) {
   const facts = data.repository.commit;
   return facts?.signature?.isValid === true && facts.signature.wasSignedByGitHub === true;
 }
-async function validateRouteBranch(gh, config, context, changes) {
+async function validateRouteBranch(gh, config, context) {
   const route = context.route;
   if (!route)
     return null;
@@ -37267,17 +37364,9 @@ async function validateRouteBranch(gh, config, context, changes) {
       const beforeSha = data.parents[0]?.sha;
       if (!beforeSha)
         throw new Rejection("securefix route target branch contains a root commit");
-      const originals = new Map;
       const before = await readRepositoryFile(gh, context, file.filename, beforeSha);
-      if (file.status === "removed") {
-        validateRouteChanges(route, [{ kind: "delete", path: file.filename }], originals);
-      } else {
-        const after = await readRepositoryFile(gh, context, file.filename, commit.sha);
-        if (!after)
-          throw new Rejection(`securefix route commit has no content for ${JSON.stringify(file.filename)}`);
-        originals.set(file.filename, before);
-        validateRouteChanges(route, [{ kind: "write", path: file.filename, content: after }], originals);
-      }
+      const after = file.status === "removed" ? null : await readRepositoryFile(gh, context, file.filename, commit.sha);
+      validateSecurefixRouteCommitFile(route, file, before, after);
     }
   }
   return targetSha;

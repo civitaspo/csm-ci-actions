@@ -1,0 +1,13 @@
+# Merge
+
+`/merge` asks csm-ci to squash-merge the current head of an open pull request. The command takes no argument. It is accepted only from an account listed in `trust.mergers`, or from a bot listed in `trust.bot_mergers` when that bot authored the pull request and every commit.
+
+The server checks the pull request state and the S5 trust rules before waiting. Every readiness validation reloads the configuration from the server repository's current default branch and confirms that the repository still enables merge. It then re-reads the pull request and command comment, evaluates the current policies against GitHub state, checks that the latest review from the configured approver is an approval for the pinned head, and verifies each configured required check by name and GitHub App ID. A moved head, invalidated comment, removed merger, changed policy, or failed trust check aborts the request. Readiness polling runs every 30 seconds until `merge.deadline_minutes` expires.
+
+Notification tokens have issues and pull-requests write access because GitHub requires pull-request permission for PR comment reactions and receipts; they have no contents write access. The server mints fresh read and notification tokens after readiness succeeds, then mints its contents and pull-requests write token. It revalidates readiness before calling GitHub's squash merge endpoint with the pinned head SHA. HTTP 405, 422, and 503 responses are retried only after another complete validation. HTTP 409 fails immediately. A successful response must report `merged: true`.
+
+The squash commit uses the pull request title and body. Duplicate `Co-authored-by` lines in the body are removed. The server posts a receipt containing `<!-- csm-ci:merge:<comment_id> -->` after an accepted command succeeds or fails. Requests rejected before acceptance do not receive a receipt. If a long wait fails after the initial notification token expires, the workflow mints a fresh notification token and retries the idempotent failure receipt. A receipt authored by the Server bot prevents replay.
+
+The client workflow listens for newly created issue comments and requests work only for pull requests from commenters with OWNER, MEMBER, or COLLABORATOR association whose body is exactly `/merge`. The server independently verifies the comment author by immutable ID and bot or user type.
+
+`bun e2e/run.ts --ref <sha> --feature merge` exercises the merge scenarios against the testing repositories.
