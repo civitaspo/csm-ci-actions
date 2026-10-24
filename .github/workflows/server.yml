@@ -317,6 +317,7 @@ jobs:
       tag: ${{ steps.plan.outputs.tag }}
       version: ${{ steps.plan.outputs.version }}
       build-type: ${{ steps.plan.outputs.build-type }}
+      source-date-epoch: ${{ steps.source-date.outputs.epoch }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -362,6 +363,11 @@ jobs:
           token: ${{ steps.read-token.outputs.token }}
           path: client
           persist-credentials: false
+      - id: source-date
+        name: Record the merge commit timestamp
+        env:
+          MERGE_SHA: ${{ steps.plan.outputs.merge-sha }}
+        run: echo "epoch=$(git -C client show -s --format=%ct "$MERGE_SHA")" >> "$GITHUB_OUTPUT"
       - name: Archive the tracked merge source
         env:
           MERGE_SHA: ${{ steps.plan.outputs.merge-sha }}
@@ -395,16 +401,26 @@ jobs:
           name: release-source
           path: client
       - name: Prepare the isolated source snapshot
+        shell: bash
         env:
           RELEASE_TAG: ${{ needs.release-plan.outputs.tag }}
+          SOURCE_DATE_EPOCH: ${{ needs.release-plan.outputs.source-date-epoch }}
+          SOURCE_REPOSITORY: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
         run: |
+          if ! [[ "$SOURCE_DATE_EPOCH" =~ ^[0-9]+$ ]]; then
+            echo "Invalid source commit timestamp" >&2
+            exit 1
+          fi
           tar -xf client/release-source.tar -C client
           rm client/release-source.tar
           git -C client init --quiet
+          git -C client remote add origin "$GITHUB_SERVER_URL/$SOURCE_REPOSITORY.git"
           git -C client config user.name "csm-ci release build"
           git -C client config user.email "csm-ci-release-build@users.noreply.github.com"
           git -C client add -f -A
-          git -C client commit --quiet -m "release source"
+          GIT_AUTHOR_DATE="@$SOURCE_DATE_EPOCH +0000" \
+            GIT_COMMITTER_DATE="@$SOURCE_DATE_EPOCH +0000" \
+            git -C client -c commit.gpgsign=false commit --quiet -m "release source"
           git -C client tag "$RELEASE_TAG"
           mkdir -p assets
       - if: needs.release-plan.outputs.build-type == 'none'

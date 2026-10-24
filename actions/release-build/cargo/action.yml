@@ -39,5 +39,10 @@ runs:
           exit 1
         fi
         name="${REPOSITORY##*/}-${VERSION}-${TARGET}.tar.gz"
-        tar -czf "../assets/$name" -C ../assets/staging .
+        if command -v python3 >/dev/null 2>&1; then
+          python=python3
+        else
+          python=python
+        fi
+        "$python" "$GITHUB_ACTION_PATH/package.py" ../assets/staging "../assets/$name"
         rm -rf ../assets/staging
