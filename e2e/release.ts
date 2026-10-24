@@ -37,11 +37,7 @@ async function mergeAsServer(ctx: Ctx, pr: ReleasePr): Promise<{ sha: string; si
 async function releaseClientRun(ctx: Ctx, since: Date, pr: ReleasePr): Promise<Run> {
   const candidate = await until(`client release request for PR #${pr.number}`, async () => {
     const runs = await recentWorkflowRuns(ctx, CLIENT, "csm-ci-release.yml", "pull_request", since);
-    for (const run of runs) {
-      const { data } = await ctx.gh.rest.actions.getWorkflowRun({ ...splitRepository(CLIENT), run_id: run.id });
-      if (data.pull_requests?.some((item) => Number(item.number) === pr.number)) return run;
-    }
-    return undefined;
+    return runs.find((run) => run.display_title === `csm-ci release #${pr.number}`);
   });
   return waitRun(ctx, CLIENT, candidate.id);
 }

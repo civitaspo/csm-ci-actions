@@ -31025,8 +31025,8 @@ async function prepareAssets(directory) {
   }
   const sums = assets.map(({ name, sha256 }) => `${sha256}  ${name}`).join(`
 `);
-  const content = `${sums}${sums ? `
-` : ""}`;
+  const content = `${sums}
+`;
   if (existingSums !== undefined && existingSums !== content)
     throw new Rejection("existing SHA256SUMS does not match the build outputs");
   if (existingSums === undefined)

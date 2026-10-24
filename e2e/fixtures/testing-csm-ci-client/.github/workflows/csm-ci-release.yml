@@ -1,4 +1,5 @@
 name: csm-ci-release
+run-name: "csm-ci release #${{ github.event.pull_request.number }}"
 
 on:
   pull_request:

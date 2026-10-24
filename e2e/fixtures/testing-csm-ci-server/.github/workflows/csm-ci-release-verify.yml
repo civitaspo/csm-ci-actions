@@ -47,7 +47,7 @@ jobs:
             echo "release has no SHA256SUMS" >&2
             exit 1
           fi
-          if [ -s SHA256SUMS ]; then
+          if grep -q '[^[:space:]]' SHA256SUMS; then
             sha256sum --check SHA256SUMS
           fi
       - name: Verify each signature and release predicate

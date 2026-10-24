@@ -23,7 +23,7 @@ export async function prepareAssets(directory: string): Promise<AssetDigest[]> {
     assets.push({ name, path, sha256: createHash("sha256").update(content).digest("hex") });
   }
   const sums = assets.map(({ name, sha256 }) => `${sha256}  ${name}`).join("\n");
-  const content = `${sums}${sums ? "\n" : ""}`;
+  const content = `${sums}\n`;
   if (existingSums !== undefined && existingSums !== content) throw new Rejection("existing SHA256SUMS does not match the build outputs");
   if (existingSums === undefined) await writeFile(sumsPath, content, { flag: "wx" });
   const checksums = await readFile(sumsPath);

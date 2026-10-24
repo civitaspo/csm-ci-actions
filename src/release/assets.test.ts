@@ -17,6 +17,14 @@ async function tempDirectory(): Promise<string> {
 }
 
 describe("prepareAssets", () => {
+  test("represents no build assets with an uploadable one-byte checksum list", async () => {
+    const directory = await tempDirectory();
+    const assets = await prepareAssets(directory);
+    expect(await readFile(join(directory, "SHA256SUMS"), "utf8")).toBe("\n");
+    expect(assets.map(({ name }) => name)).toEqual(["SHA256SUMS"]);
+    await expect(prepareAssets(directory)).resolves.toEqual(assets);
+  });
+
   test("writes deterministic checksums and includes their digest in the manifest", async () => {
     const directory = await tempDirectory();
     await writeFile(join(directory, "z.bin"), "z");
