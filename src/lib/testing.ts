@@ -12,6 +12,11 @@ approver: { id: ${APPROVER_BOT_ID}, login: "approver[bot]" }
 trust:
   committers: [{ id: 10, login: alice }, { id: 20, login: "renovate[bot]" }]
   approvers: [{ id: 10, login: alice }]
+  mergers: [{ id: 10, login: alice }]
+  bot_mergers: [{ id: 20, login: "renovate[bot]" }]
+merge:
+  required_checks: [{ name: status-check, app_id: 15368 }]
+  deadline_minutes: 60
 policies:
   - { type: signed-commits }
   - { type: trusted-committers }

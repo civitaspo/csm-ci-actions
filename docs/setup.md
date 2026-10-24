@@ -41,6 +41,15 @@ apps:
 trust:
   committers:
     - { id: 0, login: your-account }
+  approvers:
+    - { id: 0, login: your-account }
+  mergers:
+    - { id: 0, login: your-account }
+  bot_mergers: []
+merge:
+  required_checks:
+    - { name: status-check, app_id: 15368 }
+  deadline_minutes: 60
 policies:
   - { type: signed-commits }
   - { type: trusted-committers }
@@ -130,3 +139,21 @@ trust:
   approvers:
     - { id: 0, login: your-account }
 ```
+
+`.github/workflows/csm-ci-merge.yml` lets a trusted merger request a squash merge:
+
+```yaml
+name: csm-ci-merge
+on:
+  issue_comment:
+    types: [created]
+permissions: {}
+jobs:
+  merge:
+    # The client App key reaches the called job only through inherit.
+    # jactionlint ignore=secrets-inherit
+    uses: civitaspo/csm-ci-actions/.github/workflows/client-merge.yml@<sha>
+    secrets: inherit
+```
+
+The command is exactly `/merge`. The server waits for the latest approver review, current policies, and configured checks before minting its write token and merging.

@@ -10,6 +10,13 @@ trust:
     - { id: 4525500, login: civitaspo }
   approvers:
     - { id: 4525500, login: civitaspo }
+  mergers:
+    - { id: 4525500, login: civitaspo }
+  bot_mergers: []
+merge:
+  required_checks:
+    - { name: status-check, app_id: 15368 }
+  deadline_minutes: 60
 policies:
   - { type: signed-commits }
   - { type: trusted-committers }

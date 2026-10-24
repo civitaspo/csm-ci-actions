@@ -5,6 +5,7 @@ import { Rejection } from "./request.ts";
 describe("parseCommand", () => {
   const cases: [string, ReturnType<typeof parseCommand>][] = [
     ["/approve", { name: "approve" }],
+    ["/merge", { name: "merge" }],
     ["\n/approve  ", { name: "approve" }],
     ["  /recheck\n", { name: "recheck" }],
     ["/approve abc1234", undefined],
@@ -13,7 +14,7 @@ describe("parseCommand", () => {
     ["please /approve", undefined],
     ["/approved", undefined],
     ["/recheck now", undefined],
-    ["/merge", undefined],
+    ["/merge now", undefined],
     ["", undefined],
   ];
   test.each(cases)("%p", (body, expected) => {
@@ -29,6 +30,7 @@ function comment(over: Partial<CommentFacts> = {}): CommentFacts {
     issueUrl: "https://api.github.com/repos/Owner/Repo/issues/12",
     createdAt: "2026-10-24T11:30:00Z",
     updatedAt: "2026-10-24T11:30:00Z",
+    lastEditedAt: null,
     user: { id: 10, login: "alice", type: "User" },
     ...over,
   };
@@ -40,12 +42,17 @@ describe("validateComment", () => {
     expect(validateComment(comment({ createdAt: "2026-10-24T11:00:00Z", updatedAt: "2026-10-24T11:00:00Z" }), "owner/repo", 12, NOW)).toEqual({ name: "approve" });
   });
 
+  test("accepts a fresh /merge command", () => {
+    expect(validateComment(comment({ body: "/merge" }), "owner/repo", 12, NOW)).toEqual({ name: "merge" });
+  });
+
   const rejects: [string, Partial<CommentFacts>, RegExp][] = [
     ["comment on another pull request", { issueUrl: "https://api.github.com/repos/owner/repo/issues/13" }, /not on owner\/repo#12/],
     ["comment on a suffix-matching number", { issueUrl: "https://api.github.com/repos/owner/repo/issues/112" }, /not on owner\/repo#12/],
     ["comment in another repository", { issueUrl: "https://api.github.com/repos/owner/other/issues/12" }, /not on owner\/repo#12/],
     ["not a command", { body: "/approve please" }, /not exactly/],
     ["edited comment", { updatedAt: "2026-10-24T11:31:00Z" }, /was edited/],
+    ["edited in the same second", { lastEditedAt: "2026-10-24T11:30:42Z" }, /was edited/],
     ["older than 60 minutes", { createdAt: "2026-10-24T10:59:59Z", updatedAt: "2026-10-24T10:59:59Z" }, /older than 60 minutes/],
     ["created in the future", { createdAt: "2026-10-24T12:00:01Z", updatedAt: "2026-10-24T12:00:01Z" }, /older than 60 minutes/],
   ];
