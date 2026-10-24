@@ -15,7 +15,8 @@ async function main(): Promise<void> {
   const args = JSON.parse(core.getInput("args", { required: true })) as MergeArgs;
   const ctx = {
     server: read,
-    write: core.getInput("mode") === "merge" ? github(core.getInput("write-token", { required: true })) : read,
+    notify: github(core.getInput("notification-token", { required: true })),
+    ...(core.getInput("mode") === "merge" ? { write: github(core.getInput("write-token", { required: true })) } : {}),
     config,
     repository: core.getInput("repository", { required: true }),
     now: () => new Date(),

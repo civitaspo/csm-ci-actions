@@ -13,6 +13,9 @@ inputs:
   server-token:
     description: Server App read token for the client repository.
     required: true
+  notification-token:
+    description: Server App token with issues:write for reactions and request receipts.
+    required: true
   write-token:
     description: Server App token with contents:write and pull_requests:write, required only in merge mode.
     required: false

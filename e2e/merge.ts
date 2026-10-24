@@ -32,7 +32,7 @@ export const merge: Scenario[] = [
     }),
   },
   {
-    name: "a non-merger's /merge request fails with a receipt and leaves the pull request open",
+    name: "a non-merger's /merge request fails without a receipt and leaves the pull request open",
     needsUntrusted: true,
     run: (ctx) => withSignedPr(ctx, async (pr) => {
       assert(ctx.untrusted, "the untrusted test token is not configured");
@@ -41,7 +41,7 @@ export const merge: Scenario[] = [
       const { data: unchanged } = await ctx.gh.rest.pulls.get({ owner: "civitaspo", repo: "testing-csm-ci-client", pull_number: pr.number });
       assert(!unchanged.merged && unchanged.state === "open", `non-merger request changed pull request #${pr.number}`);
       const receipts = (await serverComments(ctx, pr)).filter((body) => body.includes(marker("merge", c.id)));
-      assert(receipts.length === 1, `expected one rejection receipt, found ${receipts.length}`);
+      assert(receipts.length === 0, `expected no receipt before command acceptance, found ${receipts.length}`);
     }),
   },
   {
