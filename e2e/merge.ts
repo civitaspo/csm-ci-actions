@@ -234,7 +234,7 @@ export const merge: Scenario[] = [
       const requestInfo = fromComment(pr, comment);
       await awaitServerWait(ctx, comment.id);
       await ctx.gh.rest.issues.updateComment({ owner: "civitaspo", repo: "testing-csm-ci-client", comment_id: comment.id, body: "/merge edited" });
-      await expectOp(ctx, requestInfo.match, requestInfo.since, "failure", /no longer \/merge|has been edited|was edited/i);
+      await expectOp(ctx, requestInfo.match, requestInfo.since, "failure", /no longer \/merge|has been edited|was edited|is not exactly \/approve, \/merge or \/recheck/i);
       await noMerge(ctx, pr);
     }),
   },
