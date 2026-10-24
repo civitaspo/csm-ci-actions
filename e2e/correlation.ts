@@ -35,3 +35,7 @@ export function matchesAcceptedRequest(log: string, match: RequestMatch): boolea
 export function matchesCleanupLabel(log: string, label: string): boolean {
   return log.split(/\r?\n/).some((line) => line.trimEnd().endsWith(` LABEL: ${label}`) || line.trimEnd() === `LABEL: ${label}`);
 }
+
+export function completedRequestRuns<T extends { status: string | null }>(runs: T[], expectedCount: number): T[] | undefined {
+  return runs.length >= expectedCount && runs.every((run) => run.status === "completed") ? runs : undefined;
+}

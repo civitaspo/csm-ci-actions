@@ -1,6 +1,6 @@
 import { splitRepository } from "../src/lib/github.ts";
 import { marker } from "../src/lib/notify.ts";
-import { matchesAcceptedRequest, runsForComments } from "./correlation.ts";
+import { completedRequestRuns, matchesAcceptedRequest, runsForComments } from "./correlation.ts";
 import {
   approverReviews,
   assert,
@@ -61,10 +61,8 @@ async function expectRejectedCommand(ctx: Ctx, pr: Pr, body: string, pattern: Re
   assert(receipts.length === (receipt ? 1 : 0), `expected ${receipt ? "one receipt" : "no receipt"}, found ${receipts.length}`);
 }
 
-// Waits until every server run since `since` is done, then checks each op job. A short pause first
-// lets a label that is still on its way start its run.
-async function expectEveryOp(ctx: Ctx, match: {kind:string; repository:string; args:Record<string,number>}, since: Date, op: "success" | "failure", logPattern: RegExp): Promise<void> {
-  await sleep(20_000);
+// The completed client runs determine how many labels must reach the server.
+async function expectEveryOp(ctx: Ctx, match: {kind:string; repository:string; args:Record<string,number>}, since: Date, expectedCount: number, op: "success" | "failure", logPattern: RegExp): Promise<void> {
   const runs = await until("the server runs to finish", async () => {
     const recent = await recentWorkflowRuns(ctx, SERVER, "csm-ci.yml", "label", since);
     const found = [];
@@ -72,7 +70,7 @@ async function expectEveryOp(ctx: Ctx, match: {kind:string; repository:string; a
       const intake = (await jobs(ctx, SERVER, run.id)).get("intake");
       if (intake && matchesAcceptedRequest(await jobLog(ctx, SERVER, intake.id), match)) found.push(run);
     }
-    return found.length > 0 && found.every((r) => r.status === "completed") ? found : undefined;
+    return completedRequestRuns(found, expectedCount);
   });
   for (const run of runs) {
     ctx.urls.push(run.html_url);
@@ -80,6 +78,21 @@ async function expectEveryOp(ctx: Ctx, match: {kind:string; repository:string; a
     assert(opJob?.conclusion === op, `op job concluded ${opJob?.conclusion}, expected ${op} (${run.html_url})`);
     assert(logPattern.test(await jobLog(ctx, SERVER, opJob.id)), `op log does not match ${logPattern} (${run.html_url})`);
   }
+}
+
+async function commentRequestCount(ctx: Ctx, since: Date, pr: number, commentId: number): Promise<number> {
+  const run = await until(`the client run for comment ${commentId}`, async () => {
+    const recent = await recentWorkflowRuns(ctx, CLIENT, "csm-ci-approve.yml", "issue_comment", since);
+    const found = runsForComments(recent, pr, [commentId])?.[0];
+    return found?.status === "completed" ? found : undefined;
+  });
+  ctx.urls.push(run.html_url);
+  const request = await until(`the request job of ${run.html_url}`, async () => (await jobs(ctx, CLIENT, run.id)).get("request"));
+  if (request.conclusion === "skipped") return 0;
+  assert(request.conclusion === "success", `client request job concluded ${request.conclusion} (${run.html_url})`);
+  const labels = (await jobLog(ctx, CLIENT, request.id)).match(/created label csm-ci-[^ ]+ \(/g) ?? [];
+  assert(labels.length === 1, `expected one client request label, found ${labels.length} (${run.html_url})`);
+  return 1;
 }
 
 // Waits for the issue_comment runs of the client workflow and checks that their request job was skipped.
@@ -179,7 +192,8 @@ export const approve: Scenario[] = [
         const c = await postComment(ctx, pr, "e2e: about to become /approve");
         await ctx.gh.rest.issues.updateComment({ ...splitRepository(CLIENT), comment_id: c.id, body: "/approve" });
         await labelFor(ctx, pr, c.id);
-        await expectEveryOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: c.id } }, c.since, "failure", /was edited/);
+        const expectedRequests = 1 + await commentRequestCount(ctx, c.since, pr.number, c.id);
+        await expectEveryOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: c.id } }, c.since, expectedRequests, "failure", /was edited/);
         assert((await approvedAt(ctx, pr)).length === 0, "an edited command approved");
         assert(!(await rocketFromServer(ctx, c.id)), "the server reacted to an edited command");
       }),

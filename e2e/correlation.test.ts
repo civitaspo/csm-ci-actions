@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { findRecentRunByTitle, findRunByTitle, matchesAcceptedRequest, matchesCleanupLabel, recentItems, runsForComments } from "./correlation.ts";
+import { completedRequestRuns, findRecentRunByTitle, findRunByTitle, matchesAcceptedRequest, matchesCleanupLabel, recentItems, runsForComments } from "./correlation.ts";
 import type { RequestMatch } from "./harness.ts";
 
 const request: RequestMatch = {
@@ -70,4 +70,12 @@ test("cleanup matches the whole label value, not another label with that prefix"
   expect(matchesCleanupLabel("LABEL: csm-ci-approve-abc", "csm-ci-approve-abc")).toBe(true);
   expect(matchesCleanupLabel("  LABEL: csm-ci-approve-abcdef", "csm-ci-approve-abc")).toBe(false);
   expect(matchesCleanupLabel("  OTHER_LABEL: csm-ci-approve-abc", "csm-ci-approve-abc")).toBe(false);
+});
+
+test("waits for every emitted request despite delayed server run visibility", () => {
+  const first = { id: 1, status: "completed" };
+  expect(completedRequestRuns([first], 2)).toBeUndefined();
+  expect(completedRequestRuns([first, { id: 2, status: "queued" }], 2)).toBeUndefined();
+  const all = [first, { id: 2, status: "completed" }];
+  expect(completedRequestRuns(all, 2)).toEqual(all);
 });
