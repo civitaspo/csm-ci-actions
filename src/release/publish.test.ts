@@ -127,6 +127,21 @@ describe("publishRelease", () => {
     })).rejects.toThrow("server error");
   });
 
+  test("propagates failures from draft lookup instead of treating them as no draft", async () => {
+    await assets();
+    const fetch = fakeFetch([
+      ...validTagRoutes,
+      { method: "GET", path: "/repos/owner/repo/releases/tags/v1.2.3", status: 404, body: { message: "Not Found" } },
+      { method: "GET", path: "/repos/owner/repo/releases", status: 403, body: { message: "Resource not accessible by integration" } },
+    ]);
+    await expect(publishRelease(github("t", fetch), {
+      plan,
+      expectedAssets: (await prepareAssets(directory)).map(({ name, sha256 }) => ({ name, sha256 })),
+      directory,
+    })).rejects.toThrow("Resource not accessible by integration");
+    expect(fetch.requests.some(({ method }) => method === "POST")).toBe(false);
+  });
+
   test("rejects an existing release owned by another bot", async () => {
     await assets();
     const fetch = fakeFetch([
@@ -140,6 +155,47 @@ describe("publishRelease", () => {
     })).rejects.toThrow("release v1.2.3 was not created by the Server bot");
   });
 
+  test.each([
+    { name: "a foreign draft", drafts: [{ id: 7, tag_name: "v1.2.3", author: { id: 4000 }, draft: true }], message: "release v1.2.3 was not created by the Server bot" },
+    { name: "multiple matching drafts", drafts: [
+      { id: 7, tag_name: "v1.2.3", author: { id: 3000 }, draft: true },
+      { id: 8, tag_name: "v1.2.3", author: { id: 3000 }, draft: true },
+    ], message: "release v1.2.3 has multiple drafts" },
+  ])("rejects $name found only in the releases list before writing assets", async ({ drafts, message }) => {
+    await assets();
+    const fetch = fakeFetch([
+      ...validTagRoutes,
+      { method: "GET", path: "/repos/owner/repo/releases/tags/v1.2.3", status: 404, body: { message: "Not Found" } },
+      { method: "GET", path: "/repos/owner/repo/releases", body: drafts },
+    ]);
+    await expect(publishRelease(github("t", fetch), {
+      plan,
+      expectedAssets: (await prepareAssets(directory)).map(({ name, sha256 }) => ({ name, sha256 })),
+      directory,
+    })).rejects.toThrow(message);
+    expect(fetch.requests.some(({ method }) => method === "POST" || method === "PATCH")).toBe(false);
+  });
+
+  test("resumes a Server draft visible only in the releases list", async () => {
+    await assets();
+    const expected = (await prepareAssets(directory)).map(({ name, sha256 }) => ({ name, sha256 }));
+    const complete = expected.map(({ name, sha256 }) => ({ name, digest: `sha256:${sha256}` }));
+    const fetch = fakeFetch([
+      ...validTagRoutes,
+      { method: "GET", path: "/repos/owner/repo/releases/tags/v1.2.3", status: 404, body: { message: "Not Found" } },
+      { method: "GET", path: "/repos/owner/repo/releases", body: [{ id: 7, tag_name: "v1.2.3", author: { id: 3000 }, draft: true, immutable: false }] },
+      { method: "GET", path: "/repos/owner/repo/releases/7/assets", body: complete },
+      { method: "GET", path: "/repos/owner/repo/git/ref/tags%2Fv1.2.3", body: { object: { type: "tag", sha: "tag-sha" } } },
+      { method: "GET", path: "/repos/owner/repo/git/tags/tag-sha", body: { tag: "v1.2.3", tagger: { name: "server[bot]", email: "3000+server[bot]@users.noreply.github.com" }, object: { type: "commit", sha: mergeSha } } },
+      { method: "PATCH", path: "/repos/owner/repo/releases/7", body: { id: 7, tag_name: "v1.2.3", author: { id: 3000 }, draft: false, immutable: true } },
+      { method: "GET", path: "/repos/owner/repo/releases/7", body: { id: 7, tag_name: "v1.2.3", author: { id: 3000 }, draft: false, immutable: true } },
+      { method: "GET", path: "/repos/owner/repo/releases/7/assets", body: complete },
+    ]);
+    await publishRelease(github("t", fetch), { plan, expectedAssets: expected, directory });
+    expect(fetch.requests.some(({ method, path }) => method === "POST" && path.includes("/assets"))).toBe(false);
+    expect(fetch.requests.some(({ method, path }) => method === "PATCH" && path.endsWith("/releases/7"))).toBe(true);
+  });
+
   test("creates a draft, uploads the exact assets, then publishes it", async () => {
     await assets();
     const expected = (await prepareAssets(directory)).map(({ name, sha256 }) => ({ name, sha256 }));
@@ -147,11 +203,11 @@ describe("publishRelease", () => {
     const fetch = fakeFetch([
       ...validTagRoutes,
       { method: "GET", path: "/repos/owner/repo/releases/tags/v1.2.3", status: 404, body: { message: "Not Found" } },
+      { method: "GET", path: "/repos/owner/repo/releases", body: [], then: [[{ tag_name: "v2.0.0", draft: false }]] },
       { method: "POST", path: "/repos/owner/repo/releases", body: { id: 7, tag_name: "v1.2.3", author: { id: 3000 }, draft: true, immutable: false } },
       { method: "GET", path: "/repos/owner/repo/releases/7/assets", body: [], then: [remote, remote] },
       { method: "POST", path: "/repos/owner/repo/releases/7/assets", body: { id: 9, name: "asset", digest: "sha256:unused" } },
       { method: "GET", path: "/repos/owner/repo/releases/tags/v1.2.3", body: { id: 7, tag_name: "v1.2.3", author: { id: 3000 }, draft: true, immutable: false } },
-      { method: "GET", path: "/repos/owner/repo/releases", body: [{ tag_name: "v2.0.0", draft: false }] },
       { method: "PATCH", path: "/repos/owner/repo/releases/7", body: { id: 7, tag_name: "v1.2.3", author: { id: 3000 }, draft: false, immutable: true } },
       { method: "GET", path: "/repos/owner/repo/releases/7", body: { id: 7, tag_name: "v1.2.3", author: { id: 3000 }, draft: false, immutable: true } },
     ]);
@@ -294,6 +350,7 @@ describe("publishRelease", () => {
     const fetch = fakeFetch([
       ...validTagRoutes,
       { method: "GET", path: "/repos/owner/repo/releases/tags/v1.2.3", status: 404, body: { message: "Not Found" } },
+      { method: "GET", path: "/repos/owner/repo/releases", body: [] },
       { method: "POST", path: "/repos/owner/repo/releases", body: { id: 7, tag_name: "v1.2.3", author: { id: 3000 }, draft: true, immutable: false } },
       { method: "GET", path: "/repos/owner/repo/releases/7/assets", body: [], then: [finalAssets] },
       { method: "POST", path: "/repos/owner/repo/releases/7/assets", body: { id: 9, name: "asset", digest: "sha256:unused" } },
@@ -311,6 +368,7 @@ describe("publishRelease", () => {
     const fetch = fakeFetch([
       ...validTagRoutes,
       { method: "GET", path: "/repos/owner/repo/releases/tags/v1.2.3", status: 404, body: { message: "Not Found" } },
+      { method: "GET", path: "/repos/owner/repo/releases", body: [] },
       { method: "POST", path: "/repos/owner/repo/releases", status, body: { message } },
     ]);
     await expect(publishRelease(github("t", fetch), { plan, expectedAssets: expected, directory })).rejects.toThrow(message);
@@ -325,6 +383,7 @@ describe("publishRelease", () => {
       { method: "GET", path: "/repos/owner/repo/git/ref/tags%2Fv1.2.3-beta.1", body: { object: { type: "tag", sha: "tag-sha" } } },
       { method: "GET", path: "/repos/owner/repo/git/tags/tag-sha", body: { tag: "v1.2.3-beta.1", tagger: { name: "server[bot]", email: "3000+server[bot]@users.noreply.github.com" }, object: { type: "commit", sha: mergeSha } } },
       { method: "GET", path: "/repos/owner/repo/releases/tags/v1.2.3-beta.1", status: 404, body: { message: "Not Found" } },
+      { method: "GET", path: "/repos/owner/repo/releases", body: [] },
       { method: "POST", path: "/repos/owner/repo/releases", status: 500, body: { message: "stop after inspecting request" } },
     ]);
     await expect(publishRelease(github("t", fetch), { plan: prereleasePlan, expectedAssets: expected, directory })).rejects.toThrow("stop after inspecting request");

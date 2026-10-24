@@ -156,9 +156,14 @@ async function findRelease(gh: GitHub, repo: ReturnType<typeof splitRepository>,
     const { data } = await gh.rest.repos.getReleaseByTag({ ...repo, tag });
     return data;
   } catch (error) {
-    if (status(error) === 404) return undefined;
-    throw error;
+    if (status(error) !== 404) throw error;
   }
+  // GitHub's by-tag endpoint only returns published releases. A draft is
+  // visible to this write-token job through the releases list instead.
+  const releases = await gh.paginate(gh.rest.repos.listReleases, { ...repo, per_page: 100 });
+  const drafts = releases.filter((release) => release.tag_name === tag && release.draft);
+  if (drafts.length > 1) throw new Rejection(`release ${tag} has multiple drafts`);
+  return drafts[0];
 }
 
 function status(error: unknown): number | undefined {

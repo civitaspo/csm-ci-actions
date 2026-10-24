@@ -35286,10 +35286,14 @@ async function findRelease(gh, repo, tag) {
     const { data } = await gh.rest.repos.getReleaseByTag({ ...repo, tag });
     return data;
   } catch (error) {
-    if (status2(error) === 404)
-      return;
-    throw error;
+    if (status2(error) !== 404)
+      throw error;
   }
+  const releases = await gh.paginate(gh.rest.repos.listReleases, { ...repo, per_page: 100 });
+  const drafts = releases.filter((release) => release.tag_name === tag && release.draft);
+  if (drafts.length > 1)
+    throw new Rejection(`release ${tag} has multiple drafts`);
+  return drafts[0];
 }
 function status2(error) {
   return typeof error === "object" && error !== null && "status" in error && typeof error.status === "number" ? error.status : undefined;

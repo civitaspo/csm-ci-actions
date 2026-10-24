@@ -224,15 +224,20 @@ export const release: Scenario[] = [
         });
         try {
           assert(draft.draft && Number(draft.author?.id) !== SERVER_BOT_ID, "foreign draft release was not authored by the owner");
-          const replay = await dispatch(ctx, CLIENT, "csm-ci-smoke.yml", { kind: "release", args: String(pr.number) });
-          assert(replay.conclusion === "success", `release replay request concluded ${replay.conclusion}`);
-          const requestJobs = await jobs(ctx, CLIENT, replay.id);
-          const requestLog = await jobLog(ctx, CLIENT, requestJobs.get("request")!.id);
-          const label = /created label (csm-ci-[^ ]+) \(/.exec(requestLog)?.[1];
-          assert(label, "release replay did not create a request label");
-          const pipeline = await releasePipeline(ctx, new Date(new Date(replay.created_at).getTime() - 2_000), pr, label);
-          expectJob(pipeline, "release-plan", "failure");
-          await expectLog(ctx, pipeline, "release-plan", /already exists and was not created by the Server bot/);
+          await withServerConfig(ctx, configureRelease("none"), async () => {
+            const replay = await dispatch(ctx, CLIENT, "csm-ci-smoke.yml", { kind: "release", args: String(pr.number) });
+            assert(replay.conclusion === "success", `release replay request concluded ${replay.conclusion}`);
+            const requestJobs = await jobs(ctx, CLIENT, replay.id);
+            const requestLog = await jobLog(ctx, CLIENT, requestJobs.get("request")!.id);
+            const label = /created label (csm-ci-[^ ]+) \(/.exec(requestLog)?.[1];
+            assert(label, "release replay did not create a request label");
+            const pipeline = await releasePipeline(ctx, new Date(new Date(replay.created_at).getTime() - 2_000), pr, label);
+            expectJob(pipeline, "release-plan", "success");
+            expectJob(pipeline, "release-publish", "failure");
+            await expectLog(ctx, pipeline, "release-publish", /was not created by the Server bot/);
+            const { data: assets } = await ctx.gh.rest.repos.listReleaseAssets({ ...splitRepository(CLIENT), release_id: draft.id });
+            assert(assets.length === 0, "foreign draft received release assets");
+          });
         } finally {
           const { data: latest } = await ctx.gh.rest.repos.getRelease({ ...splitRepository(CLIENT), release_id: draft.id });
           assert(latest.id === draft.id && latest.draft && Number(latest.author?.id) === Number(draft.author?.id), "foreign draft changed during collision test; refusing to delete it");
