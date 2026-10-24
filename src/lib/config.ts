@@ -25,6 +25,21 @@ export const PolicySchema = z.discriminatedUnion("type", [
 ]);
 export type Policy = z.infer<typeof PolicySchema>;
 
+const SecurefixPathRule = z.enum(["any", "semver", "version-only"]);
+const SecurefixRoute = z.strictObject({
+  name: z.string().regex(/^[a-z0-9-]+$/),
+  from: z.literal("default"),
+  to: z.string().min(1).refine((branch) => branch !== "default" && isSecurefixBranch(branch), "must be a safe branch name"),
+  workflow: z.string().min(1),
+  paths: z.record(z.string(), SecurefixPathRule).refine((paths) => Object.keys(paths).length > 0, "must include at least one path"),
+});
+export type SecurefixRoute = z.infer<typeof SecurefixRoute>;
+const SecurefixSchema = z.strictObject({
+  allow_workflow_changes: z.boolean(),
+  routes: z.array(SecurefixRoute).refine((routes) => new Set(routes.map((route) => route.name)).size === routes.length, "duplicate route name"),
+});
+export type SecurefixConfig = z.infer<typeof SecurefixSchema>;
+
 const RepositoryEntry = z.strictObject({
   name: z.string().min(1).transform((s) => s.toLowerCase()),
   ops: z.array(z.enum(OPS)).refine((ops) => new Set(ops).size === ops.length, "duplicate op"),
@@ -38,6 +53,7 @@ export const ConfigSchema = z
     approver: Principal,
     trust: z.strictObject({ committers: z.array(Principal), approvers: z.array(Principal) }),
     policies: z.array(PolicySchema),
+    securefix: SecurefixSchema.optional(),
     repositories: z.array(RepositoryEntry).min(1),
   })
   .superRefine((c, ctx) => {
@@ -50,11 +66,38 @@ export const ConfigSchema = z
     if (!c.owners.includes(serverOwner ?? "")) {
       ctx.addIssue({ code: "custom", path: ["server_repository"], message: "server_repository owner must be listed in owners" });
     }
+    if (c.repositories.some((r) => r.ops.includes("securefix")) && c.securefix === undefined) {
+      ctx.addIssue({ code: "custom", path: ["securefix"], message: "securefix settings are required when a repository enables securefix" });
+    }
+    for (const [index, route] of (c.securefix?.routes ?? []).entries()) {
+      if (!isSafeSecurefixPath(route.workflow) || !route.workflow.startsWith(".github/workflows/")) {
+        ctx.addIssue({ code: "custom", path: ["securefix", "routes", index, "workflow"], message: "must be a safe path under .github/workflows" });
+      }
+      if (route.from === route.to) {
+        ctx.addIssue({ code: "custom", path: ["securefix", "routes", index], message: "from and to must be different branches" });
+      }
+      for (const path of Object.keys(route.paths)) {
+        if (!isSafeSecurefixPath(path) || path.startsWith("!") || path.includes("!(") || path.includes("[!")) {
+          ctx.addIssue({ code: "custom", path: ["securefix", "routes", index, "paths", path], message: "must be a safe relative path or glob" });
+        }
+      }
+    }
   });
 export type Config = z.infer<typeof ConfigSchema>;
 
 export function parseConfig(text: string): Config {
   return ConfigSchema.parse(parseYaml(text));
+}
+
+function isSafeSecurefixPath(path: string): boolean {
+  return path.length > 0 && !path.startsWith("/") && !path.includes("\\") && !/[\u0000-\u001f\u007f]/u.test(path) &&
+    path.split("/").every((segment) => segment !== "" && segment !== "." && segment !== ".." && segment.toLowerCase() !== ".git");
+}
+
+function isSecurefixBranch(branch: string): boolean {
+  return branch === "default" || (/^[A-Za-z0-9._/-]+$/u.test(branch) && !branch.startsWith("-") && !branch.endsWith("/") &&
+    !branch.includes("..") && !branch.includes("//") && !branch.includes("@{") && branch !== "HEAD" &&
+    branch.split("/").every((part) => part.length > 0 && !part.startsWith(".") && !part.endsWith(".lock")));
 }
 
 // First matching entry wins, so a specific name can be listed before a broader glob.

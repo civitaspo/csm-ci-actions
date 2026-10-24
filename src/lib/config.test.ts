@@ -22,6 +22,10 @@ describe("parseConfig", () => {
     ["non-positive id", CONFIG_YAML.replace("client_bot_id: 2000", "client_bot_id: 0"), /client_bot_id/],
     ["missing repositories", CONFIG_YAML.replace(/repositories:[\s\S]*$/, "repositories: []\n"), /repositories/],
     ["malformed server repository", CONFIG_YAML.replace("Owner/Server", "Owner"), /server_repository/],
+    ["securefix enabled without settings", CONFIG_YAML.replace("ops: [approve, policy-check]", "ops: [approve, policy-check, securefix]"), /securefix settings are required/],
+    ["duplicate securefix route name", CONFIG_YAML.replace("repositories:", "securefix:\n  allow_workflow_changes: false\n  routes:\n    - { name: release-pr, from: default, to: release/next, workflow: .github/workflows/release-pr.yml, paths: { CHANGELOG.md: any } }\n    - { name: release-pr, from: default, to: release/next, workflow: .github/workflows/release-pr.yml, paths: { CHANGELOG.md: any } }\nrepositories:"), /duplicate route name/],
+    ["unsafe securefix route path", CONFIG_YAML.replace("repositories:", "securefix:\n  allow_workflow_changes: false\n  routes:\n    - { name: release-pr, from: default, to: release/next, workflow: .github/workflows/release-pr.yml, paths: { ../README.md: any } }\nrepositories:"), /safe relative path/],
+    ["unknown securefix route key", CONFIG_YAML.replace("repositories:", "securefix:\n  allow_workflow_changes: false\n  routes:\n    - { name: release-pr, from: default, to: release/next, workflow: .github/workflows/release-pr.yml, paths: { CHANGELOG.md: any }, extra: true }\nrepositories:"), /extra/],
   ];
   test.each(rejects)("rejects %s", (_, yaml, message) => {
     expect(() => parseConfig(yaml)).toThrow(message);

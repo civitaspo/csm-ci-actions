@@ -13,5 +13,8 @@ trust:
 policies:
   - { type: signed-commits }
   - { type: trusted-committers }
+securefix:
+  allow_workflow_changes: false
+  routes: []
 repositories:
-  - { name: civitaspo/testing-csm-ci-client, ops: [approve, merge, policy-check] }
+  - { name: civitaspo/testing-csm-ci-client, ops: [approve, merge, policy-check, securefix] }

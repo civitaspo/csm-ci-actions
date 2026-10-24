@@ -100,6 +100,8 @@ jobs:
 
 Each operation has a reusable client workflow. Pin it to a full commit SHA of csm-ci-actions.
 
+For securefix, configure its server-side routes and add the client packaging and request jobs as described in [securefix.md](securefix.md).
+
 `.github/workflows/csm-ci-approve.yml` asks for approvals ([approve.md](approve.md)):
 
 ```yaml

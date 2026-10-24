@@ -467,7 +467,7 @@ Every phase appends to the following files. Only append. Do not change existing 
 
 ### 6.4 Phase 4: securefix
 
-- **client:** A reusable workflow. It turns the diff files into an artifact (`actions/upload-artifact`, pinned by SHA) after it checks path safety. The limits are 512 files, 8MB per file and 10MB in total. It sends the `securefix` kind with `[run_id]`.
+- **client:** The `actions/securefix-client` composite action runs in the job that generated the dirty files. It checks path safety, enforces the 512-file, 8MB-per-file and 10MB-total limits, and uploads the artifact with the pinned official `actions/upload-artifact`. A dependent job calls the `client-securefix.yml` reusable workflow, which sends the `securefix` kind with the caller run's `[run_id]`. A job has its own runner, so the request workflow cannot package changes from the generator job's workspace.
 - **server**
   - Fetch the artifact from the other repo with `actions/download-artifact`, specifying `run-id` and `github-token`.
   - After the download, revalidate paths, sizes and symlinks.
@@ -479,6 +479,7 @@ Every phase appends to the following files. Only append. Do not change existing 
 - **Idempotency:** On a retry, treat it as success if the head is a commit that "has `run.head_sha` as its parent, was made by the server, and has content that matches the artifact".
 - **e2e:** Cover every item in first-release-plan.md. In particular, always include "a path that uses a PR from the same branch to a different base" (the defense for the new hole in S4).
 - **Note:** `createCommitOnBranch` cannot set the executable bit. State this in the docs.
+- See [securefix.md](securefix.md) for the caller workflow contract, configuration, and server validation details.
 
 ### 6.5 Phase 5a: release (publish)
 

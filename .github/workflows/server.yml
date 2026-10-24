@@ -47,7 +47,7 @@ jobs:
     environment: csm-ci
     # Keyed on the normalized repository and number from intake, so spelling variants share a group.
     concurrency:
-      group: csm-ci-${{ needs.intake.outputs.concurrency-key }}
+      group: csm-ci-${{ needs.intake.outputs.kind == 'securefix' && format('{0}/{1}/securefix', needs.intake.outputs.owner, needs.intake.outputs.name) || needs.intake.outputs.concurrency-key }}
       cancel-in-progress: false
     permissions:
       contents: read
@@ -68,6 +68,17 @@ jobs:
           repositories: ${{ needs.intake.outputs.name }}
           permission-contents: read
           permission-pull-requests: write
+      - id: securefix-read-token
+        if: needs.intake.outputs.kind == 'securefix'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ needs.intake.outputs.owner }}
+          repositories: ${{ needs.intake.outputs.name }}
+          permission-actions: read
+          permission-contents: read
+          permission-pull-requests: read
       # The approver App needs contents:write for its approval to count, but GitHub checks the
       # App's permissions, so this token stays at pull_requests:write.
       - id: approver-token
@@ -87,7 +98,87 @@ jobs:
           approver-token: ${{ steps.approver-token.outputs.token }}
           repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
           args: ${{ needs.intake.outputs.args }}
-      - if: needs.intake.outputs.kind != 'approve'
+      - id: securefix-locate
+        if: needs.intake.outputs.kind == 'securefix'
+        uses: ./.csm-ci-actions/actions/securefix
+        with:
+          mode: locate
+          server-token: ${{ steps.securefix-read-token.outputs.token }}
+          repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
+          run-id: ${{ fromJSON(needs.intake.outputs.args).run_id }}
+      - if: needs.intake.outputs.kind == 'securefix'
+        name: Bound securefix artifact extraction
+        env:
+          SECUREFIX_ARTIFACT_PATH: ${{ runner.temp }}/csm-ci-securefix
+        run: |
+          sudo mkdir -p "$SECUREFIX_ARTIFACT_PATH"
+          sudo mount -t tmpfs -o size=12m,nr_inodes=1024,mode=0700,uid="$(id -u)",gid="$(id -g)" tmpfs "$SECUREFIX_ARTIFACT_PATH"
+          mountpoint -q "$SECUREFIX_ARTIFACT_PATH"
+      - if: needs.intake.outputs.kind == 'securefix'
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        with:
+          name: ${{ steps.securefix-locate.outputs.artifact-name }}
+          github-token: ${{ steps.securefix-read-token.outputs.token }}
+          repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
+          run-id: ${{ fromJSON(needs.intake.outputs.args).run_id }}
+          path: ${{ runner.temp }}/csm-ci-securefix
+          digest-mismatch: error
+      - id: securefix-prepare
+        if: needs.intake.outputs.kind == 'securefix'
+        uses: ./.csm-ci-actions/actions/securefix
+        with:
+          mode: prepare
+          server-token: ${{ steps.securefix-read-token.outputs.token }}
+          repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
+          run-id: ${{ fromJSON(needs.intake.outputs.args).run_id }}
+          artifact-path: ${{ runner.temp }}/csm-ci-securefix
+      - id: securefix-write-token
+        if: >-
+          needs.intake.outputs.kind == 'securefix' &&
+          (steps.securefix-prepare.outputs.result == 'ready' || steps.securefix-prepare.outputs.route-mode == 'true') &&
+          steps.securefix-prepare.outputs.requires-workflows-write != 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ needs.intake.outputs.owner }}
+          repositories: ${{ needs.intake.outputs.name }}
+          permission-actions: read
+          permission-contents: write
+          permission-pull-requests: write
+      - id: securefix-workflow-token
+        if: needs.intake.outputs.kind == 'securefix' && steps.securefix-prepare.outputs.requires-workflows-write == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ needs.intake.outputs.owner }}
+          repositories: ${{ needs.intake.outputs.name }}
+          permission-actions: read
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
+      - if: >-
+          needs.intake.outputs.kind == 'securefix' &&
+          (steps.securefix-prepare.outputs.result == 'ready' || steps.securefix-prepare.outputs.route-mode == 'true')
+        uses: ./.csm-ci-actions/actions/securefix
+        with:
+          mode: apply
+          server-token: ${{ steps.securefix-read-token.outputs.token }}
+          write-token: ${{ steps.securefix-workflow-token.outputs.token || steps.securefix-write-token.outputs.token }}
+          repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
+          run-id: ${{ fromJSON(needs.intake.outputs.args).run_id }}
+          artifact-path: ${{ runner.temp }}/csm-ci-securefix
+      - if: always() && needs.intake.outputs.kind == 'securefix'
+        name: Release securefix artifact extraction space
+        env:
+          SECUREFIX_ARTIFACT_PATH: ${{ runner.temp }}/csm-ci-securefix
+        run: |
+          if mountpoint -q "$SECUREFIX_ARTIFACT_PATH"; then
+            sudo umount "$SECUREFIX_ARTIFACT_PATH"
+          fi
+          sudo rm -rf "$SECUREFIX_ARTIFACT_PATH"
+      - if: needs.intake.outputs.kind != 'approve' && needs.intake.outputs.kind != 'securefix'
         env:
           KIND: ${{ needs.intake.outputs.kind }}
         run: echo "no $KIND handler yet"

@@ -1,0 +1,42 @@
+name: csm-ci securefix
+description: Validate a securefix workflow run and apply its bounded artifact.
+inputs:
+  mode:
+    description: locate, prepare, or apply.
+    required: true
+  github-token:
+    description: Token with contents:read on the server repository to read csm-ci.yaml.
+    default: ${{ github.token }}
+  server-token:
+    description: Read token for the target repository with actions:read, contents:read, and pull_requests:read.
+  write-token:
+    description: Write token for the target repository, minted only after prepare succeeds.
+  config-path:
+    description: Path of csm-ci.yaml in the server repository.
+    default: csm-ci.yaml
+  repository:
+    description: owner/repo of the client repository.
+    required: true
+  run-id:
+    description: Workflow run id from the securefix request.
+    required: true
+  artifact-path:
+    description: Directory where the official download-artifact action extracted the artifact.
+outputs:
+  artifact-name:
+    description: Exact artifact name to download after locate succeeds.
+  artifact-id:
+    description: GitHub artifact id that locate verified for this workflow run.
+  result:
+    description: ready, already-applied, applied, or no-op state.
+  requires-workflows-write:
+    description: true only after the artifact and config allow workflow changes.
+  route-mode:
+    description: true when the run is bound to a configured securefix route.
+  commit:
+    description: Commit created or verified by securefix.
+  pull-request:
+    description: Route pull request created or updated by securefix.
+runs:
+  using: node24
+  main: ../../dist/securefix.js

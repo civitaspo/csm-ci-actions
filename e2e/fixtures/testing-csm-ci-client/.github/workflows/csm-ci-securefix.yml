@@ -1,0 +1,35 @@
+name: csm-ci-securefix
+
+on:
+  pull_request:
+    paths-ignore:
+      - e2e/securefix-result.txt
+
+permissions: {}
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      has-changes: ${{ steps.securefix.outputs.has-changes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Generate the securefix e2e change
+        env:
+          RUN_ID: ${{ github.run_id }}
+        run: printf 'securefix run %s\n' "$RUN_ID" > e2e/securefix-result.txt
+      - id: securefix
+        uses: civitaspo/csm-ci-actions/actions/securefix-client@e2e
+        with:
+          workspace: ${{ github.workspace }}
+  request:
+    needs: package
+    if: needs.package.outputs.has-changes == 'true'
+    uses: civitaspo/csm-ci-actions/.github/workflows/client-securefix.yml@e2e
+    secrets: inherit

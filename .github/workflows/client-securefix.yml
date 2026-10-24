@@ -1,0 +1,36 @@
+name: csm-ci client securefix request
+
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  securefix:
+    if: >-
+      contains(fromJSON('["pull_request", "push", "workflow_dispatch"]'), github.event_name) &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .csm-ci-actions
+          persist-credentials: false
+      - id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_CLIENT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ vars.CSM_CI_SERVER_REPOSITORY }}
+          permission-issues: write
+      - uses: ./.csm-ci-actions/actions/request
+        with:
+          github-token: ${{ steps.token.outputs.token }}
+          server-repository: ${{ vars.CSM_CI_SERVER_REPOSITORY }}
+          kind: securefix
+          args: ${{ github.run_id }}

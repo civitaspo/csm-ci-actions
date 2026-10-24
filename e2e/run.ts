@@ -10,8 +10,9 @@ import { type GitHub, github, splitRepository } from "../src/lib/github.ts";
 import { approve } from "./approve.ts";
 import { ACTIONS, assert, type Ctx, hasStatus, moveE2eBranch, type Scenario, sleep, syncFixtures } from "./harness.ts";
 import { smoke } from "./smoke.ts";
+import { securefix } from "./securefix.ts";
 
-const FEATURES: Record<string, Scenario[]> = { smoke, approve };
+const FEATURES: Record<string, Scenario[]> = { smoke, approve, securefix };
 
 const LOCK = "e2e-lock";
 const LOCK_TTL_MS = 60 * 60_000;
