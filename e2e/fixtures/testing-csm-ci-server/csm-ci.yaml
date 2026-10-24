@@ -14,4 +14,4 @@ policies:
   - { type: signed-commits }
   - { type: trusted-committers }
 repositories:
-  - { name: civitaspo/testing-csm-ci-client, ops: [approve, merge, policy-check] }
+  - { name: civitaspo/testing-csm-ci-client, ops: [approve, merge, policy-check, release], release: { build_type: none } }

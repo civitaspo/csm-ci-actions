@@ -48,7 +48,16 @@ repositories:
   - { name: your-account/*, ops: [approve, merge, policy-check] }
 ```
 
-The schema rejects unknown keys and puts the server bot in no trust list.
+The schema rejects unknown keys and puts the server bot in no trust list. To enable releases for a repository, add `release` to `ops` and choose a build type:
+
+```yaml
+repositories:
+  - name: your-account/my-action
+    ops: [approve, merge, policy-check, release]
+    release: { build_type: js-action }
+```
+
+For Rust projects, use a non-empty `targets` list for `cargo`. The list is restricted to supported target triples so configuration cannot select arbitrary GitHub runners.
 
 ## 4. Add the server workflows
 
@@ -130,3 +139,21 @@ trust:
   approvers:
     - { id: 0, login: your-account }
 ```
+
+For releases, enable the `release` op and select its build type in `csm-ci.yaml`. Add a client caller that requests a release after a `release/next` PR is merged:
+
+```yaml
+name: csm-ci-release
+on:
+  pull_request:
+    types: [closed]
+permissions: {}
+jobs:
+  release:
+    # The reusable workflow needs the Client App key from the client repository.
+    # jactionlint ignore=secrets-inherit
+    uses: civitaspo/csm-ci-actions/.github/workflows/client-release.yml@<sha>
+    secrets: inherit
+```
+
+The Server App creates the tag and release. The release build job runs without secrets or credentials.

@@ -1,0 +1,5 @@
+version = 4
+
+[[package]]
+name = "testing-csm-ci-client"
+version = "0.1.0"

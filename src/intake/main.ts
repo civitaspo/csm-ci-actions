@@ -11,7 +11,7 @@ function env(name: string): string {
 }
 
 async function main(): Promise<void> {
-  const request = await runIntake(github(core.getInput("github-token", { required: true })), {
+  const { request, release, serverBotId } = await runIntake(github(core.getInput("github-token", { required: true })), {
     event: JSON.parse(readFileSync(env("GITHUB_EVENT_PATH"), "utf8")),
     repository: env("GITHUB_REPOSITORY"),
     sha: env("GITHUB_SHA"),
@@ -25,6 +25,8 @@ async function main(): Promise<void> {
   core.setOutput("name", repo);
   core.setOutput("args", JSON.stringify(request.args));
   core.setOutput("concurrency-key", concurrencyKey(request));
+  core.setOutput("release", release ? JSON.stringify(release) : "");
+  core.setOutput("server-bot-id", String(serverBotId));
   core.info(`accepted ${request.kind} for ${request.repository} ${JSON.stringify(request.args)}`);
 }
 

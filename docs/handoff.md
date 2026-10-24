@@ -482,13 +482,14 @@ Every phase appends to the following files. Only append. Do not change existing 
 
 ### 6.5 Phase 5a: release (publish)
 
-- **spike (the first PR):** Settle the attestation storage location, the predicate shape and the verification command against real runs.
+- The attestation spike passed in [testing server run 40117137591](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40117137591). Its storage location, predicate shape and verification command are recorded in [release-attestation.md](release-attestation.md).
+- The release config is strict. A repository entry that enables `release` must include `release: { build_type: ... }`; all other entries must omit it. `cargo` also requires a unique, non-empty list of supported target triples. The list maps to fixed hosted runner labels in `src/release/runners.ts`.
 - **Job separation**
-  - **plan:** Read token. Check that the PR is merged, that `merged_by` is the Server bot, that it is a PR from `release/next` to the default branch, and that `.release-version` is a semver. The server creates the tag.
-  - **build:** `permissions: {}`, no secrets, no environment and no cache. Use a composite action per `build_type` (`actions/release-build/<type>/`).
-  - **publish:** Checksum, attestation, draft creation, upload, confirmation that the asset set matches exactly, publish, and confirmation that the release is immutable.
-- **Tag ruleset:** Add `release-tags` to testing-csm-ci-client (forbid creating, updating and deleting `refs/tags/v*`. The only bypass is the Server App).
-- **build_type:** none, js-action (check-dist), goreleaser, cargo. In the e2e, start with none and js-action. goreleaser and cargo need testing client material (small Go and Rust programs). Place them as fixtures.
+  - **plan:** Read the PR, `.release-version`, tag and release with a Server App contents:read token. A separate contents:write token is minted only after validation, to create a missing annotated tag. The plan job then archives tracked source at the merge SHA.
+  - **build:** Downloads only the source archive and runs a composite action per `build_type` (`actions/release-build/<type>/`). It has `permissions: {}`, no secrets, no environment, no cache and no OIDC permission.
+  - **publish:** Downloads build artifacts, validates flat regular files, writes `SHA256SUMS`, attests every asset with the plan facts, then creates or resumes a draft. It uploads without overwriting, confirms the exact asset set and digests, publishes, and confirms the release is immutable and the tag points to the merge SHA.
+- **Tag ruleset:** Add `release-tags` to testing-csm-ci-client (forbid creating, updating and deleting `refs/tags/v*`. The only bypass is the Server App). Phase 6 will sync the ruleset.
+- **build_type:** none, js-action (check-dist), goreleaser and cargo. E2E fixtures include a minimal JavaScript action, GoReleaser project and Cargo binary. Run all four build types against the testing client before calling Phase 5a verified.
 
 ### 6.6 Phase 5b: release-pr (after Phase 4)
 

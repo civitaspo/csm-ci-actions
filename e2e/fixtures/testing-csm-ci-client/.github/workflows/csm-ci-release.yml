@@ -1,0 +1,14 @@
+name: csm-ci-release
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions: {}
+
+jobs:
+  release:
+    # The reusable workflow needs the Client App key from the client repository.
+    # jactionlint ignore=secrets-inherit
+    uses: civitaspo/csm-ci-actions/.github/workflows/client-release.yml@e2e
+    secrets: inherit

@@ -1,0 +1,30 @@
+name: csm-ci release build (js-action)
+description: Rebuild a JavaScript action and fail if its committed dist differs.
+inputs:
+  client-path:
+    description: Path to the isolated source snapshot.
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      with:
+        bun-version: 1.4.3
+    - shell: bash
+      env:
+        CLIENT_PATH: ${{ inputs.client-path }}
+      run: |
+        cd "$CLIENT_PATH"
+        if [ -z "$(git ls-files dist/)" ]; then
+          echo "dist/ has no committed files at the release commit" >&2
+          exit 1
+        fi
+        bun install --frozen-lockfile --ignore-scripts
+        bun run build
+        git add -f -- dist/
+        if ! git diff --cached --quiet HEAD -- dist/; then
+          git diff --cached --stat HEAD -- dist/
+          echo "dist/ differs from the build output at the release commit" >&2
+          exit 1
+        fi
+        mkdir -p ../assets

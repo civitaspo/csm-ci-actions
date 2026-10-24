@@ -1,0 +1,9 @@
+version: 2
+project_name: testing-csm-ci-client
+builds:
+  - main: ./cmd/release-fixture
+    env: [CGO_ENABLED=0]
+    goos: [linux]
+    goarch: [amd64]
+archives:
+  - formats: [tar.gz]
