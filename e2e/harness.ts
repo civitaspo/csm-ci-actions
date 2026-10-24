@@ -206,7 +206,7 @@ export type RequestMatch = { kind: string; repository: string; args: Record<stri
 
 // signed: createCommitOnBranch, which GitHub signs as web-flow for the token's user.
 // Otherwise the REST contents API, whose commits GitHub leaves unsigned.
-export async function openPr(ctx: Ctx, kind: "signed" | "unsigned", as: GitHub = ctx.gh, author?: { name: string; email: string }, prAs: GitHub = ctx.gh, filePath?: string, draft = false): Promise<Pr> {
+export async function openPr(ctx: Ctx, kind: "signed" | "unsigned", as: GitHub = ctx.gh, author?: { name: string; email: string }, prAs: GitHub = ctx.gh, filePath?: string, draft = false, fileContent?: string): Promise<Pr> {
   const repo = splitRepository(CLIENT);
   const base = (await ctx.gh.rest.repos.getBranch({ ...repo, branch: "main" })).data.commit.sha;
   const branch = `e2e-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
@@ -221,7 +221,7 @@ export async function openPr(ctx: Ctx, kind: "signed" | "unsigned", as: GitHub =
           branch: { repositoryNameWithOwner: CLIENT, branchName: branch },
           message: { headline: `e2e ${branch}` },
           expectedHeadOid: base,
-          fileChanges: { additions: [{ path, contents: Buffer.from(`${branch}\n`).toString("base64") }] },
+          fileChanges: { additions: [{ path, contents: Buffer.from(fileContent ?? `${branch}\n`).toString("base64") }] },
         },
       },
     );
@@ -232,7 +232,7 @@ export async function openPr(ctx: Ctx, kind: "signed" | "unsigned", as: GitHub =
       path,
       branch,
       message: `e2e ${branch}`,
-      content: Buffer.from(`${branch}\n`).toString("base64"),
+      content: Buffer.from(fileContent ?? `${branch}\n`).toString("base64"),
       ...(author ? { author, committer: author } : {}),
     });
     head = data.commit.sha ?? "";

@@ -12,8 +12,9 @@ import { ACTIONS, assert, type Ctx, hasStatus, moveE2eBranch, type Scenario, sle
 import { policyCheck } from "./policy-check.ts";
 import { merge } from "./merge.ts";
 import { smoke } from "./smoke.ts";
+import { securefix } from "./securefix.ts";
 
-const FEATURES: Record<string, Scenario[]> = { smoke, approve, merge, "policy-check": policyCheck };
+const FEATURES: Record<string, Scenario[]> = { smoke, approve, merge, "policy-check": policyCheck, securefix };
 
 const LOCK = "e2e-lock";
 const LOCK_TTL_MS = 60 * 60_000;

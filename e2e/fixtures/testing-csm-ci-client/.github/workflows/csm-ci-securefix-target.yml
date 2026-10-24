@@ -1,0 +1,36 @@
+name: csm-ci-securefix-target
+run-name: csm-ci-securefix-target ${{ github.event.pull_request.number }}
+on:
+  pull_request_target:
+    paths:
+      - e2e/securefix-target-trigger.txt
+permissions: {}
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - name: Create a securefix artifact for the rejected event
+        run: |
+          mkdir -p securefix/files
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { mkdirSync, writeFileSync } from "node:fs";
+          mkdirSync("securefix/files", { recursive: true });
+          const content = Buffer.from("target event\\n");
+          writeFileSync("securefix/files/0000", content);
+          writeFileSync("securefix/manifest.json", JSON.stringify({
+            version: 1,
+            repository: process.env.GITHUB_REPOSITORY,
+            run_id: Number(process.env.GITHUB_RUN_ID),
+            head_sha: process.env.GITHUB_SHA,
+            message: "e2e pull_request_target rejection",
+            files: [{ kind: "write", path: "e2e/target-result.txt", size: content.length, sha256: createHash("sha256").update(content).digest("hex") }],
+          }));
+          NODE
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: securefix
+          path: securefix/
+          if-no-files-found: error
+          retention-days: 1

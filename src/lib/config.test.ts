@@ -25,11 +25,51 @@ describe("parseConfig", () => {
     ["non-positive id", CONFIG_YAML.replace("client_bot_id: 2000", "client_bot_id: 0"), /client_bot_id/],
     ["missing repositories", CONFIG_YAML.replace(/repositories:[\s\S]*$/, "repositories: []\n"), /repositories/],
     ["malformed server repository", CONFIG_YAML.replace("Owner/Server", "Owner"), /server_repository/],
+    ["securefix enabled without settings", CONFIG_YAML.replace("ops: [approve, merge, policy-check]", "ops: [approve, merge, policy-check, securefix]"), /securefix settings are required/],
+    ["duplicate securefix route name", CONFIG_YAML.replace("repositories:", "securefix:\n  allow_workflow_changes: false\n  routes:\n    - { name: release-pr, from: default, to: release/next, workflow: .github/workflows/release-pr.yml, paths: { CHANGELOG.md: any } }\n    - { name: release-pr, from: default, to: release/next, workflow: .github/workflows/release-pr.yml, paths: { CHANGELOG.md: any } }\nrepositories:"), /duplicate route name/],
+    ["unsafe securefix route path", CONFIG_YAML.replace("repositories:", "securefix:\n  allow_workflow_changes: false\n  routes:\n    - { name: release-pr, from: default, to: release/next, workflow: .github/workflows/release-pr.yml, paths: { ../README.md: any } }\nrepositories:"), /safe relative path/],
+    ["unknown securefix route key", CONFIG_YAML.replace("repositories:", "securefix:\n  allow_workflow_changes: false\n  routes:\n    - { name: release-pr, from: default, to: release/next, workflow: .github/workflows/release-pr.yml, paths: { CHANGELOG.md: any }, extra: true }\nrepositories:"), /extra/],
+    ["securefix unknown key", CONFIG_YAML.replace("repositories:", "securefix:\n  allow_workflow_changes: false\n  routes: []\n  extra: true\nrepositories:"), /extra/],
+    ["invalid securefix route name", routeConfig("{ name: Release_PR, from: default, to: release/stable, workflow: .github/workflows/release-pr.yml, paths: { CHANGELOG.md: any } }"), /must match pattern/],
+    ["securefix route from must be default", routeConfig("{ name: release-pr, from: release/next, to: release/stable, workflow: .github/workflows/release-pr.yml, paths: { CHANGELOG.md: any } }"), /Invalid input/],
+    ["empty securefix target branch", routeConfig("{ name: release-pr, from: default, to: '', workflow: .github/workflows/release-pr.yml, paths: { CHANGELOG.md: any } }"), /Too small/],
+    ...[
+      ["default", /safe branch name/],
+      ["-release", /safe branch name/],
+      ["release/", /safe branch name/],
+      ["release..next", /safe branch name/],
+      ["release//next", /safe branch name/],
+      ["release@{next}", /safe branch name/],
+      ["HEAD", /safe branch name/],
+      ["release/.hidden", /safe branch name/],
+      ["release/file.lock", /safe branch name/],
+      ["release?next", /safe branch name/],
+    ].map(([branch, message]) => [`unsafe securefix target branch ${branch}`, routeConfig(`{ name: release-pr, from: default, to: '${branch}', workflow: .github/workflows/release-pr.yml, paths: { CHANGELOG.md: any } }`), message] as [string, string, RegExp]),
+    ["empty securefix workflow", routeConfig("{ name: release-pr, from: default, to: release/next, workflow: '', paths: { CHANGELOG.md: any } }"), /Too small/],
+    ["unsafe securefix workflow path", routeConfig("{ name: release-pr, from: default, to: release/next, workflow: ../workflow.yml, paths: { CHANGELOG.md: any } }"), /safe path under .github\/workflows/],
+    ["securefix workflow outside workflows directory", routeConfig("{ name: release-pr, from: default, to: release/next, workflow: .github/actions/release.yml, paths: { CHANGELOG.md: any } }"), /safe path under .github\/workflows/],
+    ["empty securefix path map", routeConfig("{ name: release-pr, from: default, to: release/next, workflow: .github/workflows/release-pr.yml, paths: {} }"), /at least one path/],
+    ["empty securefix path glob", routeConfig("{ name: release-pr, from: default, to: release/next, workflow: .github/workflows/release-pr.yml, paths: { '': any } }"), /safe relative path or glob/],
+    ...[
+      "../README.md",
+      "/README.md",
+      "src\\README.md",
+      ".git/config",
+      "src//README.md",
+      "./README.md",
+      "src/../README.md",
+    ].map((path) => [`unsafe securefix path glob ${JSON.stringify(path)}`, routeConfig(`{ name: release-pr, from: default, to: release/next, workflow: .github/workflows/release-pr.yml, paths: { '${path}': any } }`), /safe relative path or glob/] as [string, string, RegExp]),
+    ...["!README.md", "src/!(generated).ts", "src/[!a].ts"].map((path) => [`negated securefix path glob ${path}`, routeConfig(`{ name: release-pr, from: default, to: release/next, workflow: .github/workflows/release-pr.yml, paths: { '${path}': any } }`), /safe relative path or glob/] as [string, string, RegExp]),
+    ["unknown securefix path rule", routeConfig("{ name: release-pr, from: default, to: release/next, workflow: .github/workflows/release-pr.yml, paths: { CHANGELOG.md: no-such-rule } }"), /Invalid option/],
   ];
   test.each(rejects)("rejects %s", (_, yaml, message) => {
     expect(() => parseConfig(yaml)).toThrow(message);
   });
 });
+
+function routeConfig(route: string): string {
+  return CONFIG_YAML.replace("repositories:", `securefix:\n  allow_workflow_changes: false\n  routes:\n    - ${route}\nrepositories:`);
+}
 
 describe("repositoryEntry", () => {
   const cases: [string, string, Op[] | undefined][] = [

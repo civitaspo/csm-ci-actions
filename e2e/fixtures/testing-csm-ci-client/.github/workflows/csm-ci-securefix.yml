@@ -1,0 +1,66 @@
+name: csm-ci-securefix
+
+on:
+  pull_request:
+    types: [opened]
+    paths:
+      - e2e/securefix-trigger.txt
+
+permissions: {}
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      has-changes: ${{ steps.securefix.outputs.has-changes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Generate the securefix e2e change
+        env:
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          mode="$(cat e2e/securefix-trigger.txt)"
+          case "$mode" in
+            unsafe-path)
+              name="$(printf 'e2e/bad\001path')"
+              printf 'unsafe\n' > "$name"
+              ;;
+            symlink)
+              ln -s securefix-trigger.txt e2e/securefix-link
+              ;;
+            file-limit)
+              mkdir -p e2e/securefix-generated
+              for index in $(seq 1 513); do
+                printf '%s\n' "$index" > "e2e/securefix-generated/$index.txt"
+              done
+              ;;
+            single-file-size-limit)
+              mkdir -p e2e/securefix-generated
+              node -e 'require("node:fs").writeFileSync("e2e/securefix-generated/large.txt", Buffer.alloc(8 * 1024 * 1024 + 1))'
+              ;;
+            total-size-limit)
+              mkdir -p e2e/securefix-generated
+              node -e 'const fs = require("node:fs"); const content = Buffer.alloc(5 * 1024 * 1024 + 1); fs.writeFileSync("e2e/securefix-generated/first.txt", content); fs.writeFileSync("e2e/securefix-generated/second.txt", content)'
+              ;;
+            workflow-change)
+              printf 'name: generated\n' > .github/workflows/securefix-generated.yml
+              ;;
+            *)
+              printf 'securefix run %s\n' "$RUN_ID" > e2e/securefix-result.txt
+              ;;
+          esac
+      - id: securefix
+        uses: civitaspo/csm-ci-actions/actions/securefix-client@e2e
+        with:
+          workspace: ${{ github.workspace }}
+  request:
+    needs: package
+    if: needs.package.outputs.has-changes == 'true'
+    uses: civitaspo/csm-ci-actions/.github/workflows/client-securefix.yml@e2e
+    secrets: inherit
