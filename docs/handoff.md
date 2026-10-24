@@ -545,7 +545,7 @@ The harness runs in this order.
   for n in $(gh pr list --repo civitaspo/testing-csm-ci-client --state open --json number,headRefName --jq '.[] | select(.headRefName|startswith("e2e-")) | .number'); do gh pr close $n --repo civitaspo/testing-csm-ci-client --delete-branch; done
   ```
 
-- Match server runs to the accepted request in the intake log, including its operation, repository, PR number and comment id. Directly created labels are matched by label name in the cleanup log. The time bound only limits the search to the scenario's own activity.
+- Match server runs only by the accepted request in the intake log, including its operation, repository, PR number and comment id, or by an exact label name in the cleanup log for labels rejected before parsing. Similar error text is never an identity. Search all workflow-run pages within the scenario time window.
 - Client issue-comment workflow run names include the PR number and comment id so a skipped request can be matched to the exact comment.
 - **The server's receipt comment also triggers issue_comment.** The prefilter rejects that client run because of the bot's association (`NONE`), so it skips. The server runs do not increase.
 - **For scenarios that need a second identity,** set `needsUntrusted: true`. They are SKIPped on your machine and run only in the CI e2e workflow.
@@ -579,7 +579,7 @@ The harness runs in this order.
 
 | Condition | Impact | Current limitation | Proposed fix |
 |---|---|---|---|
-| Intake rejects a request before logging its parsed arguments | A malformed/rejected request cannot be correlated from the intake log | The smoke rejection case matches its rejection log pattern; direct labels match the cleanup label | Emit the normalized request identity before validation where safe, or retain the label name from client output |
+| Workflow-run logs are unavailable before the scenario window expires | A run cannot be correlated or inspected | Correlation requires the accepted-request intake line or exact cleanup label line | Preserve the request identity in workflow metadata so correlation does not depend on downloadable logs |
 
 ## 9. Verification record (key runs)
 

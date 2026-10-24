@@ -1,5 +1,6 @@
 import { splitRepository } from "../src/lib/github.ts";
 import { marker } from "../src/lib/notify.ts";
+import { matchesAcceptedRequest } from "./correlation.ts";
 import {
   approverReviews,
   assert,
@@ -16,7 +17,7 @@ import {
   jobs,
   SERVER,
   serverComments,
-  serverRuns,
+  recentWorkflowRuns,
   sleep,
   until,
 } from "./harness.ts";
@@ -65,10 +66,12 @@ async function expectRejectedCommand(ctx: Ctx, pr: Pr, body: string, pattern: Re
 async function expectEveryOp(ctx: Ctx, match: {kind:string; repository:string; args:Record<string,number>}, since: Date, op: "success" | "failure", logPattern: RegExp): Promise<void> {
   await sleep(20_000);
   const runs = await until("the server runs to finish", async () => {
-    const { data } = await ctx.gh.rest.actions.listWorkflowRuns({ ...splitRepository(SERVER), workflow_id: "csm-ci.yml", event: "label", per_page: 10 });
-    const recent = data.workflow_runs.filter((r) => new Date(r.created_at) >= since);
+    const recent = await recentWorkflowRuns(ctx, SERVER, "csm-ci.yml", "label", since);
     const found = [];
-    for (const run of recent) { const intake = (await jobs(ctx, SERVER, run.id)).get("intake"); if (intake && (await jobLog(ctx, SERVER, intake.id)).includes(`accepted ${match.kind} for ${match.repository} ${JSON.stringify(match.args)}`)) found.push(run); }
+    for (const run of recent) {
+      const intake = (await jobs(ctx, SERVER, run.id)).get("intake");
+      if (intake && matchesAcceptedRequest(await jobLog(ctx, SERVER, intake.id), match)) found.push(run);
+    }
     return found.length > 0 && found.every((r) => r.status === "completed") ? found : undefined;
   });
   for (const run of runs) {
@@ -80,10 +83,10 @@ async function expectEveryOp(ctx: Ctx, match: {kind:string; repository:string; a
 }
 
 // Waits for the issue_comment runs of the client workflow and checks that their request job was skipped.
-async function expectClientSkipped(ctx: Ctx, pr: number, commentIds: number[]): Promise<void> {
+async function expectClientSkipped(ctx: Ctx, since: Date, pr: number, commentIds: number[]): Promise<void> {
   const runs = await until(`${commentIds.length} client issue_comment runs`, async () => {
-    const { data } = await ctx.gh.rest.actions.listWorkflowRuns({ ...splitRepository(CLIENT), workflow_id: "csm-ci-approve.yml", event: "issue_comment", per_page: 100 });
-    const found = data.workflow_runs.filter((r) => commentIds.some((id) => r.display_title?.includes(`comment #${id}`)));
+    const recent = await recentWorkflowRuns(ctx, CLIENT, "csm-ci-approve.yml", "issue_comment", since);
+    const found = recent.filter((r) => commentIds.some((id) => r.display_title?.includes(`comment #${id}`)));
     return found.length >= commentIds.length && found.every((r) => r.status === "completed") ? found : undefined;
   });
   for (const run of runs) {
@@ -98,10 +101,12 @@ async function expectClientSkipped(ctx: Ctx, pr: number, commentIds: number[]): 
 // After the client runs are done, no label can still be on its way.
 async function expectNoServerRun(ctx: Ctx, since: Date, match: {kind:string; repository:string; args:Record<string,number>}): Promise<void> {
   await sleep(15_000);
-  const { data } = await ctx.gh.rest.actions.listWorkflowRuns({ ...splitRepository(SERVER), workflow_id: "csm-ci.yml", event: "label", per_page: 10 });
-  const recent = data.workflow_runs.filter((r) => new Date(r.created_at) >= since);
+  const recent = await recentWorkflowRuns(ctx, SERVER, "csm-ci.yml", "label", since);
   const runs = [];
-  for (const run of recent) { const intake = (await jobs(ctx, SERVER, run.id)).get("intake"); if (intake && (await jobLog(ctx, SERVER, intake.id)).includes(`accepted ${match.kind} for ${match.repository} ${JSON.stringify(match.args)}`)) runs.push(run); }
+  for (const run of recent) {
+    const intake = (await jobs(ctx, SERVER, run.id)).get("intake");
+    if (intake && matchesAcceptedRequest(await jobLog(ctx, SERVER, intake.id), match)) runs.push(run);
+  }
   assert(runs.length === 0, `expected no server run, found ${runs.map((r) => r.html_url).join(", ")}`);
 }
 
@@ -240,7 +245,7 @@ export const approve: Scenario[] = [
         const untrusted = ctxUntrusted(ctx);
         const a = await postComment(ctx, pr, "/approve", untrusted);
         const b = await postComment(ctx, pr, "/recheck", untrusted);
-        await expectClientSkipped(ctx, pr.number, [a.id, b.id]);
+        await expectClientSkipped(ctx, a.since, pr.number, [a.id, b.id]);
         await expectNoServerRun(ctx, a.since, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: a.id } });
         await expectNoServerRun(ctx, b.since, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: b.id } });
       }),

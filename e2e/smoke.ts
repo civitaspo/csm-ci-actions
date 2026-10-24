@@ -26,15 +26,15 @@ export const smoke: Scenario[] = [
   {
     name: "a client app label passes intake and is deleted",
     run: async (ctx) => {
-      const since = await smokeRequest(ctx, "policy-check", "1");
-      await expectServer(ctx, { kind: "policy-check", repository: CLIENT, args: { pull_number: 1 } }, since, "success", "success", /accepted policy-check for civitaspo\/testing-csm-ci-client \{"pull_number":1\}/);
+      const request = await smokeRequest(ctx, "policy-check", "1");
+      await expectServer(ctx, { kind: "policy-check", repository: CLIENT, args: { pull_number: 1 } }, request.since, "success", "success", /accepted policy-check for civitaspo\/testing-csm-ci-client \{"pull_number":1\}/);
     },
   },
   {
     name: "a request for an op the repository does not enable is rejected and deleted",
     run: async (ctx) => {
-      const since = await smokeRequest(ctx, "securefix", "1");
-      await expectServer(ctx, { kind: "securefix", repository: CLIENT, args: { run_id: 1 } }, since, "failure", "skipped", /does not enable securefix/);
+      const request = await smokeRequest(ctx, "securefix", "1");
+      await expectServer(ctx, { kind: "securefix", repository: CLIENT, args: { run_id: 1 }, label: request.label }, request.since, "failure", "skipped", /does not enable securefix/);
     },
   },
   {

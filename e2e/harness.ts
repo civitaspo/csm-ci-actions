@@ -3,6 +3,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { parseArgs } from "node:util";
 import { type GitHub, splitRepository } from "../src/lib/github.ts";
+import { matchesAcceptedRequest, recentItems } from "./correlation.ts";
 
 export const OWNER = "civitaspo";
 export const ACTIONS = `${OWNER}/csm-ci-actions`;
@@ -12,7 +13,7 @@ const FIXTURES = join(import.meta.dir, "fixtures");
 const POLL_MS = 5_000;
 const TIMEOUT_MS = 10 * 60_000;
 
-export type Run = { id: number; html_url: string; status: string | null; conclusion: string | null; created_at: string };
+export type Run = { id: number; html_url: string; status: string | null; conclusion: string | null; created_at: string; display_title: string };
 export type Ctx = { gh: GitHub; urls: string[]; untrusted: GitHub | undefined };
 export type Scenario = { name: string; needsUntrusted?: boolean; run: (ctx: Ctx) => Promise<void> };
 
@@ -115,25 +116,32 @@ export async function waitRun(ctx: Ctx, repository: string, id: number): Promise
   return run;
 }
 
-export async function serverRuns(ctx: Ctx, match: RequestMatch, since?: Date, pattern?: RegExp): Promise<Run[]> {
-  return until("the server run for the request", async () => {
-    const { data } = await ctx.gh.rest.actions.listWorkflowRuns({ ...splitRepository(SERVER), workflow_id: "csm-ci.yml", event: "label", per_page: 10 });
-    const candidates = data.workflow_runs.filter((r) => (!since || new Date(r.created_at) >= since) && r.status === "completed");
-    const found: Run[] = [];
-    for (const run of candidates) {
-      const byName = await jobs(ctx, SERVER, run.id);
-      const intake = byName.get("intake");
-      if (!intake) continue;
-      const log = await jobLog(ctx, SERVER, intake.id);
-      const accepted = `accepted ${match.kind} for ${match.repository} ${JSON.stringify(match.args)}`;
-      if (log.includes(accepted) || (pattern && pattern.test(log))) found.push(run);
-      else if (match.label) {
-        const cleanup = byName.get("cleanup");
-        if (cleanup && (await jobLog(ctx, SERVER, cleanup.id)).includes(`LABEL: ${match.label}`)) found.push(run);
-      }
+export async function recentWorkflowRuns(ctx: Ctx, repository: string, workflow: string, event: string, since: Date): Promise<Run[]> {
+  async function* pages() {
+    const iterator = ctx.gh.paginate.iterator(ctx.gh.rest.actions.listWorkflowRuns, {
+      ...splitRepository(repository), workflow_id: workflow, event, per_page: 100,
+    });
+    for await (const page of iterator) yield page.data;
+  }
+  return recentItems(pages(), since);
+}
+
+export async function serverRuns(ctx: Ctx, match: RequestMatch, since: Date): Promise<Run[]> {
+  const candidates = await recentWorkflowRuns(ctx, SERVER, "csm-ci.yml", "label", since);
+  const found: Run[] = [];
+  for (const run of candidates) {
+    if (run.status !== "completed") continue;
+    const byName = await jobs(ctx, SERVER, run.id);
+    const intake = byName.get("intake");
+    if (!intake) continue;
+    if (matchesAcceptedRequest(await jobLog(ctx, SERVER, intake.id), match)) {
+      found.push(run);
+    } else if (match.label) {
+      const cleanup = byName.get("cleanup");
+      if (cleanup && (await jobLog(ctx, SERVER, cleanup.id)).includes(`LABEL: ${match.label}`)) found.push(run);
     }
-    return found.length ? found : undefined;
-  });
+  }
+  return found;
 }
 
 export async function jobs(ctx: Ctx, repository: string, runId: number): Promise<Map<string, { id: number; conclusion: string | null }>> {
@@ -153,8 +161,8 @@ export async function requestLabels(ctx: Ctx): Promise<string[]> {
 
 export type Conclusion = "success" | "failure" | "skipped";
 
-export async function expectServer(ctx: Ctx, match: RequestMatch, since: Date | undefined, intake: Conclusion, op: Conclusion, logPattern?: RegExp): Promise<void> {
-  const run = (await serverRuns(ctx, match, since, logPattern))[0]!;
+export async function expectServer(ctx: Ctx, match: RequestMatch, since: Date, intake: Conclusion, op: Conclusion, logPattern?: RegExp): Promise<void> {
+  const run = (await until("the server run for the request", async () => (await serverRuns(ctx, match, since))[0]))!;
   await waitRun(ctx, SERVER, run.id);
   const byName = await jobs(ctx, SERVER, run.id);
   const intakeJob = byName.get("intake");
@@ -169,10 +177,14 @@ export async function expectServer(ctx: Ctx, match: RequestMatch, since: Date | 
   assert(left.length === 0, `request labels left in ${SERVER}: ${left.join(", ")}`);
 }
 
-export async function smokeRequest(ctx: Ctx, kind: string, args: string): Promise<Date> {
+export async function smokeRequest(ctx: Ctx, kind: string, args: string): Promise<{ since: Date; label: string }> {
   const run = await dispatch(ctx, CLIENT, "csm-ci-smoke.yml", { kind, args });
   assert(run.conclusion === "success", `client request run concluded ${run.conclusion} (${run.html_url})`);
-  return new Date(new Date(run.created_at).getTime() - 2_000);
+  const request = await until(`the request job of ${run.html_url}`, async () => (await jobs(ctx, CLIENT, run.id)).get("request"));
+  const log = await jobLog(ctx, CLIENT, request.id);
+  const label = /created label (csm-ci-[^ ]+) \(/.exec(log)?.[1];
+  assert(label, `request label missing from ${run.html_url}`);
+  return { since: new Date(new Date(run.created_at).getTime() - 2_000), label };
 }
 
 export const APPROVER_LOGIN = "testing-csm-ci-approver[bot]";
@@ -242,7 +254,7 @@ export async function serverComments(ctx: Ctx, pr: Pr): Promise<string[]> {
 
 // Waits for the one server run started since `since` and checks its op job.
 export async function expectOp(ctx: Ctx, match: RequestMatch, since: Date, op: Conclusion, logPattern?: RegExp): Promise<void> {
-  const run = (await serverRuns(ctx, match, since))[0]!;
+  const run = (await until("the server run for the request", async () => (await serverRuns(ctx, match, since))[0]))!;
   await waitRun(ctx, SERVER, run.id);
   const byName = await jobs(ctx, SERVER, run.id);
   const opJob = byName.get("op");
