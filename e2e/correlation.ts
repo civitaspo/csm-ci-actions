@@ -6,6 +6,12 @@ export function findRunByTitle<T extends { display_title: string }>(runs: readon
   return runs.find((run) => run.display_title === title);
 }
 
+export function runsForComments<T extends { display_title: string }>(runs: readonly T[], pullNumber: number, commentIds: readonly number[]): T[] | undefined {
+  const titles = [...new Set(commentIds)].map((id) => new RegExp(`request #${pullNumber}.*comment #${id}(?!\\d)`));
+  const matches = titles.map((title) => runs.find((run) => title.test(run.display_title)));
+  return matches.every((run) => run !== undefined) ? matches : undefined;
+}
+
 export async function recentItems<T extends Timestamped>(pages: AsyncIterable<readonly T[]>, since: Date): Promise<T[]> {
   const result: T[] = [];
   // Workflow runs are returned newest first, so an old item ends the useful range.

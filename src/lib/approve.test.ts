@@ -29,6 +29,7 @@ function commit(sha: string, over: Record<string, unknown> = {}) {
 function comment(over: Record<string, unknown> = {}) {
   return {
     id: 9,
+    node_id: "comment-9",
     body: "/approve",
     issue_url: `https://api.github.com${P}/issues/12`,
     created_at: "2026-10-24T11:30:00Z",
@@ -49,10 +50,14 @@ type Setup = {
   reviewer?: unknown;
   headDate?: string;
   timeline?: unknown[];
+  editNode?: unknown;
+  editNodeAfter?: unknown;
+  editStatus?: number;
 };
 
 function context(s: Setup = {}) {
   const server = fakeFetch([
+    { method: "POST", path: "/graphql", status: s.editStatus ?? 200, body: { data: { node: s.editNode === undefined ? { databaseId: 9, lastEditedAt: null } : s.editNode } }, then: [{ data: { node: s.editNodeAfter ?? s.editNode ?? { databaseId: 9, lastEditedAt: null } } }] },
     { method: "GET", path: `${P}/pulls/12`, body: s.pull ?? pull(), then: [s.pullAfter ?? s.pull ?? pull()] },
     { method: "GET", path: `${P}/pulls/12/commits`, body: s.commits ?? [commit(HEAD)] },
     { method: "GET", path: `${P}/pulls/12/reviews`, body: s.reviews ?? [] },
@@ -122,6 +127,13 @@ describe("runApprove automatic", () => {
 });
 
 describe("runApprove commands", () => {
+  test.each([403, 500])("propagates edit-history API failure %s without approving", async (status) => {
+    const { ctx, server, approver } = context({ editStatus: status });
+    await expect(runApprove(ctx, { pull_number: 12, comment_id: 9 })).rejects.toMatchObject({ status });
+    expect(approver.calls).toEqual([]);
+    expect(server.calls).not.toContain(`POST ${P}/issues/comments/9/reactions`);
+  });
+
   test("/approve by an approver reacts, marks the review and posts a receipt", async () => {
     const { ctx, server, approver } = context();
     expect((await runApprove(ctx, { pull_number: 12, comment_id: 9 })).result).toBe("approved");
@@ -157,6 +169,11 @@ describe("runApprove commands", () => {
     ["a comment that is not a command", { comment: comment({ body: "LGTM" }) }, /not exactly/, false],
     ["a commenter who is not an approver", { comment: comment({ user: mallory }) }, /mallory is not one of the approvers/, false],
     ["/approve with an argument", { comment: comment({ body: `/approve ${HEAD}` }) }, /not exactly/, false],
+    ["a same-second edit", { editNode: { databaseId: 9, lastEditedAt: "2026-10-24T11:30:00Z" } }, /was edited/, false],
+    ["a same-second edit before approving", { editNodeAfter: { databaseId: 9, lastEditedAt: "2026-10-24T11:30:00Z" } }, /was edited/, true],
+    ["missing edit evidence", { editNode: null }, /cannot verify the edit history/, false],
+    ["wrong comment edit evidence", { editNode: { databaseId: 10, lastEditedAt: null } }, /cannot verify the edit history/, false],
+    ["incomplete edit evidence", { editNode: { databaseId: 9 } }, /cannot verify the edit history/, false],
     ["/approve on a draft", { pull: pull({ draft: true }) }, /is a draft/, true],
     ["/approve on an untrusted commit", { commits: [commit(HEAD, { committer: mallory, author: mallory })] }, /needs every commit signed by a trusted committer/, true],
     ["a head dated after the comment", { headDate: "2026-10-24T11:30:01Z" }, /newer than comment 9/, true],
@@ -202,6 +219,7 @@ describe("what approve sends", () => {
     const { ctx } = context();
     const approver = fakeFetch([{ method: "POST", path: `${P}/pulls/12/reviews`, body: { id: 77, user: { id: APPROVER_BOT_ID } } }]);
     const server = fakeFetch([
+      { method: "POST", path: "/graphql", body: { data: { node: { databaseId: 9, lastEditedAt: null } } } },
       { method: "GET", path: `${P}/pulls/12`, body: pull() },
       { method: "GET", path: `${P}/pulls/12/commits`, body: [commit(HEAD)] },
       { method: "GET", path: `${P}/pulls/12/reviews`, body: [] },

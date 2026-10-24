@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { findRecentRunByTitle, findRunByTitle, matchesAcceptedRequest, recentItems } from "./correlation.ts";
+import { findRecentRunByTitle, findRunByTitle, matchesAcceptedRequest, recentItems, runsForComments } from "./correlation.ts";
 import type { RequestMatch } from "./harness.ts";
 
 const request: RequestMatch = {
@@ -22,6 +22,17 @@ test("selects a workflow dispatch by its unique display title", () => {
   ];
   expect(findRunByTitle(runs, "csm-ci-smoke this-correlation")?.id).toBe(10);
   expect(findRunByTitle(runs, "csm-ci-smoke missing-correlation")).toBeUndefined();
+});
+
+test("requires one client run for each distinct comment instead of counting duplicate runs", () => {
+  const duplicate = [
+    { id: 1, display_title: "request #79, comment #123" },
+    { id: 2, display_title: "request #79, comment #123" },
+  ];
+  expect(runsForComments(duplicate, 79, [123, 456])).toBeUndefined();
+  const complete = [...duplicate, { id: 3, display_title: "request #79, comment #456" }];
+  expect(runsForComments(complete, 79, [123, 456])?.map(({ id }) => id)).toEqual([1, 3]);
+  expect(runsForComments([{ id: 4, display_title: "request #79, comment #1230" }], 79, [123])).toBeUndefined();
 });
 
 test("finds the matching run on a later workflow-run page", async () => {

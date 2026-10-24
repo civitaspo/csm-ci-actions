@@ -565,6 +565,8 @@ The harness runs in this order.
 5. **The client caller in docs/setup.md:** Each time you add a client workflow in Phase 2 or later, add a section.
 6. **Make the e2e scenarios of a feature run in parallel.** (Implemented.)
    - Scenarios use separate pull requests and run concurrently under the feature-level lock. Server runs are matched to the intake request, and skipped client runs are matched by PR and comment id.
+   - Smoke workflow dispatches carry a unique correlation id in the run title. The harness searches paginated recent runs for that exact title; probe and check dispatches select only runs created after dispatch began. Server cleanup checks inspect only the request's own label.
+   - These correlation changes have not yet been exercised by a live e2e run. The last local approve run targeted `1745ca8` before those changes and passed 7 of 11 scenarios; the four scenarios requiring the untrusted-committer token were skipped. See the verification record for run links.
    - Keep the feature-level lock because features share the fixtures.
 
 7. **Give every GitHub API call a timeout and a retry.**
@@ -590,6 +592,7 @@ The harness runs in this order.
 | approve spike | testing-csm-ci-server 40104472870, 40104538521, 40104932016, 40104965007 |
 | Local approve e2e (final head of Phase 1, 8e350d4) | 7 PASS, 4 SKIP. Examples: testing-csm-ci-server 40109466977 (auto approve), 40109645823 (`/approve`), 40109819219 (replay), 40110043805 and 40110042180 (edited), 40110177486 (`/recheck`) |
 | Local smoke e2e (8e350d4) | 6/6. Example: testing-csm-ci-server 40110303817 |
+| Local approve e2e (target `1745ca8b54a86c8ec49250cd4292893e2a34de84`) | 7 PASS, 4 SKIP. Runs: [40117624912](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40117624912), [40117625071](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40117625071), [40117626200](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40117626200), [40117681890](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40117681890), [40117625298](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40117625298), [40117703360](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40117703360), [40117628033](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40117628033), [40117713499](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40117713499), [40117623557](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40117623557), [40117694855](https://github.com/civitaspo/testing-csm-ci-client/actions/runs/40117694855), [40117705864](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40117705864), [40117706889](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40117706889), [40117627207](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40117627207), [40117711535](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40117711535), [40117766099](https://github.com/civitaspo/testing-csm-ci-client/actions/runs/40117766099), [40117776062](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40117776062). |
 | CI e2e from `main` of the old repository (after Phase 1) | approve 10/11; the remaining scenario failed on a harness wait shortfall, which is fixed in `main`. smoke green. Rerun both in this repository |
 
 ---
@@ -616,3 +619,9 @@ The limits cover both the actions and the e2e runner. They do not affect externa
 Verification includes table-driven retry and no-retry cases, stalled headers and bodies, cancellation, and the final request payload after Octokit applies overrides. Fourteen mutations were detected, including removing the attempt bound, the read-only restriction, the full-response deadline, the fetch abort signal, and the GraphQL mutation restriction. An independent security review found no actionable issues.
 
 While preparing this change, the jobs API for [server run 40114635373](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40114635373) returned HTTP 502. That baseline run later completed as cancelled. The PR records the new local e2e runs; post-merge CI runs are recorded with the next handoff update.
+
+### Same-second comment edits discovered during retry validation
+
+The edited-comment scenario exposed a pre-existing acceptance bug in [server run 40116623333](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40116623333). Comment 6387356105 on testing client PR 79 was created and edited at `2026-10-24T17:32:47Z`. REST returned identical `created_at` and `updated_at`, while GraphQL returned a non-null `lastEditedAt`. The server approved it because it previously compared only REST timestamps.
+
+Comment reads now fetch GraphQL edit history and fail closed if it is unavailable or does not identify the same comment. Command acceptance rejects any non-null edit time, including during the final revalidation. API errors propagate. This repair is included with the request timeout work because its live acceptance gate found an authorization failure that cannot be deferred. The specification's unedited requirement is unchanged; its API evidence is corrected.

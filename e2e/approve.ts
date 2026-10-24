@@ -1,6 +1,6 @@
 import { splitRepository } from "../src/lib/github.ts";
 import { marker } from "../src/lib/notify.ts";
-import { matchesAcceptedRequest } from "./correlation.ts";
+import { matchesAcceptedRequest, runsForComments } from "./correlation.ts";
 import {
   approverReviews,
   assert,
@@ -86,8 +86,8 @@ async function expectEveryOp(ctx: Ctx, match: {kind:string; repository:string; a
 async function expectClientSkipped(ctx: Ctx, since: Date, pr: number, commentIds: number[]): Promise<void> {
   const runs = await until(`${commentIds.length} client issue_comment runs`, async () => {
     const recent = await recentWorkflowRuns(ctx, CLIENT, "csm-ci-approve.yml", "issue_comment", since);
-    const found = recent.filter((r) => commentIds.some((id) => r.display_title?.includes(`comment #${id}`)));
-    return found.length >= commentIds.length && found.every((r) => r.status === "completed") ? found : undefined;
+    const found = runsForComments(recent, pr, commentIds);
+    return found?.every((r) => r.status === "completed") ? found : undefined;
   });
   for (const run of runs) {
     ctx.urls.push(run.html_url);
