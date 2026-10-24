@@ -1,0 +1,14 @@
+name: csm-ci-policy-check
+run-name: "csm-ci policy check #${{ github.event.pull_request.number }}"
+# e2e branch is moved to the commit under test by csm-ci-actions/e2e/run.ts.
+# This workflow never checks out or runs pull request code.
+# jactionlint ignore=concurrency-limits,dangerous-triggers
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+permissions: {}
+jobs:
+  policy-check:
+    # jactionlint ignore=unpinned-uses,secrets-inherit
+    uses: civitaspo/csm-ci-actions/.github/workflows/client-policy-check.yml@e2e
+    secrets: inherit

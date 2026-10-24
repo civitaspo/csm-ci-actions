@@ -1,0 +1,197 @@
+import { type GitHub, splitRepository } from "../src/lib/github.ts";
+import { marker } from "../src/lib/notify.ts";
+import {
+  assert,
+  CLIENT,
+  expectOp,
+  openPr,
+  type Pr,
+  postComment,
+  type Scenario,
+  SERVER,
+  smokeRequest,
+  until,
+  type Ctx,
+} from "./harness.ts";
+
+const SERVER_APP_ID = 5455185;
+const SENSITIVE_FILE = `.github/e2e-policy-${Date.now().toString(36)}.yml`;
+const OWNER_REVIEWER = { name: "civitaspo", email: "4525500+civitaspo@users.noreply.github.com" };
+
+type PolicyCheck = Awaited<ReturnType<GitHub["rest"]["checks"]["listForRef"]>>["data"]["check_runs"][number];
+
+async function checkForHead(ctx: Ctx, pr: Pr): Promise<PolicyCheck> {
+  return until(`the csm-ci/policy check for ${pr.head}`, async () => {
+    const checks = await ctx.gh.paginate(ctx.gh.rest.checks.listForRef, { ...splitRepository(CLIENT), ref: pr.head, per_page: 100 });
+    const check = checks.find((item) => item.name === "csm-ci/policy" && item.external_id === pr.head && item.status === "completed");
+    return check;
+  });
+}
+
+async function expectPolicy(ctx: Ctx, pr: Pr, since: Date, conclusion: "success" | "failure", failedPolicy?: string): Promise<PolicyCheck> {
+  await expectOp(ctx, { kind: "policy-check", repository: CLIENT, args: { pull_number: pr.number } }, since, "success");
+  const check = await checkForHead(ctx, pr);
+  assert(check.status === "completed", `policy check is ${check.status}`);
+  assert(check.conclusion === conclusion, `policy check concluded ${check.conclusion}, expected ${conclusion}`);
+  assert(Number(check.app?.id) === SERVER_APP_ID, `policy check was created by app ${check.app?.id}, expected Server App ${SERVER_APP_ID}`);
+  assert(check.output?.summary?.includes("| Policy | Result | Details |"), "policy check has no result table");
+  if (failedPolicy) assert(check.output?.summary?.includes(`| ${failedPolicy} | fail |`), `policy check summary does not show ${failedPolicy} failed`);
+  return check;
+}
+
+async function requestPolicy(ctx: Ctx, pr: Pr): Promise<Date> {
+  const before = await checkForHead(ctx, pr);
+  const request = await smokeRequest(ctx, "policy-check", String(pr.number));
+  await expectOp(ctx, { kind: "policy-check", repository: CLIENT, args: { pull_number: pr.number }, label: request.label }, request.since, "success");
+  await until("the policy check refresh", async () => {
+    const updated = await checkForHead(ctx, pr);
+    return updated.completed_at && before.completed_at && Date.parse(updated.completed_at) > Date.parse(before.completed_at) ? updated : undefined;
+  });
+  return request.since;
+}
+
+async function openPolicyPr(ctx: Ctx, kind: "signed" | "unsigned", sensitive = false, prAs?: Ctx["untrusted"], commitAs: Ctx["untrusted"] = ctx.gh, draft = false): Promise<{ pr: Pr; since: Date }> {
+  const since = new Date(Date.now() - 2_000);
+  const pr = await openPr(
+    ctx,
+    kind,
+    commitAs,
+    kind === "signed" ? undefined : OWNER_REVIEWER,
+    prAs ?? ctx.gh,
+    sensitive ? SENSITIVE_FILE : undefined,
+    draft,
+  );
+  return { pr, since };
+}
+
+async function closePolicyPr(ctx: Ctx, pr: Pr): Promise<void> {
+  const { data } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
+  await ctx.gh.rest.pulls.update({ ...splitRepository(CLIENT), pull_number: pr.number, state: "closed" });
+  await ctx.gh.rest.git.deleteRef({ ...splitRepository(CLIENT), ref: `heads/${data.head.ref}` });
+}
+
+async function withPolicyPr(ctx: Ctx, kind: "signed" | "unsigned", sensitive: boolean, fn: (pr: Pr, check: PolicyCheck) => Promise<void>, prAs?: Ctx["untrusted"]): Promise<void> {
+  const { pr, since } = await openPolicyPr(ctx, kind, sensitive, prAs);
+  try {
+    const check = await expectPolicy(ctx, pr, since, "success");
+    await fn(pr, check);
+  } finally {
+    await closePolicyPr(ctx, pr);
+  }
+}
+
+function untrusted(ctx: Ctx) {
+  assert(ctx.untrusted, "the untrusted committer token is not set");
+  return ctx.untrusted;
+}
+
+export const policyCheck: Scenario[] = [
+  {
+    name: "signed, trusted commits and ordinary paths pass every policy",
+    run: (ctx) => withPolicyPr(ctx, "signed", false, async (_pr, check) => {
+      for (const policy of ["signed-commits", "trusted-committers", "sensitive-paths"]) {
+        assert(check.output?.summary?.includes(`| ${policy} | pass |`), `policy check summary does not show ${policy} passing`);
+      }
+    }),
+  },
+  {
+    name: "an unsigned commit fails the signed-commits policy",
+    run: async (ctx) => {
+      const { pr, since } = await openPolicyPr(ctx, "unsigned");
+      try {
+        const check = await expectPolicy(ctx, pr, since, "failure", "signed-commits");
+        assert(check.output?.summary?.includes("is not signed and verified"), "signed-commits check omits its rejection reason");
+      } finally {
+        await closePolicyPr(ctx, pr);
+      }
+    },
+  },
+  {
+    name: "a signed commit by an untrusted committer fails trusted-committers",
+    needsUntrusted: true,
+    run: async (ctx) => {
+      const token = untrusted(ctx);
+      const { pr, since } = await openPolicyPr(ctx, "signed", false, undefined, token);
+      try {
+        // The helper reports a successfully completed operation; the check itself carries policy failure.
+        const check = await expectPolicy(ctx, pr, since, "failure", "trusted-committers");
+        assert(check.output?.summary?.includes("not a trusted committer"), "trusted-committers check omits its rejection reason");
+      } finally {
+        await closePolicyPr(ctx, pr);
+      }
+    },
+  },
+  {
+    name: "a sensitive file needs the marked approver review and /recheck refreshes the check",
+    needsUntrusted: true,
+    run: async (ctx) => {
+      const token = untrusted(ctx);
+      const { pr, since } = await openPolicyPr(ctx, "signed", true, token);
+      try {
+        const failed = await expectPolicy(ctx, pr, since, "failure", "sensitive-paths");
+        assert(failed.output?.summary?.includes("sensitive paths need a trusted approver's /approve"), "sensitive-paths check omits the missing approval reason");
+
+        const command = await postComment(ctx, pr, "/approve");
+        await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: command.id } }, command.since, "success");
+        const passed = await checkForHead(ctx, pr);
+        assert(passed.id === failed.id, "the /approve path created a second check instead of updating the head's check");
+        assert(passed.conclusion === "success", `policy check after /approve concluded ${passed.conclusion}`);
+        assert(passed.output?.summary?.includes("| sensitive-paths | pass |"), "sensitive-paths did not pass after the marked approval");
+
+      } finally {
+        await closePolicyPr(ctx, pr);
+      }
+    },
+  },
+  {
+    name: "/recheck reevaluates policies and updates the current head check",
+    run: (ctx) => withPolicyPr(ctx, "signed", false, async (pr, before) => {
+      const recheck = await postComment(ctx, pr, "/recheck");
+      await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: recheck.id } }, recheck.since, "success");
+      const refreshed = await until("the policy check updated by /recheck", async () => {
+        const check = await checkForHead(ctx, pr);
+        return check.id === before.id && check.completed_at && before.completed_at && Date.parse(check.completed_at) > Date.parse(before.completed_at) ? check : undefined;
+      });
+      assert(refreshed.conclusion === "success", `/recheck policy check concluded ${refreshed.conclusion}`);
+      assert(Number(refreshed.app?.id) === SERVER_APP_ID, "/recheck replaced the Server App policy check");
+    }),
+  },
+  {
+    name: "a marker in a review by a non-approver cannot authorize sensitive paths",
+    needsUntrusted: true,
+    run: async (ctx) => {
+      const { pr, since } = await openPolicyPr(ctx, "signed", true, untrusted(ctx), ctx.gh, true);
+      try {
+        await expectPolicy(ctx, pr, since, "failure", "sensitive-paths");
+        const comment = await postComment(ctx, pr, "/approve");
+        await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: comment.id } }, comment.since, "failure", /is a draft/);
+        await ctx.gh.rest.pulls.createReview({ ...splitRepository(CLIENT), pull_number: pr.number, event: "APPROVE", body: marker("approve:command", comment.id) });
+        await requestPolicy(ctx, pr);
+        const check = await checkForHead(ctx, pr);
+        assert(check.conclusion === "failure", "a review by a non-approver passed sensitive-paths");
+        assert(check.output?.summary?.includes("| sensitive-paths | fail |"), "the non-approver marker was not reported as a sensitive-paths failure");
+      } finally {
+        await closePolicyPr(ctx, pr);
+      }
+    },
+  },
+  {
+    name: "a COMMENT review carrying an approval marker cannot authorize sensitive paths",
+    needsUntrusted: true,
+    run: async (ctx) => {
+      const { pr, since } = await openPolicyPr(ctx, "signed", true, untrusted(ctx), ctx.gh, true);
+      try {
+        await expectPolicy(ctx, pr, since, "failure", "sensitive-paths");
+        const comment = await postComment(ctx, pr, "/approve");
+        await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: comment.id } }, comment.since, "failure", /is a draft/);
+        await ctx.gh.rest.pulls.createReview({ ...splitRepository(CLIENT), pull_number: pr.number, event: "COMMENT", body: marker("approve:command", comment.id) });
+        await requestPolicy(ctx, pr);
+        const check = await checkForHead(ctx, pr);
+        assert(check.conclusion === "failure", "a COMMENT review passed sensitive-paths");
+        assert(check.output?.summary?.includes("| sensitive-paths | fail |"), "the COMMENT marker was not reported as a sensitive-paths failure");
+      } finally {
+        await closePolicyPr(ctx, pr);
+      }
+    },
+  },
+];

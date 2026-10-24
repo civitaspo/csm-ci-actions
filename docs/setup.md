@@ -44,7 +44,35 @@ trust:
 policies:
   - { type: signed-commits }
   - { type: trusted-committers }
-  - { type: sensitive-paths, paths: [".github/**", "Makefile"], exempt: [] }
+  - type: sensitive-paths
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - "**/package.json"
+      - "**/package-lock.json"
+      - "**/npm-shrinkwrap.json"
+      - "**/bun.lock*"
+      - "**/yarn.lock"
+      - "**/pnpm-lock.yaml"
+      - "**/go.mod"
+      - "**/go.sum"
+      - "**/pyproject.toml"
+      - "**/requirements*.txt"
+      - "**/Pipfile*"
+      - "**/poetry.lock"
+      - "**/uv.lock"
+      - "**/Gemfile*"
+      - "**/composer.*"
+      - "**/Package.swift"
+      - "**/Package.resolved"
+      - Makefile
+      - "**/Dockerfile*"
+      - "**/.goreleaser.*"
+      - scripts/**
+      - "**/build.rs"
+      - .cargo/**
+      - .github/**
+    exempt: []
 repositories:
   - { name: your-account/*, ops: [approve, merge, policy-check] }
 ```
