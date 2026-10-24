@@ -109,6 +109,7 @@ jobs:
           owner: ${{ needs.intake.outputs.owner }}
           repositories: ${{ needs.intake.outputs.name }}
           permission-issues: write
+          permission-pull-requests: write
       - id: merge-ready
         if: needs.intake.outputs.kind == 'merge'
         continue-on-error: true
@@ -129,6 +130,7 @@ jobs:
           owner: ${{ needs.intake.outputs.owner }}
           repositories: ${{ needs.intake.outputs.name }}
           permission-issues: write
+          permission-pull-requests: write
       - if: needs.intake.outputs.kind == 'merge' && steps.merge-ready.outcome == 'failure' && steps.merge-ready.outputs.accepted == 'true'
         continue-on-error: true
         uses: ./.csm-ci-actions/actions/merge
@@ -167,6 +169,7 @@ jobs:
           owner: ${{ needs.intake.outputs.owner }}
           repositories: ${{ needs.intake.outputs.name }}
           permission-issues: write
+          permission-pull-requests: write
       - id: merge-token
         if: needs.intake.outputs.kind == 'merge' && steps.merge-ready.outputs.ready == 'true'
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
