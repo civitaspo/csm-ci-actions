@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { github, loadConfig, splitRepository, verifyLiveLabel } from "./github.ts";
+import { type GitHub, github, loadConfig, splitRepository, verifyLiveLabel } from "./github.ts";
 import { hasServerMarker, marker } from "./notify.ts";
 import { CONFIG_YAML, fakeFetch, SERVER_BOT_ID } from "./testing.ts";
 import { fetchCommitFacts } from "./trust.ts";
@@ -15,6 +15,157 @@ describe("loadConfig", () => {
     const fetch = fakeFetch([{ method: "GET", path: "/repos/owner/server/contents/csm-ci.yaml", body: CONFIG_YAML }]);
     const c = await loadConfig(github("t", fetch), "owner/server", "abc", "csm-ci.yaml");
     expect(c.server_repository).toBe("owner/server");
+  });
+});
+
+describe("github request retries", () => {
+  const path = "/repos/owner/repo/commits/main";
+  test.each([502, 503, 504])("retries HTTP %i and succeeds", async (status) => {
+    let calls = 0;
+    const fetch = Object.assign(async () => {
+      calls++;
+      return Response.json(calls === 1 ? { message: "unavailable" } : { sha: "ok" }, { status: calls === 1 ? status : 200 });
+    }, { preconnect: () => undefined });
+    await expect(github("t", fetch, { timeoutMs: 100, backoffMs: [0] }).request(`GET ${path}`)).resolves.toMatchObject({ data: { sha: "ok" } });
+    expect(calls).toBe(2);
+  });
+
+  test.each([400, 401, 403, 404, 409, 422, 500])("does not retry HTTP %i", async (status) => {
+    let calls = 0;
+    const fetch = Object.assign(async () => {
+      calls++;
+      return Response.json({ message: "rejected" }, { status });
+    }, { preconnect: () => undefined });
+    await expect(github("t", fetch, { timeoutMs: 100, backoffMs: [0, 0] }).request(`GET ${path}`)).rejects.toThrow("rejected");
+    expect(calls).toBe(1);
+  });
+  test("retries a network failure", async () => {
+    let calls = 0;
+    const fetch = Object.assign(async () => {
+      calls++;
+      if (calls === 1) throw new TypeError("network disconnected");
+      return Response.json({ sha: "ok" });
+    }, { preconnect: () => undefined });
+    await expect(github("t", fetch, { timeoutMs: 100, backoffMs: [0] }).request(`GET ${path}`)).resolves.toMatchObject({ data: { sha: "ok" } });
+    expect(calls).toBe(2);
+  });
+
+  test("times out a stalled body and retries the whole read", async () => {
+    let calls = 0;
+    const signals: AbortSignal[] = [];
+    const fetch = Object.assign(async (_input: string | URL | Request, init?: RequestInit) => {
+      calls++;
+      if (init?.signal) signals.push(init.signal);
+      if (calls > 1) return Response.json({ sha: "ok" });
+      return new Response(new ReadableStream({ start() {} }), { headers: { "content-type": "application/json" } });
+    }, { preconnect: () => undefined });
+    const gh = github("t", fetch, { timeoutMs: 10, backoffMs: [0] });
+    await expect(gh.request(`GET ${path}`)).resolves.toMatchObject({ data: { sha: "ok" } });
+    expect(calls).toBe(2);
+    expect(signals).toHaveLength(2);
+    expect(signals[0]).not.toBe(signals[1]);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
+  });
+
+  test("preserves the final retryable error after the attempt limit", async () => {
+    let calls = 0;
+    const fetch = Object.assign(async () => {
+      calls++;
+      return Response.json({ message: `failure ${calls}` }, { status: 502 });
+    }, { preconnect: () => undefined });
+    await expect(github("t", fetch, { timeoutMs: 100, backoffMs: [0, 0] }).request(`GET ${path}`)).rejects.toThrow(/failure 3/);
+    expect(calls).toBe(3);
+  });
+
+  test("times out a stalled write without retrying", async () => {
+    let calls = 0;
+    const fetch = Object.assign(async () => {
+      calls++;
+      return await new Promise<Response>(() => {});
+    }, { preconnect: () => undefined });
+    await expect(github("t", fetch, { timeoutMs: 5, backoffMs: [0, 0] }).request(`POST ${path}`, { sha: "x" })).rejects.toThrow("GitHub request timed out");
+    expect(calls).toBe(1);
+  });
+
+  test.each(["GET", "HEAD"])("bounds repeated stalled %s attempts", async (method) => {
+    const signals: AbortSignal[] = [];
+    const fetch = Object.assign(async (_input: string | URL | Request, init?: RequestInit) => {
+      if (init?.signal) signals.push(init.signal);
+      return await new Promise<Response>(() => {});
+    }, { preconnect: () => undefined });
+    await expect(github("t", fetch, { timeoutMs: 5, backoffMs: [0, 0] }).request(`${method} ${path}`)).rejects.toThrow("GitHub request timed out");
+    expect(signals).toHaveLength(3);
+    expect(new Set(signals).size).toBe(3);
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+  });
+
+  const writes: { name: string; call: (gh: GitHub) => Promise<unknown> }[] = [
+    { name: "review creation", call: (gh) => gh.rest.pulls.createReview({ owner: "owner", repo: "repo", pull_number: 1, event: "APPROVE" }) },
+    { name: "merge", call: (gh) => gh.rest.pulls.merge({ owner: "owner", repo: "repo", pull_number: 1 }) },
+    { name: "PATCH", call: (gh) => gh.request(`PATCH ${path}`, { sha: "x" }) },
+    { name: "DELETE", call: (gh) => gh.request(`DELETE ${path}`) },
+    { name: "GraphQL commit mutation", call: (gh) => gh.graphql("mutation { createCommitOnBranch(input: {}) { clientMutationId } }") },
+    { name: "mixed query and mutation", call: (gh) => gh.graphql("query Viewer { viewer { login } } mutation Change { createCommitOnBranch(input: {}) { clientMutationId } }", { operationName: "Change" }) },
+    { name: "encoded raw body", call: (gh) => gh.request("POST /graphql", { data: '{"query":"\\u006dutation { createCommitOnBranch(input: {}) { clientMutationId } }"}' }) },
+    { name: "data overrides query", call: (gh) => gh.request("POST /graphql", { query: "query Viewer { viewer { login } }", data: { query: "mutation Change { createCommitOnBranch(input: {}) { clientMutationId } }" } }) },
+    { name: "missing GraphQL query", call: (gh) => gh.request("POST /graphql", { variables: {} }) },
+    { name: "multiple queries", call: (gh) => gh.graphql("query { viewer { login } } query Other { viewer { login } }") },
+    { name: "subscription", call: (gh) => gh.graphql("subscription { viewer { login } }") },
+  ];
+  test.each(writes.flatMap((entry) => ["http", "network"].map((failure) => ({ ...entry, failure }))))("does not retry $name on $failure failure", async ({ call, failure }) => {
+    let calls = 0;
+    const fetch = Object.assign(async () => {
+      calls++;
+      if (failure === "network") throw new TypeError("unavailable");
+      return Response.json({ message: "unavailable" }, { status: 503 });
+    }, { preconnect: () => undefined });
+    await expect(call(github("t", fetch, { timeoutMs: 100, backoffMs: [0, 0] }))).rejects.toThrow("unavailable");
+    expect(calls).toBe(1);
+  });
+
+  test.each(["query Viewer { viewer { login } }", "query($owner: String!) { viewer { login } }", "{ viewer { login } }"])("retries GraphQL %s", async (query) => {
+    let calls = 0;
+    const fetch = Object.assign(async () => {
+      calls++;
+      return Response.json(calls === 1 ? { message: "unavailable" } : { data: { viewer: { login: "alice" } } }, { status: calls === 1 ? 503 : 200 });
+    }, { preconnect: () => undefined });
+    const gh = github("t", fetch, { timeoutMs: 100, backoffMs: [0] });
+    await expect(gh.graphql(query)).resolves.toEqual({ viewer: { login: "alice" } });
+    expect(calls).toBe(2);
+  });
+
+  test("caller cancellation stops retrying", async () => {
+    let calls = 0;
+    const fetch = Object.assign(async (_input: string | URL | Request, init?: RequestInit) => {
+      calls++;
+      return await new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }));
+    }, { preconnect: () => undefined });
+    const controller = new AbortController();
+    const gh = github("t", fetch, { timeoutMs: 1_000, backoffMs: [0, 0] });
+    const request = gh.request(`GET ${path}`, { request: { signal: controller.signal } });
+    await Promise.resolve();
+    controller.abort();
+    await expect(request).rejects.toThrow(/operation was aborted/);
+    expect(calls).toBe(1);
+    const alreadyAborted = new AbortController();
+    alreadyAborted.abort();
+    await expect(gh.request(`GET ${path}`, { request: { signal: alreadyAborted.signal } })).rejects.toThrow(/operation was aborted/);
+    expect(calls).toBe(1);
+  });
+
+  test("caller cancellation interrupts retry backoff", async () => {
+    let calls = 0;
+    const fetch = Object.assign(async () => {
+      calls++;
+      return Response.json({ message: "unavailable" }, { status: 503 });
+    }, { preconnect: () => undefined });
+    const controller = new AbortController();
+    const request = github("t", fetch, { timeoutMs: 100, backoffMs: [1_000] }).request(`GET ${path}`, { request: { signal: controller.signal } });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    controller.abort();
+    await expect(request).rejects.toThrow(/operation was aborted/);
+    expect(calls).toBe(1);
   });
 });
 

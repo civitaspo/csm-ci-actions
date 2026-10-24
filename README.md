@@ -21,6 +21,8 @@ The project is under construction. Phase 0 (the request round trip, the commit t
 
 The server never trusts the label beyond which repository and number to look at. Every decision uses facts it reads from the API itself.
 
+GitHub requests have a timeout and bounded retries for reads. See [GitHub API requests](docs/github-api.md) for the limits and write recovery behavior.
+
 ## GitHub Apps
 
 | App | Installed on | Repository permissions | Key stored in |
