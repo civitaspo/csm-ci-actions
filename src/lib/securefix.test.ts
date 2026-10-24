@@ -152,7 +152,7 @@ describe("securefix path and size checks", () => {
       execFileSync("git", ["commit", "-qam", "add submodule"], { cwd: workspace });
       await writeFile(join(workspace, "module", "file.txt"), "two\n");
       execFileSync("git", ["add", "file.txt"], { cwd: join(workspace, "module") });
-      execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-qm", "two"], { cwd: join(workspace, "module") });
+      execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "commit", "-qm", "two"], { cwd: join(workspace, "module") });
       await expect(buildSecurefixArtifact({ workspace, repository: repo, runId: 42, headSha: sha, message: "update" }))
         .rejects.toThrow('securefix does not allow submodule "module"');
     } finally {
