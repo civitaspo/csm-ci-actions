@@ -1,6 +1,6 @@
 import { type CommentFacts, checkPullState, type PullFacts, validateComment } from "./command.ts";
-import type { Config, Principal } from "./config.ts";
-import { type GitHub, splitRepository } from "./github.ts";
+import { repositoryEntry, type Config, type Principal } from "./config.ts";
+import { isNetworkFailure, type GitHub, splitRepository } from "./github.ts";
 import { fetchComment } from "./approve.ts";
 import { hasServerMarker, marker, postResult } from "./notify.ts";
 import { evaluatePullPolicies } from "./policy-check.ts";
@@ -12,9 +12,11 @@ export type MergeContext = {
   notify?: GitHub;
   write?: GitHub;
   config: Config;
+  reloadConfig?: () => Promise<Config>;
   repository: string;
   now: () => Date;
   sleep: (milliseconds: number) => Promise<void>;
+  onAccepted?: () => void;
 };
 export type MergeArgs = { pull_number: number; comment_id: number };
 export type MergeReady = { head: string };
@@ -54,10 +56,8 @@ function timedOut(error: unknown): boolean {
 }
 
 async function reconcileMerge(ctx: MergeContext, pullNumber: number, head: string): Promise<MergeOutcome | undefined> {
-  const current = await pullFacts(ctx.server, ctx.repository, pullNumber);
-  if (current.state !== "closed" || current.headSha !== head) return undefined;
   const { data: pull } = await ctx.server.rest.pulls.get({ ...splitRepository(ctx.repository), pull_number: pullNumber });
-  if (!pull.merged || pull.merged_by?.id !== ctx.config.apps.server_bot_id || !pull.merge_commit_sha) return undefined;
+  if (pull.state !== "closed" || pull.head.sha !== head || !pull.merged || pull.merged_by?.id !== ctx.config.apps.server_bot_id || !pull.merge_commit_sha) return undefined;
   return { result: "merged", head, mergeCommit: pull.merge_commit_sha };
 }
 
@@ -116,7 +116,10 @@ async function checkHeadPredatesComment(ctx: MergeContext, pull: PullFacts, comm
 async function latestApproval(ctx: MergeContext, pull: PullFacts): Promise<boolean> {
   const reviews = await ctx.server.paginate(ctx.server.rest.pulls.listReviews, { ...splitRepository(ctx.repository), pull_number: pull.number, per_page: 100 });
   const latest = reviews.filter((r) => Number(r.user?.id) === ctx.config.approver.id && r.submitted_at)
-    .reduce<(typeof reviews)[number] | undefined>((current, review) => !current || String(review.submitted_at) >= String(current.submitted_at) ? review : current, undefined);
+    .reduce<(typeof reviews)[number] | undefined>((current, review) => {
+      if (!current || String(review.submitted_at) > String(current.submitted_at)) return review;
+      return String(review.submitted_at) === String(current.submitted_at) && Number(review.id) > Number(current.id) ? review : current;
+    }, undefined);
   return latest?.state === "APPROVED" && latest.commit_id === pull.headSha;
 }
 
@@ -125,7 +128,10 @@ async function requiredChecks(ctx: MergeContext, pull: PullFacts): Promise<{ ok:
   const problems: string[] = [];
   for (const required of ctx.config.merge.required_checks) {
     const latest = runs.filter((r) => r.name === required.name && r.app?.id === required.app_id)
-      .reduce<(typeof runs)[number] | undefined>((current, run) => !current || String(run.started_at ?? "") >= String(current.started_at ?? "") ? run : current, undefined);
+      .reduce<(typeof runs)[number] | undefined>((current, run) => {
+        if (!current || String(run.started_at ?? "") > String(current.started_at ?? "")) return run;
+        return String(run.started_at ?? "") === String(current.started_at ?? "") && Number(run.id) > Number(current.id) ? run : current;
+      }, undefined);
     if (!latest || latest.status !== "completed" || !["success", "skipped"].includes(latest.conclusion ?? "")) {
       problems.push(`${required.name} from app ${required.app_id} is not success or skipped`);
     }
@@ -134,6 +140,7 @@ async function requiredChecks(ctx: MergeContext, pull: PullFacts): Promise<{ ok:
 }
 
 async function ready(ctx: MergeContext, args: MergeArgs, head: string): Promise<void> {
+  await refreshConfig(ctx);
   const { pull } = await pinAndValidate(ctx, args, head);
   const results = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull });
   const trust = results.filter((r) => r.type === "signed-commits" || r.type === "trusted-committers");
@@ -147,7 +154,15 @@ async function ready(ctx: MergeContext, args: MergeArgs, head: string): Promise<
   if (!checks.ok) throw new NotReady(checks.problems.join("; "));
 }
 
+async function refreshConfig(ctx: MergeContext): Promise<void> {
+  if (ctx.reloadConfig) ctx.config = await ctx.reloadConfig();
+  const entry = repositoryEntry(ctx.config, ctx.repository);
+  if (!entry) throw new Rejection(`repository ${ctx.repository} is no longer managed by this server`);
+  if (!entry.ops.includes("merge")) throw new Rejection(`repository ${ctx.repository} no longer enables merge`);
+}
+
 export async function waitForMerge(ctx: MergeContext, args: MergeArgs): Promise<MergeReady> {
+  await refreshConfig(ctx);
   const pull = await pullFacts(ctx.server, ctx.repository, args.pull_number);
   checkPullState(pull);
   const comment = await fetchComment(ctx.server, ctx.repository, args.comment_id);
@@ -162,6 +177,7 @@ export async function waitForMerge(ctx: MergeContext, args: MergeArgs): Promise<
   if (!notify) throw new Error("notification token is required after accepting a merge command");
   try {
     await notify.rest.reactions.createForIssueComment({ ...splitRepository(ctx.repository), comment_id: args.comment_id, content: "rocket" });
+    ctx.onAccepted?.();
     const deadline = ctx.now().getTime() + ctx.config.merge.deadline_minutes * 60_000;
     let last: unknown;
     while (ctx.now().getTime() <= deadline) {
@@ -178,7 +194,7 @@ export async function waitForMerge(ctx: MergeContext, args: MergeArgs): Promise<
     }
     throw new Rejection(`merge readiness deadline passed: ${last instanceof Error ? last.message : "not ready"}`);
   } catch (error) {
-    await postReceipt(ctx, pull.number, receipt, `csm-ci: /merge failed: ${error instanceof Error ? error.message : String(error)}`);
+    await postFailureReceipt(ctx, pull.number, receipt, error);
     throw error;
   }
 }
@@ -197,10 +213,30 @@ async function postReceipt(ctx: MergeContext, issueNumber: number, receipt: stri
   }
 }
 
+async function postFailureReceipt(ctx: MergeContext, issueNumber: number, receipt: string, failure: unknown): Promise<void> {
+  const reason = failure instanceof Error ? failure.message : String(failure);
+  try {
+    await postReceipt(ctx, issueNumber, receipt, `csm-ci: /merge failed: ${reason}`);
+  } catch (receiptError) {
+    const receiptReason = receiptError instanceof Error ? receiptError.message : String(receiptError);
+    throw new AggregateError([failure, receiptError], `${reason}; additionally failed to post the merge failure receipt: ${receiptReason}`);
+  }
+}
+
+export async function postMergeFailureReceipt(ctx: MergeContext, args: MergeArgs, message: string): Promise<void> {
+  await postReceipt(ctx, args.pull_number, marker("merge", args.comment_id), `csm-ci: /merge failed: ${message}`);
+}
+
 export async function runMerge(ctx: MergeContext, args: MergeArgs, expected: MergeReady): Promise<MergeOutcome> {
   const receipt = marker("merge", args.comment_id);
   const write = ctx.write;
   if (!write) throw new Error("write token is required to merge");
+  try {
+    await refreshConfig(ctx);
+  } catch (error) {
+    await postFailureReceipt(ctx, args.pull_number, receipt, error);
+    throw error;
+  }
   const existing = await ctx.server.paginate(ctx.server.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: args.pull_number, per_page: 100 });
   if (hasServerMarker(existing, receipt, ctx.config.apps.server_bot_id)) throw new Rejection(`comment ${args.comment_id} was already handled`);
   let outcome: MergeOutcome | undefined;
@@ -225,7 +261,7 @@ export async function runMerge(ctx: MergeContext, args: MergeArgs, expected: Mer
         if (status(error) === 409) throw new Rejection(`pull request #${pull.number} cannot merge because its base changed`);
         const code = status(error);
         const retryable = [405, 422, 503].includes(code ?? 0);
-        if (!retryable && code !== 502 && code !== 504 && !timedOut(error)) throw error;
+        if (!retryable && code !== 502 && code !== 504 && !timedOut(error) && !isNetworkFailure(error)) throw error;
         uncertain = true;
         try {
           outcome = await reconcileMerge(ctx, pull.number, expected.head);
@@ -245,7 +281,7 @@ export async function runMerge(ctx: MergeContext, args: MergeArgs, expected: Mer
     await postReceipt(ctx, pull.number, receipt, `csm-ci: /merge of \`${expected.head}\`: merged as \`${outcome.mergeCommit}\`.`);
     return outcome;
   } catch (error) {
-    if (!outcome && !uncertain) await postReceipt(ctx, args.pull_number, receipt, `csm-ci: /merge failed: ${error instanceof Error ? error.message : String(error)}`);
+    if (!outcome && !uncertain) await postFailureReceipt(ctx, args.pull_number, receipt, error);
     throw error;
   }
 }

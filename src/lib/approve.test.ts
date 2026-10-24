@@ -30,11 +30,11 @@ function commit(sha: string, over: Record<string, unknown> = {}) {
 function comment(over: Record<string, unknown> = {}) {
   return {
     id: 9,
-    node_id: "comment-9",
     body: "/approve",
     issue_url: `https://api.github.com${P}/issues/12`,
     created_at: "2026-10-24T11:30:00Z",
     updated_at: "2026-10-24T11:30:00Z",
+    node_id: "comment-node",
     user: alice,
     ...over,
   };
@@ -51,17 +51,16 @@ type Setup = {
   reviewer?: unknown;
   headDate?: string;
   timeline?: unknown[];
-  lastEditedAt?: string | null;
-  files?: unknown[];
-  config?: ReturnType<typeof config>;
   editNode?: unknown;
   editNodeAfter?: unknown;
   editStatus?: number;
+  files?: unknown[];
+  config?: ReturnType<typeof config>;
 };
 
 function context(s: Setup = {}) {
   const server = fakeFetch([
-    { method: "POST", path: "/graphql", status: s.editStatus ?? 200, body: { data: { node: s.editNode === undefined ? { databaseId: 9, lastEditedAt: s.lastEditedAt ?? null } : s.editNode } }, then: [{ data: { node: s.editNodeAfter ?? s.editNode ?? { databaseId: 9, lastEditedAt: s.lastEditedAt ?? null } } }] },
+    { method: "POST", path: "/graphql", status: s.editStatus ?? 200, body: { data: { node: s.editNode === undefined ? { databaseId: 9, lastEditedAt: null } : s.editNode } }, then: [{ data: { node: s.editNodeAfter ?? s.editNode ?? { databaseId: 9, lastEditedAt: null } } }] },
     { method: "GET", path: `${P}/pulls/12`, body: s.pull ?? pull(), then: [s.pullAfter ?? s.pull ?? pull()] },
     { method: "GET", path: `${P}/pulls/12/commits`, body: s.commits ?? [commit(HEAD)] },
     { method: "GET", path: `${P}/pulls/12/reviews`, body: s.reviews ?? [] },
@@ -176,12 +175,8 @@ describe("runApprove commands", () => {
     ["a comment on another pull request", { comment: comment({ issue_url: `https://api.github.com${P}/issues/13` }) }, /not on owner\/repo#12/, false],
     ["a comment that is not a command", { comment: comment({ body: "LGTM" }) }, /not exactly/, false],
     ["a commenter who is not an approver", { comment: comment({ user: mallory }) }, /mallory is not one of the approvers/, false],
+    ["/merge routed to approve", { comment: comment({ body: "/merge" }) }, /is not exactly \/approve/, false],
     ["/approve with an argument", { comment: comment({ body: `/approve ${HEAD}` }) }, /not exactly/, false],
-    ["a same-second edit", { editNode: { databaseId: 9, lastEditedAt: "2026-10-24T11:30:00Z" } }, /was edited/, false],
-    ["a same-second edit before approving", { editNodeAfter: { databaseId: 9, lastEditedAt: "2026-10-24T11:30:00Z" } }, /was edited/, true],
-    ["missing edit evidence", { editNode: null }, /cannot verify the edit history/, false],
-    ["wrong comment edit evidence", { editNode: { databaseId: 10, lastEditedAt: null } }, /cannot verify the edit history/, false],
-    ["incomplete edit evidence", { editNode: { databaseId: 9 } }, /cannot verify the edit history/, false],
     ["/approve on a draft", { pull: pull({ draft: true }) }, /is a draft/, true],
     ["/approve on an untrusted commit", { commits: [commit(HEAD, { committer: mallory, author: mallory })] }, /cannot proceed because policy checks failed: trusted-committers: .* is by mallory/, true],
     ["/approve on 3000 changed files", { files: Array.from({ length: 3000 }, (_, i) => ({ filename: `safe-${i}.txt` })), config: parseConfig(CONFIG_YAML.replace("  - { type: trusted-committers }", "  - { type: trusted-committers }\n  - { type: sensitive-paths, paths: [], exempt: [] }")) }, /cannot proceed because policy checks failed: sensitive-paths: pull request changes 3000 or more files/, true],
@@ -190,7 +185,12 @@ describe("runApprove commands", () => {
     ["an unsigned commit", { commits: [commit(HEAD, { commit: { verification: { verified: false } } })] }, /cannot proceed because policy checks failed: signed-commits: .* is not signed/, true],
     ["a replayed comment", { issueComments: [{ user: { id: SERVER_BOT_ID }, body: `${marker("approve", 9)}\ndone` }] }, /already handled/, false],
     ["a comment edited before approving", { commentAfter: comment({ updated_at: "2026-10-24T11:45:00Z" }) }, /was edited/, true],
-    ["a same-second comment edit", { lastEditedAt: "2026-10-24T11:30:00Z" }, /was edited/, false],
+    ["/approve edited to /merge before approving", { commentAfter: comment({ body: "/merge" }) }, /is no longer exactly \/approve/, true],
+    ["a same-second comment edit", { editNode: { databaseId: 9, lastEditedAt: "2026-10-24T11:30:00Z" } }, /was edited/, false],
+    ["missing edit evidence", { editNode: null }, /cannot verify the edit history/, false],
+    ["wrong comment edit evidence", { editNode: { databaseId: 10, lastEditedAt: null } }, /cannot verify the edit history/, false],
+    ["incomplete edit evidence", { editNode: { databaseId: 9 } }, /cannot verify the edit history/, false],
+    ["same-second edit before approving", { editNodeAfter: { databaseId: 9, lastEditedAt: "2026-10-24T11:30:00Z" } }, /was edited/, true],
   ];
   test.each(rejects)("rejects %s", async (_, setup, message, receipt) => {
     const { ctx, server, approver } = context(setup);
@@ -229,11 +229,11 @@ describe("what approve sends", () => {
     const { ctx } = context();
     const approver = fakeFetch([{ method: "POST", path: `${P}/pulls/12/reviews`, body: { id: 77, user: { id: APPROVER_BOT_ID } } }]);
     const server = fakeFetch([
-      { method: "POST", path: "/graphql", body: { data: { node: { databaseId: 9, lastEditedAt: null } } } },
       { method: "GET", path: `${P}/pulls/12`, body: pull() },
       { method: "GET", path: `${P}/pulls/12/commits`, body: [commit(HEAD)] },
       { method: "GET", path: `${P}/pulls/12/reviews`, body: [] },
       { method: "GET", path: `${P}/issues/comments/9`, body: comment({ body: "/recheck" }) },
+      { method: "POST", path: "/graphql", body: { data: { node: { databaseId: 9, lastEditedAt: null } } } },
       { method: "POST", path: `${P}/issues/comments/9/reactions`, status: 201, body: {} },
       { method: "GET", path: `${P}/commits/${HEAD}/check-runs`, body: [] },
       { method: "POST", path: `${P}/check-runs`, status: 201, body: { id: 88 } },

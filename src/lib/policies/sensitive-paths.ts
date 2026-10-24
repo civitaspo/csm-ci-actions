@@ -1,5 +1,7 @@
 import picomatch from "picomatch";
 import { splitRepository } from "../github.ts";
+import { fetchComment } from "../github-comment.ts";
+import { Rejection } from "../request.ts";
 import { type PolicyContext } from "./index.ts";
 
 type ChangedFile = { filename: string; previous_filename?: string };
@@ -33,16 +35,13 @@ export async function sensitivePaths(policy: Extract<import("../config.ts").Poli
     for (const marker of markers) {
       const commentId = Number(marker[1]);
       try {
-        const { data: comment } = await ctx.gh.rest.issues.getComment({ owner, repo, comment_id: commentId });
-        if (comment.body !== "/approve" || comment.issue_url !== `https://api.github.com/repos/${owner}/${repo}/issues/${ctx.pullNumber}` || comment.user?.type !== "User" || !ctx.config.trust.approvers.some((p) => p.id === Number(comment.user?.id)) || !comment.node_id || comment.created_at !== comment.updated_at) continue;
-        if (!comment.node_id) continue;
-        const edit = await ctx.gh.graphql<{ node: { lastEditedAt: string | null } | null }>(
-          "query($id: ID!) { node(id: $id) { ... on IssueComment { lastEditedAt } } }",
-          { id: comment.node_id },
-        );
-        if (edit.node?.lastEditedAt === null) return [];
+        const comment = await fetchComment(ctx.gh, ctx.repository, commentId);
+        const belongsToPull = comment.issueUrl.toLowerCase() === `https://api.github.com/repos/${owner}/${repo}/issues/${ctx.pullNumber}`;
+        if (comment.body !== "/approve" || !belongsToPull || comment.user?.type !== "User" || !ctx.config.trust.approvers.some((p) => p.id === comment.user?.id) || comment.createdAt !== comment.updatedAt || comment.lastEditedAt !== null) continue;
+        return [];
       } catch (error) {
         if (typeof error === "object" && error !== null && "status" in error && error.status === 404) continue;
+        if (error instanceof Rejection) continue;
         throw error;
       }
     }

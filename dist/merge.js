@@ -32249,6 +32249,9 @@ function refine(fn, _params = {}) {
 function superRefine(fn, params) {
   return _superRefine(fn, params);
 }
+// src/lib/config.ts
+var import_picomatch = __toESM(require_picomatch2(), 1);
+
 // node_modules/yaml/dist/index.js
 var composer = require_composer();
 var Document = require_Document();
@@ -32336,6 +32339,13 @@ var ConfigSchema = strictObject({
 });
 function parseConfig(text) {
   return ConfigSchema.parse($parse(text));
+}
+function repositoryEntry(config, fullName) {
+  const name = fullName.toLowerCase();
+  const [owner] = name.split("/");
+  if (!config.owners.includes(owner ?? ""))
+    return;
+  return config.repositories.find((r) => import_picomatch.default.isMatch(name, r.name, { dot: true }));
 }
 
 // src/lib/request.ts
@@ -36427,7 +36437,12 @@ function isRetryableError(error, timedOut) {
     return false;
   if ("status" in error && (error.status === 502 || error.status === 503 || error.status === 504))
     return true;
-  if (!("cause" in error))
+  return isNetworkFailure(error);
+}
+function isNetworkFailure(error) {
+  if (error instanceof TypeError)
+    return true;
+  if (typeof error !== "object" || error === null || !("cause" in error))
     return false;
   const cause = error.cause;
   return cause instanceof TypeError || cause instanceof Error && ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EAI_AGAIN", "ENETUNREACH"].some((code) => cause.message.includes(code));
@@ -36443,6 +36458,14 @@ async function loadConfig(gh, repository, ref, path) {
   if (typeof data !== "string")
     throw new Error(`${path} at ${repository}@${ref} is not a file`);
   return parseConfig(data);
+}
+async function loadCurrentServerConfig(gh, repository, path) {
+  const { data: server } = await gh.rest.repos.get(splitRepository(repository));
+  const config = await loadConfig(gh, repository, server.default_branch, path);
+  if (config.server_repository !== repository.toLowerCase()) {
+    throw new Error(`current server configuration identifies ${config.server_repository}, not ${repository}`);
+  }
+  return config;
 }
 
 // src/lib/notify.ts
@@ -36463,7 +36486,29 @@ function signedCommits(_, { trust }) {
 }
 
 // src/lib/policies/sensitive-paths.ts
-var import_picomatch = __toESM(require_picomatch2(), 1);
+var import_picomatch2 = __toESM(require_picomatch2(), 1);
+
+// src/lib/github-comment.ts
+async function fetchComment(gh, repository, commentId) {
+  const { data: comment } = await gh.rest.issues.getComment({ ...splitRepository(repository), comment_id: commentId });
+  if (!comment.node_id)
+    throw new Rejection(`cannot verify the edit history of comment ${commentId}`);
+  const { node } = await gh.graphql("query($id: ID!) { node(id: $id) { ... on IssueComment { databaseId lastEditedAt } } }", { id: comment.node_id });
+  if (!node || node.databaseId !== Number(comment.id) || !(node.lastEditedAt === null || typeof node.lastEditedAt === "string")) {
+    throw new Rejection(`cannot verify the edit history of comment ${commentId}`);
+  }
+  return {
+    id: Number(comment.id),
+    body: comment.body ?? "",
+    issueUrl: comment.issue_url,
+    createdAt: comment.created_at,
+    updatedAt: comment.updated_at,
+    lastEditedAt: node.lastEditedAt,
+    user: comment.user ? { id: Number(comment.user.id), login: comment.user.login, type: comment.user.type } : null
+  };
+}
+
+// src/lib/policies/sensitive-paths.ts
 var MARKER = /<!-- csm-ci:approve:command:(\d+) -->/g;
 var MAX_FILES = 3000;
 async function sensitivePaths(policy, ctx) {
@@ -36473,7 +36518,7 @@ async function sensitivePaths(policy, ctx) {
     return [`pull request changes ${MAX_FILES} or more files; sensitive-paths cannot verify every file`];
   const forceAll = ctx.repository.toLowerCase() === ctx.config.server_repository || ctx.repository.toLowerCase() === "civitaspo/csm-ci-actions";
   const patterns = forceAll ? ["**"] : policy.paths;
-  const match = import_picomatch.default(patterns, { dot: true });
+  const match = import_picomatch2.default(patterns, { dot: true });
   const changed = files.filter((f) => match(f.filename) || f.previous_filename !== undefined && match(f.previous_filename));
   if (changed.length === 0)
     return [];
@@ -36491,16 +36536,15 @@ async function sensitivePaths(policy, ctx) {
     for (const marker of markers) {
       const commentId = Number(marker[1]);
       try {
-        const { data: comment } = await ctx.gh.rest.issues.getComment({ owner, repo, comment_id: commentId });
-        if (comment.body !== "/approve" || comment.issue_url !== `https://api.github.com/repos/${owner}/${repo}/issues/${ctx.pullNumber}` || comment.user?.type !== "User" || !ctx.config.trust.approvers.some((p) => p.id === Number(comment.user?.id)) || !comment.node_id || comment.created_at !== comment.updated_at)
+        const comment = await fetchComment(ctx.gh, ctx.repository, commentId);
+        const belongsToPull = comment.issueUrl.toLowerCase() === `https://api.github.com/repos/${owner}/${repo}/issues/${ctx.pullNumber}`;
+        if (comment.body !== "/approve" || !belongsToPull || comment.user?.type !== "User" || !ctx.config.trust.approvers.some((p) => p.id === comment.user?.id) || comment.createdAt !== comment.updatedAt || comment.lastEditedAt !== null)
           continue;
-        if (!comment.node_id)
-          continue;
-        const edit = await ctx.gh.graphql("query($id: ID!) { node(id: $id) { ... on IssueComment { lastEditedAt } } }", { id: comment.node_id });
-        if (edit.node?.lastEditedAt === null)
-          return [];
+        return [];
       } catch (error) {
         if (typeof error === "object" && error !== null && "status" in error && error.status === 404)
+          continue;
+        if (error instanceof Rejection)
           continue;
         throw error;
       }
@@ -36638,25 +36682,6 @@ async function evaluatePullPolicies(ctx, commandApproval) {
     ...commandApproval ? { commandApproval } : {}
   });
 }
-
-// src/lib/approve.ts
-async function fetchComment(gh, repository, commentId) {
-  const { data: c } = await gh.rest.issues.getComment({ ...splitRepository(repository), comment_id: commentId });
-  const { node } = await gh.graphql("query($id: ID!) { node(id: $id) { ... on IssueComment { databaseId lastEditedAt } } }", { id: c.node_id });
-  if (!node || node.databaseId !== Number(c.id) || !(node.lastEditedAt === null || typeof node.lastEditedAt === "string")) {
-    throw new Rejection(`cannot verify the edit history of comment ${commentId}`);
-  }
-  return {
-    id: Number(c.id),
-    body: c.body ?? "",
-    issueUrl: c.issue_url,
-    createdAt: c.created_at,
-    updatedAt: c.updated_at,
-    lastEditedAt: node.lastEditedAt,
-    user: c.user ? { id: Number(c.user.id), login: c.user.login, type: c.user.type } : null
-  };
-}
-
 // src/lib/merge.ts
 class NotReady extends Error {
 }
@@ -36689,11 +36714,8 @@ function timedOut(error) {
   return error.name === "TimeoutError" || error.message === "GitHub request timed out" || "cause" in error && error.cause instanceof Error && error.cause.name === "TimeoutError";
 }
 async function reconcileMerge(ctx, pullNumber, head) {
-  const current = await pullFacts(ctx.server, ctx.repository, pullNumber);
-  if (current.state !== "closed" || current.headSha !== head)
-    return;
   const { data: pull } = await ctx.server.rest.pulls.get({ ...splitRepository(ctx.repository), pull_number: pullNumber });
-  if (!pull.merged || pull.merged_by?.id !== ctx.config.apps.server_bot_id || !pull.merge_commit_sha)
+  if (pull.state !== "closed" || pull.head.sha !== head || !pull.merged || pull.merged_by?.id !== ctx.config.apps.server_bot_id || !pull.merge_commit_sha)
     return;
   return { result: "merged", head, mergeCommit: pull.merge_commit_sha };
 }
@@ -36754,14 +36776,22 @@ async function checkHeadPredatesComment(ctx, pull, comment) {
 }
 async function latestApproval(ctx, pull) {
   const reviews = await ctx.server.paginate(ctx.server.rest.pulls.listReviews, { ...splitRepository(ctx.repository), pull_number: pull.number, per_page: 100 });
-  const latest = reviews.filter((r) => Number(r.user?.id) === ctx.config.approver.id && r.submitted_at).reduce((current, review) => !current || String(review.submitted_at) >= String(current.submitted_at) ? review : current, undefined);
+  const latest = reviews.filter((r) => Number(r.user?.id) === ctx.config.approver.id && r.submitted_at).reduce((current, review) => {
+    if (!current || String(review.submitted_at) > String(current.submitted_at))
+      return review;
+    return String(review.submitted_at) === String(current.submitted_at) && Number(review.id) > Number(current.id) ? review : current;
+  }, undefined);
   return latest?.state === "APPROVED" && latest.commit_id === pull.headSha;
 }
 async function requiredChecks(ctx, pull) {
   const runs = await ctx.server.paginate(ctx.server.rest.checks.listForRef, { ...splitRepository(ctx.repository), ref: pull.headSha, per_page: 100 });
   const problems = [];
   for (const required of ctx.config.merge.required_checks) {
-    const latest = runs.filter((r) => r.name === required.name && r.app?.id === required.app_id).reduce((current, run) => !current || String(run.started_at ?? "") >= String(current.started_at ?? "") ? run : current, undefined);
+    const latest = runs.filter((r) => r.name === required.name && r.app?.id === required.app_id).reduce((current, run) => {
+      if (!current || String(run.started_at ?? "") > String(current.started_at ?? ""))
+        return run;
+      return String(run.started_at ?? "") === String(current.started_at ?? "") && Number(run.id) > Number(current.id) ? run : current;
+    }, undefined);
     if (!latest || latest.status !== "completed" || !["success", "skipped"].includes(latest.conclusion ?? "")) {
       problems.push(`${required.name} from app ${required.app_id} is not success or skipped`);
     }
@@ -36769,6 +36799,7 @@ async function requiredChecks(ctx, pull) {
   return { ok: problems.length === 0, problems };
 }
 async function ready(ctx, args, head) {
+  await refreshConfig(ctx);
   const { pull } = await pinAndValidate(ctx, args, head);
   const results = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull });
   const trust = results.filter((r) => r.type === "signed-commits" || r.type === "trusted-committers");
@@ -36784,7 +36815,17 @@ async function ready(ctx, args, head) {
   if (!checks.ok)
     throw new NotReady(checks.problems.join("; "));
 }
+async function refreshConfig(ctx) {
+  if (ctx.reloadConfig)
+    ctx.config = await ctx.reloadConfig();
+  const entry = repositoryEntry(ctx.config, ctx.repository);
+  if (!entry)
+    throw new Rejection(`repository ${ctx.repository} is no longer managed by this server`);
+  if (!entry.ops.includes("merge"))
+    throw new Rejection(`repository ${ctx.repository} no longer enables merge`);
+}
 async function waitForMerge(ctx, args) {
+  await refreshConfig(ctx);
   const pull = await pullFacts(ctx.server, ctx.repository, args.pull_number);
   checkPullState(pull);
   const comment = await fetchComment(ctx.server, ctx.repository, args.comment_id);
@@ -36802,6 +36843,7 @@ async function waitForMerge(ctx, args) {
     throw new Error("notification token is required after accepting a merge command");
   try {
     await notify.rest.reactions.createForIssueComment({ ...splitRepository(ctx.repository), comment_id: args.comment_id, content: "rocket" });
+    ctx.onAccepted?.();
     const deadline = ctx.now().getTime() + ctx.config.merge.deadline_minutes * 60000;
     let last;
     while (ctx.now().getTime() <= deadline) {
@@ -36820,7 +36862,7 @@ async function waitForMerge(ctx, args) {
     }
     throw new Rejection(`merge readiness deadline passed: ${last instanceof Error ? last.message : "not ready"}`);
   } catch (error) {
-    await postReceipt(ctx, pull.number, receipt, `csm-ci: /merge failed: ${error instanceof Error ? error.message : String(error)}`);
+    await postFailureReceipt(ctx, pull.number, receipt, error);
     throw error;
   }
 }
@@ -36841,11 +36883,29 @@ async function postReceipt(ctx, issueNumber, receipt, body) {
       throw error;
   }
 }
+async function postFailureReceipt(ctx, issueNumber, receipt, failure) {
+  const reason = failure instanceof Error ? failure.message : String(failure);
+  try {
+    await postReceipt(ctx, issueNumber, receipt, `csm-ci: /merge failed: ${reason}`);
+  } catch (receiptError) {
+    const receiptReason = receiptError instanceof Error ? receiptError.message : String(receiptError);
+    throw new AggregateError([failure, receiptError], `${reason}; additionally failed to post the merge failure receipt: ${receiptReason}`);
+  }
+}
+async function postMergeFailureReceipt(ctx, args, message) {
+  await postReceipt(ctx, args.pull_number, marker("merge", args.comment_id), `csm-ci: /merge failed: ${message}`);
+}
 async function runMerge(ctx, args, expected) {
   const receipt = marker("merge", args.comment_id);
   const write = ctx.write;
   if (!write)
     throw new Error("write token is required to merge");
+  try {
+    await refreshConfig(ctx);
+  } catch (error) {
+    await postFailureReceipt(ctx, args.pull_number, receipt, error);
+    throw error;
+  }
   const existing = await ctx.server.paginate(ctx.server.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: args.pull_number, per_page: 100 });
   if (hasServerMarker(existing, receipt, ctx.config.apps.server_bot_id))
     throw new Rejection(`comment ${args.comment_id} was already handled`);
@@ -36875,7 +36935,7 @@ async function runMerge(ctx, args, expected) {
           throw new Rejection(`pull request #${pull.number} cannot merge because its base changed`);
         const code = status(error);
         const retryable = [405, 422, 503].includes(code ?? 0);
-        if (!retryable && code !== 502 && code !== 504 && !timedOut(error))
+        if (!retryable && code !== 502 && code !== 504 && !timedOut(error) && !isNetworkFailure(error))
           throw error;
         uncertain = true;
         try {
@@ -36900,7 +36960,7 @@ async function runMerge(ctx, args, expected) {
     return outcome;
   } catch (error) {
     if (!outcome && !uncertain)
-      await postReceipt(ctx, args.pull_number, receipt, `csm-ci: /merge failed: ${error instanceof Error ? error.message : String(error)}`);
+      await postFailureReceipt(ctx, args.pull_number, receipt, error);
     throw error;
   }
 }
@@ -36914,13 +36974,17 @@ function env(name) {
 }
 async function main() {
   const read = github(getInput("server-token", { required: true }));
-  const config = await loadConfig(github(getInput("github-token", { required: true })), env("GITHUB_REPOSITORY"), env("GITHUB_SHA"), getInput("config-path", { required: true }));
+  const workflowRepository = env("GITHUB_REPOSITORY");
+  const configPath = getInput("config-path", { required: true });
+  const configReader = github(getInput("github-token", { required: true }));
+  const config = await loadConfig(configReader, workflowRepository, env("GITHUB_SHA"), configPath);
   const args = JSON.parse(getInput("args", { required: true }));
   const ctx = {
     server: read,
     notify: github(getInput("notification-token", { required: true })),
     ...getInput("mode") === "merge" ? { write: github(getInput("write-token", { required: true })) } : {},
     config,
+    reloadConfig: () => loadCurrentServerConfig(configReader, workflowRepository, configPath),
     repository: getInput("repository", { required: true }),
     now: () => new Date,
     sleep: async (milliseconds) => {
@@ -36929,10 +36993,20 @@ async function main() {
   };
   const mode = getInput("mode", { required: true });
   if (mode === "wait") {
-    const ready = await waitForMerge(ctx, args);
-    setOutput("ready", "true");
-    setOutput("head", ready.head);
-    info(`pull request is ready at ${ready.head}`);
+    ctx.onAccepted = () => setOutput("accepted", "true");
+    try {
+      const ready = await waitForMerge(ctx, args);
+      setOutput("ready", "true");
+      setOutput("head", ready.head);
+      info(`pull request is ready at ${ready.head}`);
+    } catch (error) {
+      setOutput("error", error instanceof Error ? error.message : String(error));
+      throw error;
+    }
+    return;
+  }
+  if (mode === "failure-receipt") {
+    await postMergeFailureReceipt(ctx, args, getInput("failure-message", { required: true }));
     return;
   }
   if (mode !== "merge")

@@ -36452,7 +36452,12 @@ function isRetryableError(error, timedOut) {
     return false;
   if ("status" in error && (error.status === 502 || error.status === 503 || error.status === 504))
     return true;
-  if (!("cause" in error))
+  return isNetworkFailure(error);
+}
+function isNetworkFailure(error) {
+  if (error instanceof TypeError)
+    return true;
+  if (typeof error !== "object" || error === null || !("cause" in error))
     return false;
   const cause = error.cause;
   return cause instanceof TypeError || cause instanceof Error && ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EAI_AGAIN", "ENETUNREACH"].some((code) => cause.message.includes(code));

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { type GitHub, github, loadConfig, splitRepository, verifyLiveLabel } from "./github.ts";
+import { type GitHub, github, loadConfig, loadCurrentServerConfig, splitRepository, verifyLiveLabel } from "./github.ts";
 import { hasServerMarker, marker } from "./notify.ts";
 import { CONFIG_YAML, fakeFetch, SERVER_BOT_ID } from "./testing.ts";
 import { fetchCommitFacts } from "./trust.ts";
@@ -15,6 +15,24 @@ describe("loadConfig", () => {
     const fetch = fakeFetch([{ method: "GET", path: "/repos/owner/server/contents/csm-ci.yaml", body: CONFIG_YAML }]);
     const c = await loadConfig(github("t", fetch), "owner/server", "abc", "csm-ci.yaml");
     expect(c.server_repository).toBe("owner/server");
+  });
+});
+
+describe("loadCurrentServerConfig", () => {
+  test("reads the current default-branch config only when it identifies this server", async () => {
+    const fetch = fakeFetch([
+      { method: "GET", path: "/repos/owner/server", body: { default_branch: "main" } },
+      { method: "GET", path: "/repos/owner/server/contents/csm-ci.yaml", body: CONFIG_YAML },
+    ]);
+    await expect(loadCurrentServerConfig(github("t", fetch), "owner/server", "csm-ci.yaml"))
+      .resolves.toMatchObject({ server_repository: "owner/server" });
+
+    const mismatch = fakeFetch([
+      { method: "GET", path: "/repos/owner/server", body: { default_branch: "main" } },
+      { method: "GET", path: "/repos/owner/server/contents/csm-ci.yaml", body: CONFIG_YAML.replace("Owner/Server", "Owner/Other") },
+    ]);
+    await expect(loadCurrentServerConfig(github("t", mismatch), "owner/server", "csm-ci.yaml"))
+      .rejects.toThrow(/current server configuration identifies owner\/other, not owner\/server/);
   });
 });
 

@@ -1,8 +1,10 @@
 // Helpers shared by the e2e scenarios. GitHub is the system under test, so every check reads the API.
+import { randomUUID } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { parseArgs } from "node:util";
 import { type GitHub, splitRepository } from "../src/lib/github.ts";
+import { findRecentRunByTitle, matchesAcceptedRequest, matchesCleanupLabel, recentItems } from "./correlation.ts";
 
 export const OWNER = "civitaspo";
 export const ACTIONS = `${OWNER}/csm-ci-actions`;
@@ -12,9 +14,9 @@ const FIXTURES = join(import.meta.dir, "fixtures");
 const POLL_MS = 5_000;
 const TIMEOUT_MS = 10 * 60_000;
 
-export type Run = { id: number; html_url: string; status: string | null; conclusion: string | null; created_at: string };
+export type Run = { id: number; html_url: string; status: string | null; conclusion: string | null; created_at: string; display_title: string };
 export type Ctx = { gh: GitHub; urls: string[]; untrusted: GitHub | undefined };
-export type Scenario = { name: string; needsUntrusted?: boolean; run: (ctx: Ctx) => Promise<void> };
+export type Scenario = { name: string; needsUntrusted?: boolean; serial?: boolean; run: (ctx: Ctx) => Promise<void> };
 
 export function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -89,9 +91,11 @@ export async function syncFixtures(gh: GitHub): Promise<void> {
 
 export async function dispatch(ctx: Ctx, repository: string, workflow: string, inputs: Record<string, string> = {}): Promise<Run> {
   const since = new Date(Date.now() - 2_000);
+  const correlation = workflow === "csm-ci-smoke.yml" ? randomUUID() : undefined;
+  const dispatchInputs = correlation ? { ...inputs, correlation } : inputs;
   await until(`dispatch of ${workflow}`, async () => {
     try {
-      await ctx.gh.rest.actions.createWorkflowDispatch({ ...splitRepository(repository), workflow_id: workflow, ref: "main", inputs });
+      await ctx.gh.rest.actions.createWorkflowDispatch({ ...splitRepository(repository), workflow_id: workflow, ref: "main", inputs: dispatchInputs });
       return true;
     } catch (e) {
       // A just-synced workflow is briefly unknown to the dispatch API.
@@ -99,9 +103,15 @@ export async function dispatch(ctx: Ctx, repository: string, workflow: string, i
       throw e;
     }
   });
-  const run = await until(`a ${workflow} run`, async () => {
-    const { data } = await ctx.gh.rest.actions.listWorkflowRuns({ ...splitRepository(repository), workflow_id: workflow, event: "workflow_dispatch", per_page: 5 });
-    return data.workflow_runs.find((r) => new Date(r.created_at) >= since);
+  const run = await until(`the ${workflow} run ${correlation ?? ""}`, async () => {
+    async function* pages() {
+      const iterator = ctx.gh.paginate.iterator(ctx.gh.rest.actions.listWorkflowRuns, {
+        ...splitRepository(repository), workflow_id: workflow, event: "workflow_dispatch", per_page: 100,
+      });
+      for await (const page of iterator) yield page.data;
+    }
+    if (correlation) return findRecentRunByTitle(pages(), since, `csm-ci-smoke ${correlation}`);
+    return (await recentItems(pages(), since))[0];
   });
   return waitRun(ctx, repository, run.id);
 }
@@ -115,14 +125,32 @@ export async function waitRun(ctx: Ctx, repository: string, id: number): Promise
   return run;
 }
 
-export async function serverRun(ctx: Ctx, since: Date): Promise<Run> {
-  const run = await until("the server run for the label", async () => {
-    const { data } = await ctx.gh.rest.actions.listWorkflowRuns({ ...splitRepository(SERVER), workflow_id: "csm-ci.yml", event: "label", per_page: 10 });
-    const runs = data.workflow_runs.filter((r) => new Date(r.created_at) >= since);
-    assert(runs.length <= 1, `expected one server run since ${since.toISOString()}, found ${runs.length}`);
-    return runs[0];
-  });
-  return waitRun(ctx, SERVER, run.id);
+export async function recentWorkflowRuns(ctx: Ctx, repository: string, workflow: string, event: string, since: Date): Promise<Run[]> {
+  async function* pages() {
+    const iterator = ctx.gh.paginate.iterator(ctx.gh.rest.actions.listWorkflowRuns, {
+      ...splitRepository(repository), workflow_id: workflow, event, per_page: 100,
+    });
+    for await (const page of iterator) yield page.data;
+  }
+  return recentItems(pages(), since);
+}
+
+export async function serverRuns(ctx: Ctx, match: RequestMatch, since: Date): Promise<Run[]> {
+  const candidates = await recentWorkflowRuns(ctx, SERVER, "csm-ci.yml", "label", since);
+  const found: Run[] = [];
+  for (const run of candidates) {
+    if (run.status !== "completed") continue;
+    const byName = await jobs(ctx, SERVER, run.id);
+    const intake = byName.get("intake");
+    if (!intake) continue;
+    if (intake.conclusion !== "skipped" && matchesAcceptedRequest(await jobLog(ctx, SERVER, intake.id), match)) {
+      found.push(run);
+    } else if (match.label) {
+      const cleanup = byName.get("cleanup");
+      if (cleanup && matchesCleanupLabel(await jobLog(ctx, SERVER, cleanup.id), match.label)) found.push(run);
+    }
+  }
+  return found;
 }
 
 export async function jobs(ctx: Ctx, repository: string, runId: number): Promise<Map<string, { id: number; conclusion: string | null }>> {
@@ -135,15 +163,11 @@ export async function jobLog(ctx: Ctx, repository: string, jobId: number): Promi
   return String(data);
 }
 
-export async function requestLabels(ctx: Ctx): Promise<string[]> {
-  const labels = await ctx.gh.paginate(ctx.gh.rest.issues.listLabelsForRepo, { ...splitRepository(SERVER), per_page: 100 });
-  return labels.map((l) => l.name).filter((n) => n.startsWith("csm-ci-"));
-}
-
 export type Conclusion = "success" | "failure" | "skipped";
 
-export async function expectServer(ctx: Ctx, since: Date, intake: Conclusion, op: Conclusion, logPattern?: RegExp): Promise<void> {
-  const run = await serverRun(ctx, since);
+export async function expectServer(ctx: Ctx, match: RequestMatch, since: Date, intake: Conclusion, op: Conclusion, logPattern?: RegExp): Promise<void> {
+  const run = (await until("the server run for the request", async () => (await serverRuns(ctx, match, since))[0]))!;
+  await waitRun(ctx, SERVER, run.id);
   const byName = await jobs(ctx, SERVER, run.id);
   const intakeJob = byName.get("intake");
   assert(intakeJob?.conclusion === intake, `intake job concluded ${intakeJob?.conclusion}, expected ${intake} (${run.html_url})`);
@@ -153,29 +177,41 @@ export async function expectServer(ctx: Ctx, since: Date, intake: Conclusion, op
     const log = await jobLog(ctx, SERVER, intakeJob.id);
     assert(logPattern.test(log), `intake log does not match ${logPattern} (${run.html_url})`);
   }
-  const left = await requestLabels(ctx);
-  assert(left.length === 0, `request labels left in ${SERVER}: ${left.join(", ")}`);
+  assert(match.label, "request label is required to verify cleanup");
+  let labelExists = false;
+  try {
+    await ctx.gh.rest.issues.getLabel({ ...splitRepository(SERVER), name: match.label });
+    labelExists = true;
+  } catch (e) {
+    if (!hasStatus(e, 404)) throw e;
+  }
+  assert(!labelExists, `request label ${match.label} remains in ${SERVER}`);
 }
 
-export async function smokeRequest(ctx: Ctx, kind: string, args: string): Promise<Date> {
+export async function smokeRequest(ctx: Ctx, kind: string, args: string): Promise<{ since: Date; label: string }> {
   const run = await dispatch(ctx, CLIENT, "csm-ci-smoke.yml", { kind, args });
   assert(run.conclusion === "success", `client request run concluded ${run.conclusion} (${run.html_url})`);
-  return new Date(new Date(run.created_at).getTime() - 2_000);
+  const request = await until(`the request job of ${run.html_url}`, async () => (await jobs(ctx, CLIENT, run.id)).get("request"));
+  const log = await jobLog(ctx, CLIENT, request.id);
+  const label = /created label (csm-ci-[^ ]+) \(/.exec(log)?.[1];
+  assert(label, `request label missing from ${run.html_url}`);
+  return { since: new Date(new Date(run.created_at).getTime() - 2_000), label };
 }
 
 export const APPROVER_LOGIN = "testing-csm-ci-approver[bot]";
 export const SERVER_BOT_ID = 347400474;
 
 export type Pr = { number: number; head: string; branch: string };
+export type RequestMatch = { kind: string; repository: string; args: Record<string, number>; label?: string };
 
 // signed: createCommitOnBranch, which GitHub signs as web-flow for the token's user.
 // Otherwise the REST contents API, whose commits GitHub leaves unsigned.
-export async function openPr(ctx: Ctx, kind: "signed" | "unsigned", as: GitHub = ctx.gh, author?: { name: string; email: string }): Promise<Pr> {
+export async function openPr(ctx: Ctx, kind: "signed" | "unsigned", as: GitHub = ctx.gh, author?: { name: string; email: string }, prAs: GitHub = ctx.gh, filePath?: string, draft = false): Promise<Pr> {
   const repo = splitRepository(CLIENT);
   const base = (await ctx.gh.rest.repos.getBranch({ ...repo, branch: "main" })).data.commit.sha;
   const branch = `e2e-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   await ctx.gh.rest.git.createRef({ ...repo, ref: `refs/heads/${branch}`, sha: base });
-  const path = `e2e/${branch}.txt`;
+  const path = filePath ?? `e2e/${branch}.txt`;
   let head: string;
   if (kind === "signed") {
     const data = await as.graphql<{ createCommitOnBranch: { commit: { oid: string } } }>(
@@ -201,7 +237,7 @@ export async function openPr(ctx: Ctx, kind: "signed" | "unsigned", as: GitHub =
     });
     head = data.commit.sha ?? "";
   }
-  const { data: pr } = await ctx.gh.rest.pulls.create({ ...repo, base: "main", head: branch, title: `e2e ${branch}` });
+  const { data: pr } = await prAs.rest.pulls.create({ ...repo, base: "main", head: branch, title: `e2e ${branch}`, ...(draft ? { draft: true } : {}) });
   return { number: pr.number, head, branch };
 }
 
@@ -211,10 +247,10 @@ export async function closePr(ctx: Ctx, pr: Pr): Promise<void> {
   await ctx.gh.rest.git.deleteRef({ ...repo, ref: `heads/${pr.branch}` });
 }
 
-export async function postComment(ctx: Ctx, pr: Pr, body: string, as: GitHub = ctx.gh): Promise<{ id: number; since: Date }> {
+export async function postComment(ctx: Ctx, pr: Pr, body: string, as: GitHub = ctx.gh): Promise<{ id: number; since: Date; authorAssociation: string }> {
   const since = new Date(Date.now() - 2_000);
   const { data } = await as.rest.issues.createComment({ ...splitRepository(CLIENT), issue_number: pr.number, body });
-  return { id: Number(data.id), since };
+  return { id: Number(data.id), since, authorAssociation: data.author_association ?? "" };
 }
 
 export async function approverReviews(ctx: Ctx, pr: Pr): Promise<{ id: number; state: string; commit_id: string | null; body: string }[]> {
@@ -228,8 +264,9 @@ export async function serverComments(ctx: Ctx, pr: Pr): Promise<string[]> {
 }
 
 // Waits for the one server run started since `since` and checks its op job.
-export async function expectOp(ctx: Ctx, since: Date, op: Conclusion, logPattern?: RegExp): Promise<void> {
-  const run = await serverRun(ctx, since);
+export async function expectOp(ctx: Ctx, match: RequestMatch, since: Date, op: Conclusion, logPattern?: RegExp): Promise<void> {
+  const run = (await until("the server run for the request", async () => (await serverRuns(ctx, match, since))[0]))!;
+  await waitRun(ctx, SERVER, run.id);
   const byName = await jobs(ctx, SERVER, run.id);
   const opJob = byName.get("op");
   assert(byName.get("intake")?.conclusion === "success", `intake job concluded ${byName.get("intake")?.conclusion} (${run.html_url})`);

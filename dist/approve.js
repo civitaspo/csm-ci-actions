@@ -36430,7 +36430,12 @@ function isRetryableError(error, timedOut) {
     return false;
   if ("status" in error && (error.status === 502 || error.status === 503 || error.status === 504))
     return true;
-  if (!("cause" in error))
+  return isNetworkFailure(error);
+}
+function isNetworkFailure(error) {
+  if (error instanceof TypeError)
+    return true;
+  if (typeof error !== "object" || error === null || !("cause" in error))
     return false;
   const cause = error.cause;
   return cause instanceof TypeError || cause instanceof Error && ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EAI_AGAIN", "ENETUNREACH"].some((code) => cause.message.includes(code));
@@ -36467,6 +36472,28 @@ function signedCommits(_, { trust }) {
 
 // src/lib/policies/sensitive-paths.ts
 var import_picomatch = __toESM(require_picomatch2(), 1);
+
+// src/lib/github-comment.ts
+async function fetchComment(gh, repository, commentId) {
+  const { data: comment } = await gh.rest.issues.getComment({ ...splitRepository(repository), comment_id: commentId });
+  if (!comment.node_id)
+    throw new Rejection(`cannot verify the edit history of comment ${commentId}`);
+  const { node } = await gh.graphql("query($id: ID!) { node(id: $id) { ... on IssueComment { databaseId lastEditedAt } } }", { id: comment.node_id });
+  if (!node || node.databaseId !== Number(comment.id) || !(node.lastEditedAt === null || typeof node.lastEditedAt === "string")) {
+    throw new Rejection(`cannot verify the edit history of comment ${commentId}`);
+  }
+  return {
+    id: Number(comment.id),
+    body: comment.body ?? "",
+    issueUrl: comment.issue_url,
+    createdAt: comment.created_at,
+    updatedAt: comment.updated_at,
+    lastEditedAt: node.lastEditedAt,
+    user: comment.user ? { id: Number(comment.user.id), login: comment.user.login, type: comment.user.type } : null
+  };
+}
+
+// src/lib/policies/sensitive-paths.ts
 var MARKER = /<!-- csm-ci:approve:command:(\d+) -->/g;
 var MAX_FILES = 3000;
 async function sensitivePaths(policy, ctx) {
@@ -36494,16 +36521,15 @@ async function sensitivePaths(policy, ctx) {
     for (const marker of markers) {
       const commentId = Number(marker[1]);
       try {
-        const { data: comment } = await ctx.gh.rest.issues.getComment({ owner, repo, comment_id: commentId });
-        if (comment.body !== "/approve" || comment.issue_url !== `https://api.github.com/repos/${owner}/${repo}/issues/${ctx.pullNumber}` || comment.user?.type !== "User" || !ctx.config.trust.approvers.some((p) => p.id === Number(comment.user?.id)) || !comment.node_id || comment.created_at !== comment.updated_at)
+        const comment = await fetchComment(ctx.gh, ctx.repository, commentId);
+        const belongsToPull = comment.issueUrl.toLowerCase() === `https://api.github.com/repos/${owner}/${repo}/issues/${ctx.pullNumber}`;
+        if (comment.body !== "/approve" || !belongsToPull || comment.user?.type !== "User" || !ctx.config.trust.approvers.some((p) => p.id === comment.user?.id) || comment.createdAt !== comment.updatedAt || comment.lastEditedAt !== null)
           continue;
-        if (!comment.node_id)
-          continue;
-        const edit = await ctx.gh.graphql("query($id: ID!) { node(id: $id) { ... on IssueComment { lastEditedAt } } }", { id: comment.node_id });
-        if (edit.node?.lastEditedAt === null)
-          return [];
+        return [];
       } catch (error) {
         if (typeof error === "object" && error !== null && "status" in error && error.status === 404)
+          continue;
+        if (error instanceof Rejection)
           continue;
         throw error;
       }
@@ -36642,7 +36668,8 @@ async function evaluatePullPolicies(ctx, commandApproval) {
   });
 }
 function policySummary(results) {
-  const rows = results.map((r) => `| ${r.type} | ${r.ok ? "pass" : "fail"} | ${r.problems.length ? r.problems.join("; ").replaceAll("|", "\\|") : "—"} |`);
+  const escapeCell = (value) => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll("\\", "&#92;").replaceAll("|", "&#124;").replaceAll("`", "&#96;").replaceAll("*", "&#42;").replaceAll("_", "&#95;").replaceAll("[", "&#91;").replaceAll("]", "&#93;").replaceAll("~", "&#126;").replaceAll("!", "&#33;").replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+  const rows = results.map((r) => `| ${escapeCell(r.type)} | ${r.ok ? "pass" : "fail"} | ${escapeCell(r.problems.length ? r.problems.join("; ") : "—")} |`);
   return ["| Policy | Result | Details |", "| --- | --- | --- |", ...rows].join(`
 `);
 }
@@ -36651,13 +36678,14 @@ async function updatePolicyCheck(ctx) {
   const results = await evaluatePullPolicies(ctx);
   const ok = results.every((r) => r.ok);
   const summary = policySummary(results);
+  const completedAt = new Date().toISOString();
   const checkRuns = await ctx.server.paginate(ctx.server.rest.checks.listForRef, { owner, repo, ref: ctx.pull.headSha, per_page: 100 });
   const existing = checkRuns.find((c) => c.name === "csm-ci/policy" && c.external_id === ctx.pull.headSha && Number(c.app?.id) === ctx.config.apps.server_app_id);
   const output = { title: ok ? "Policies passed" : "Policies failed", summary };
   if (existing) {
-    await ctx.server.rest.checks.update({ owner, repo, check_run_id: Number(existing.id), name: "csm-ci/policy", external_id: ctx.pull.headSha, head_sha: ctx.pull.headSha, status: "completed", conclusion: ok ? "success" : "failure", output });
+    await ctx.server.rest.checks.update({ owner, repo, check_run_id: Number(existing.id), name: "csm-ci/policy", external_id: ctx.pull.headSha, head_sha: ctx.pull.headSha, status: "completed", completed_at: completedAt, conclusion: ok ? "success" : "failure", output });
   } else {
-    await ctx.server.rest.checks.create({ owner, repo, name: "csm-ci/policy", external_id: ctx.pull.headSha, head_sha: ctx.pull.headSha, status: "completed", conclusion: ok ? "success" : "failure", output });
+    await ctx.server.rest.checks.create({ owner, repo, name: "csm-ci/policy", external_id: ctx.pull.headSha, head_sha: ctx.pull.headSha, status: "completed", completed_at: completedAt, conclusion: ok ? "success" : "failure", output });
   }
   return results;
 }
@@ -36675,22 +36703,6 @@ async function fetchPull(gh, repository, pullNumber) {
     baseRef: p.base.ref,
     defaultBranch: p.base.repo.default_branch,
     authorId: Number(p.user.id)
-  };
-}
-async function fetchComment(gh, repository, commentId) {
-  const { data: c } = await gh.rest.issues.getComment({ ...splitRepository(repository), comment_id: commentId });
-  const { node } = await gh.graphql("query($id: ID!) { node(id: $id) { ... on IssueComment { databaseId lastEditedAt } } }", { id: c.node_id });
-  if (!node || node.databaseId !== Number(c.id) || !(node.lastEditedAt === null || typeof node.lastEditedAt === "string")) {
-    throw new Rejection(`cannot verify the edit history of comment ${commentId}`);
-  }
-  return {
-    id: Number(c.id),
-    body: c.body ?? "",
-    issueUrl: c.issue_url,
-    createdAt: c.created_at,
-    updatedAt: c.updated_at,
-    lastEditedAt: node.lastEditedAt,
-    user: c.user ? { id: Number(c.user.id), login: c.user.login, type: c.user.type } : null
   };
 }
 async function approveHead(ctx, pull, body, forceMarker = false) {
@@ -36751,7 +36763,9 @@ async function commandApprove(ctx, pull, comment) {
   if (problems.length > 0)
     throw new Rejection(`/approve cannot proceed because policy checks failed: ${problems.join("; ")}`);
   await checkHeadPredatesComment(ctx, pull, comment);
-  validateComment(await fetchComment(ctx.server, ctx.repository, comment.id), ctx.repository, pull.number, ctx.now());
+  const currentCommand = validateComment(await fetchComment(ctx.server, ctx.repository, comment.id), ctx.repository, pull.number, ctx.now());
+  if (currentCommand.name !== "approve")
+    throw new Rejection(`comment ${comment.id} is no longer exactly /approve`);
   const outcome = await approveHead(ctx, pull, marker("approve:command", comment.id), true);
   await refreshPolicy(ctx, outcome.result === "dismissed" ? await fetchPull(ctx.server, ctx.repository, pull.number) : pull);
   return outcome;
@@ -36772,6 +36786,8 @@ async function runApprove(ctx, args) {
     checkPullState(pull);
     return autoApprove(ctx, pull);
   }
+  if (command.name !== "approve")
+    throw new Rejection(`comment ${comment.id} is not exactly /approve`);
   const receipt = marker("approve", comment.id);
   const comments = await ctx.server.paginate(ctx.server.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: pull.number, per_page: 100 });
   if (hasServerMarker(comments, receipt, ctx.config.apps.server_bot_id))

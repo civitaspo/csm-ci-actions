@@ -53,7 +53,35 @@ merge:
 policies:
   - { type: signed-commits }
   - { type: trusted-committers }
-  - { type: sensitive-paths, paths: [".github/**", "Makefile"], exempt: [] }
+  - type: sensitive-paths
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - "**/package.json"
+      - "**/package-lock.json"
+      - "**/npm-shrinkwrap.json"
+      - "**/bun.lock*"
+      - "**/yarn.lock"
+      - "**/pnpm-lock.yaml"
+      - "**/go.mod"
+      - "**/go.sum"
+      - "**/pyproject.toml"
+      - "**/requirements*.txt"
+      - "**/Pipfile*"
+      - "**/poetry.lock"
+      - "**/uv.lock"
+      - "**/Gemfile*"
+      - "**/composer.*"
+      - "**/Package.swift"
+      - "**/Package.resolved"
+      - Makefile
+      - "**/Dockerfile*"
+      - "**/.goreleaser.*"
+      - scripts/**
+      - "**/build.rs"
+      - .cargo/**
+      - .github/**
+    exempt: []
 repositories:
   - { name: your-account/*, ops: [approve, merge, policy-check] }
 ```
@@ -171,4 +199,4 @@ jobs:
     secrets: inherit
 ```
 
-The command is exactly `/merge`. The server waits for the latest approver review, current policies, and configured checks before minting its write token and merging.
+The command is exactly `/merge`. The server waits for the latest approver review, current policies, and configured checks. After readiness succeeds, the workflow mints fresh read and notification tokens plus a contents and pull-requests write token, then revalidates and merges. If an accepted wait fails, the workflow mints a fresh notification token for the failure receipt.

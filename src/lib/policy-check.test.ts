@@ -3,7 +3,7 @@ import type { PullFacts } from "./command.ts";
 import type { Config } from "./config.ts";
 import { config, fakeFetch } from "./testing.ts";
 import { github } from "./github.ts";
-import { evaluatePullPolicies, updatePolicyCheck } from "./policy-check.ts";
+import { evaluatePullPolicies, policySummary, updatePolicyCheck } from "./policy-check.ts";
 
 const head = "a".repeat(40);
 const pull: PullFacts = { number: 12, state: "open", draft: false, headSha: head, headRepository: "owner/repo", baseRepository: "owner/repo", baseRef: "main", defaultBranch: "main", authorId: 10 };
@@ -48,7 +48,7 @@ describe("updatePolicyCheck", () => {
     const { server, sent } = setup([]);
     await updatePolicyCheck({ server, config: config(), repository: "owner/repo", pull });
     const create = sent.find((r) => r.method === "POST" && r.path === `${base}/check-runs`);
-    expect(create?.body).toMatchObject({ name: "csm-ci/policy", external_id: head, head_sha: head, status: "completed", conclusion: "success" });
+    expect(create?.body).toMatchObject({ name: "csm-ci/policy", external_id: head, head_sha: head, status: "completed", completed_at: expect.any(String), conclusion: "success" });
     expect(create?.body.output).toMatchObject({ title: "Policies passed" });
     expect((create?.body.output as { summary: string }).summary).toContain("| trusted-committers | pass | — |");
   });
@@ -56,10 +56,24 @@ describe("updatePolicyCheck", () => {
   test("updates only a check created by the configured Server App", async () => {
     const own = setup([{ id: 7, name: "csm-ci/policy", external_id: head, app: { id: 1 } }]);
     await updatePolicyCheck({ server: own.server, config: config(), repository: "owner/repo", pull });
-    expect(own.sent.some((r) => r.method === "PATCH" && r.path === `${base}/check-runs/7`)).toBe(true);
+    const update = own.sent.find((r) => r.method === "PATCH" && r.path === `${base}/check-runs/7`);
+    expect(update).toBeDefined();
+    expect(update?.body).toMatchObject({ status: "completed", completed_at: expect.any(String), conclusion: "success" });
     const other = setup([{ id: 7, name: "csm-ci/policy", external_id: head, app: { id: 2 } }]);
     await updatePolicyCheck({ server: other.server, config: config(), repository: "owner/repo", pull });
     expect(other.sent.some((r) => r.method === "POST" && r.path === `${base}/check-runs`)).toBe(true);
     expect(other.sent.some((r) => r.method === "PATCH")).toBe(false);
   });
+});
+
+test("policy summary keeps hostile details inside their table cell", () => {
+  const summary = policySummary([{
+    type: "sensitive-paths",
+    ok: false,
+    problems: ["bad\n| trusted-committers | pass | <img src=x onerror=alert(1)> `code` *bold* [link](https://example.test)\\tail"],
+  }]);
+
+  expect(summary.split("\n")).toHaveLength(3);
+  expect(summary).not.toContain("| trusted-committers | pass |");
+  expect(summary).toContain("bad &#124; trusted-committers &#124; pass &#124; &lt;img src=x onerror=alert(1)&gt; &#96;code&#96; &#42;bold&#42; &#91;link&#93;(https://example.test)&#92;tail");
 });

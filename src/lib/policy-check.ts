@@ -22,7 +22,21 @@ export async function evaluatePullPolicies(ctx: PolicyCheckContext, commandAppro
 }
 
 export function policySummary(results: readonly PolicyResult[]): string {
-  const rows = results.map((r) => `| ${r.type} | ${r.ok ? "pass" : "fail"} | ${r.problems.length ? r.problems.join("; ").replaceAll("|", "\\|") : "—"} |`);
+  const escapeCell = (value: string): string => value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("\\", "&#92;")
+    .replaceAll("|", "&#124;")
+    .replaceAll("`", "&#96;")
+    .replaceAll("*", "&#42;")
+    .replaceAll("_", "&#95;")
+    .replaceAll("[", "&#91;")
+    .replaceAll("]", "&#93;")
+    .replaceAll("~", "&#126;")
+    .replaceAll("!", "&#33;")
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+  const rows = results.map((r) => `| ${escapeCell(r.type)} | ${r.ok ? "pass" : "fail"} | ${escapeCell(r.problems.length ? r.problems.join("; ") : "—")} |`);
   return ["| Policy | Result | Details |", "| --- | --- | --- |", ...rows].join("\n");
 }
 
@@ -31,13 +45,14 @@ export async function updatePolicyCheck(ctx: PolicyCheckContext): Promise<Policy
   const results = await evaluatePullPolicies(ctx);
   const ok = results.every((r) => r.ok);
   const summary = policySummary(results);
+  const completedAt = new Date().toISOString();
   const checkRuns = await ctx.server.paginate(ctx.server.rest.checks.listForRef, { owner, repo, ref: ctx.pull.headSha, per_page: 100 });
   const existing = checkRuns.find((c) => c.name === "csm-ci/policy" && c.external_id === ctx.pull.headSha && Number(c.app?.id) === ctx.config.apps.server_app_id);
   const output = { title: ok ? "Policies passed" : "Policies failed", summary };
   if (existing) {
-    await ctx.server.rest.checks.update({ owner, repo, check_run_id: Number(existing.id), name: "csm-ci/policy", external_id: ctx.pull.headSha, head_sha: ctx.pull.headSha, status: "completed", conclusion: ok ? "success" : "failure", output });
+    await ctx.server.rest.checks.update({ owner, repo, check_run_id: Number(existing.id), name: "csm-ci/policy", external_id: ctx.pull.headSha, head_sha: ctx.pull.headSha, status: "completed", completed_at: completedAt, conclusion: ok ? "success" : "failure", output });
   } else {
-    await ctx.server.rest.checks.create({ owner, repo, name: "csm-ci/policy", external_id: ctx.pull.headSha, head_sha: ctx.pull.headSha, status: "completed", conclusion: ok ? "success" : "failure", output });
+    await ctx.server.rest.checks.create({ owner, repo, name: "csm-ci/policy", external_id: ctx.pull.headSha, head_sha: ctx.pull.headSha, status: "completed", completed_at: completedAt, conclusion: ok ? "success" : "failure", output });
   }
   return results;
 }

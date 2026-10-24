@@ -2,7 +2,7 @@ name: csm-ci merge
 description: Wait for a fresh, policy-compliant approval and squash-merge a pull request.
 inputs:
   mode:
-    description: wait checks readiness; merge rechecks readiness and performs the merge.
+    description: wait checks readiness; merge rechecks readiness and performs the merge; failure-receipt posts an accepted wait failure.
     required: true
   github-token:
     description: Token with contents:read on the server repository to read csm-ci.yaml.
@@ -28,9 +28,16 @@ inputs:
   head:
     description: Head SHA produced by wait mode, required only in merge mode.
     required: false
+  failure-message:
+    description: Original wait failure to include in the failure receipt.
+    required: false
 outputs:
   ready:
     description: true when the request is ready to merge.
+  accepted:
+    description: true when the Server App accepted the command and reacted with a rocket.
+  error:
+    description: Wait failure message for a fresh-token failure receipt step.
   head:
     description: Pinned pull request head SHA.
   result:

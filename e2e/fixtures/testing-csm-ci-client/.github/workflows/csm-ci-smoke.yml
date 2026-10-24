@@ -1,4 +1,5 @@
 name: csm-ci-smoke
+run-name: csm-ci-smoke ${{ inputs.correlation }}
 on:
   workflow_dispatch:
     inputs:
@@ -8,6 +9,10 @@ on:
         type: string
       args:
         description: Request numbers joined by a slash.
+        required: true
+        type: string
+      correlation:
+        description: Unique identifier assigned by the e2e harness.
         required: true
         type: string
 permissions: {}

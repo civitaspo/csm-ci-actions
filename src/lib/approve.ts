@@ -4,6 +4,8 @@ import { type GitHub, splitRepository } from "./github.ts";
 import { hasServerMarker, marker, postResult } from "./notify.ts";
 import { evaluatePullPolicies, updatePolicyCheck } from "./policy-check.ts";
 import { Rejection } from "./request.ts";
+import { fetchComment } from "./github-comment.ts";
+export { fetchComment } from "./github-comment.ts";
 
 export type ApproveContext = { server: GitHub; approver: GitHub; config: Config; repository: string; now: () => Date };
 export type ApproveOutcome = { result: "approved" | "already-approved" | "declined" | "dismissed"; head: string; problems: string[] };
@@ -20,26 +22,6 @@ export async function fetchPull(gh: GitHub, repository: string, pullNumber: numb
     baseRef: p.base.ref,
     defaultBranch: p.base.repo.default_branch,
     authorId: Number(p.user.id),
-  };
-}
-
-export async function fetchComment(gh: GitHub, repository: string, commentId: number): Promise<CommentFacts> {
-  const { data: c } = await gh.rest.issues.getComment({ ...splitRepository(repository), comment_id: commentId });
-  const { node } = await gh.graphql<{ node: { databaseId: number; lastEditedAt: string | null } | null }>(
-    "query($id: ID!) { node(id: $id) { ... on IssueComment { databaseId lastEditedAt } } }",
-    { id: c.node_id },
-  );
-  if (!node || node.databaseId !== Number(c.id) || !(node.lastEditedAt === null || typeof node.lastEditedAt === "string")) {
-    throw new Rejection(`cannot verify the edit history of comment ${commentId}`);
-  }
-  return {
-    id: Number(c.id),
-    body: c.body ?? "",
-    issueUrl: c.issue_url,
-    createdAt: c.created_at,
-    updatedAt: c.updated_at,
-    lastEditedAt: node.lastEditedAt,
-    user: c.user ? { id: Number(c.user.id), login: c.user.login, type: c.user.type } : null,
   };
 }
 
@@ -108,7 +90,8 @@ async function commandApprove(ctx: ApproveContext, pull: PullFacts, comment: Com
   if (problems.length > 0) throw new Rejection(`/approve cannot proceed because policy checks failed: ${problems.join("; ")}`);
   await checkHeadPredatesComment(ctx, pull, comment);
   // Kill switch: the approver can stop the request by editing or deleting the comment.
-  validateComment(await fetchComment(ctx.server, ctx.repository, comment.id), ctx.repository, pull.number, ctx.now());
+  const currentCommand = validateComment(await fetchComment(ctx.server, ctx.repository, comment.id), ctx.repository, pull.number, ctx.now());
+  if (currentCommand.name !== "approve") throw new Rejection(`comment ${comment.id} is no longer exactly /approve`);
   const outcome = await approveHead(ctx, pull, marker("approve:command", comment.id), true);
   await refreshPolicy(ctx, outcome.result === "dismissed" ? await fetchPull(ctx.server, ctx.repository, pull.number) : pull);
   return outcome;
@@ -131,6 +114,7 @@ export async function runApprove(ctx: ApproveContext, args: { pull_number: numbe
     checkPullState(pull);
     return autoApprove(ctx, pull);
   }
+  if (command.name !== "approve") throw new Rejection(`comment ${comment.id} is not exactly /approve`);
   // Replays and requests from non-approvers get neither a rocket nor a receipt, so a label
   // cannot make the server post on a pull request again and again.
   const receipt = marker("approve", comment.id);
