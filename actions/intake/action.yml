@@ -1,0 +1,23 @@
+name: csm-ci intake
+description: Validate a csm-ci request label in the server repository and output the normalized request.
+inputs:
+  github-token:
+    description: Token with contents:read and issues:read on the server repository.
+    default: ${{ github.token }}
+  config-path:
+    description: Path of csm-ci.yaml in the server repository.
+    default: csm-ci.yaml
+outputs:
+  kind:
+    description: Request kind.
+  owner:
+    description: Lowercase owner of the client repository.
+  name:
+    description: Lowercase name of the client repository.
+  args:
+    description: JSON object of the request numbers.
+  concurrency-key:
+    description: Key that serializes requests for the same pull request or run.
+runs:
+  using: node24
+  main: ../../dist/intake.js
