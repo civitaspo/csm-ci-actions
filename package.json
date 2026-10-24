@@ -1,0 +1,26 @@
+{
+  "name": "csm-ci-actions",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "build": "bun run scripts/build.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@actions/core": "3.0.1",
+    "@octokit/core": "7.0.8",
+    "@octokit/plugin-paginate-rest": "16.0.0",
+    "@octokit/plugin-rest-endpoint-methods": "18.0.0",
+    "picomatch": "4.0.7",
+    "yaml": "2.9.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.4",
+    "@types/node": "26.6.5",
+    "@types/picomatch": "4.0.3",
+    "typescript": "7.0.2"
+  }
+}
