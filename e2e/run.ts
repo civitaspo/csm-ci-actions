@@ -9,9 +9,10 @@ import { parseArgs } from "node:util";
 import { type GitHub, github, splitRepository } from "../src/lib/github.ts";
 import { approve } from "./approve.ts";
 import { ACTIONS, assert, type Ctx, hasStatus, moveE2eBranch, type Scenario, sleep, syncFixtures } from "./harness.ts";
+import { policyCheck } from "./policy-check.ts";
 import { smoke } from "./smoke.ts";
 
-const FEATURES: Record<string, Scenario[]> = { smoke, approve };
+const FEATURES: Record<string, Scenario[]> = { smoke, approve, "policy-check": policyCheck };
 
 const LOCK = "e2e-lock";
 const LOCK_TTL_MS = 60 * 60_000;
@@ -89,7 +90,9 @@ async function main(): Promise<void> {
         for (const url of ctx.urls) console.log(`  ${url}`);
         return { failed: false, skipped: false };
       } catch (e) {
-        console.log(`FAIL ${scenario.name}: ${e instanceof Error ? e.message : String(e)}`);
+        const message = e instanceof Error ? e.message : String(e);
+        const status = typeof e === "object" && e !== null && "status" in e && typeof e.status === "number" ? ` (HTTP ${e.status})` : "";
+        console.log(`FAIL ${scenario.name}: ${message}${status}`);
         for (const url of ctx.urls) console.log(`  ${url}`);
         return { failed: true, skipped: false };
       }

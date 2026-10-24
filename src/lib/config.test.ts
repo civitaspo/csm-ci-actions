@@ -12,6 +12,7 @@ describe("parseConfig", () => {
   const rejects: [string, string, RegExp][] = [
     ["unknown top-level key", `${CONFIG_YAML}\nextra: 1\n`, /extra/],
     ["unknown policy type", CONFIG_YAML.replace("signed-commits", "no-such-policy"), /policies/],
+    ["unknown sensitive-paths key", CONFIG_YAML.replace("type: signed-commits", "type: sensitive-paths, paths: [Makefile], extra: true"), /extra/],
     ["server bot as trusted committer", CONFIG_YAML.replace("committers: [{ id: 10, login: alice }", "committers: [{ id: 3000, login: alice }"), /must not be in a trust list/],
     ["approver bot as trusted committer", CONFIG_YAML.replace("committers: [{ id: 10, login: alice }", "committers: [{ id: 4000, login: alice }"), /must not be in a trust list/],
     ["server bot as approver", CONFIG_YAML.replace("approvers: [{ id: 10, login: alice }]", "approvers: [{ id: 3000, login: alice }]"), /must not be in a trust list/],

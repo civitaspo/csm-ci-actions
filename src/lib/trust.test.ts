@@ -12,9 +12,9 @@ function commit(sha: string, over: Partial<CommitFacts> = {}): CommitFacts {
   return { sha, verified: true, author: alice, committer: alice, ...over };
 }
 
-function problems(commits: CommitFacts[], head = commits.at(-1)?.sha ?? "h") {
+async function problems(commits: CommitFacts[], head = commits.at(-1)?.sha ?? "h") {
   const trust = evaluateTrust(commits, head, config());
-  return evaluatePolicies([{ type: "signed-commits" }, { type: "trusted-committers" }], { trust });
+  return evaluatePolicies([{ type: "signed-commits" }, { type: "trusted-committers" }], { trust } as never);
 }
 
 describe("evaluateTrust", () => {
@@ -24,11 +24,11 @@ describe("evaluateTrust", () => {
     ["web-flow commit by a trusted author", commit("a", { committer: webFlow, web: validWeb })],
     ["server-made commit", commit("a", { author: { id: SERVER_BOT_ID, login: "srv[bot]" }, committer: webFlow, web: { ...validWeb, committedViaWeb: false, authorLogin: null } })],
   ];
-  test.each(trusted)("trusts %s", (_, c) => {
+  test.each(trusted)("trusts %s", async (_, c) => {
     const result = evaluateTrust([c], c.sha, config());
     expect(result.problems).toEqual([]);
     expect(result.commits[0]?.trusted).toBe(true);
-    expect(problems([c]).every((p) => p.ok)).toBe(true);
+    expect((await problems([c])).every((p) => p.ok)).toBe(true);
   });
 
   const rejects: [string, CommitFacts[], string, "signed-commits" | "trusted-committers", RegExp][] = [
@@ -50,8 +50,8 @@ describe("evaluateTrust", () => {
     ["server bot as committer is not server-made", [commit("a", { committer: { id: SERVER_BOT_ID, login: "srv[bot]" } })], "a", "trusted-committers", /a is by srv\[bot\]/],
     ["one bad commit among good ones", [commit("a"), commit("b", { committer: mallory }), commit("c")], "c", "trusted-committers", /b is by mallory/],
   ];
-  test.each(rejects)("rejects %s", (_, commits, head, policy, pattern) => {
-    const results = problems(commits, head);
+  test.each(rejects)("rejects %s", async (_, commits, head, policy, pattern) => {
+    const results = await problems(commits, head);
     const failing = results.find((r) => r.type === policy);
     expect(failing?.ok).toBe(false);
     expect(failing?.problems.join("\n")).toMatch(pattern);
@@ -68,8 +68,8 @@ describe("evaluateTrust", () => {
     ["trusted-committers rejects an unsigned commit by an untrusted committer", "trusted-committers", commit("a", { verified: false, committer: mallory }), /not signed/],
     ["signed-commits rejects an unsigned commit by a trusted committer", "signed-commits", commit("a", { verified: false }), /a is not signed and verified/],
   ];
-  test.each(alone)("%s", (_, type, c, pattern) => {
-    const [result] = evaluatePolicies([{ type }], { trust: evaluateTrust([c], c.sha, config()) });
+  test.each(alone)("%s", async (_, type, c, pattern) => {
+    const [result] = await evaluatePolicies([{ type }], { trust: evaluateTrust([c], c.sha, config()) } as never);
     expect(result?.ok).toBe(false);
     expect(result?.problems.join("\n")).toMatch(pattern);
   });

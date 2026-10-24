@@ -368,6 +368,7 @@ After Phase 0, phases 1, 2, 3, 4, 5a, and 6 can proceed independently in paralle
       - When we re-fetch the comment the marker points to, its author is in approvers
 - **Policy implementation form**: a pair of a zod discriminated union and `evaluate(ctx)`. Adding one takes one file and one line in the union.
 - **Put the Rust version's default sensitive paths in the docs and examples**: manifests and lockfiles, `Makefile`, `Dockerfile*`, `.goreleaser.*`, `scripts/**`, `build.rs`, `.cargo/**`, `.github/**`.
+- **Sensitive-path approval cycle**: `/approve` first validates the current command and all trust and configured non-sensitive policies, then writes the approval review pinned to the checked head with the source comment marker, then refreshes the full policy check. During preflight, the validated command evidence satisfies `sensitive-paths`; the persisted head-bound marker is required for later evaluations. Automatic approval and `/recheck` do not manufacture human approval evidence. This makes sensitive files approvable without allowing an automatic or refreshed evaluation to bypass the policy.
 - **e2e**
   - Pass and fail for each policy
   - `/recheck` triggers a re-evaluation

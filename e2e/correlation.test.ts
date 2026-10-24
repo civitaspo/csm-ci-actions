@@ -101,3 +101,27 @@ test("correlates a skipped intake through cleanup without downloading a nonexist
   expect(await serverRuns(ctx, request, since)).toEqual([]);
   expect(fetch.calls).not.toContain(`GET ${base}/jobs/20/logs`);
 });
+
+test("does not inspect logs for an unfinished request or count it toward the expected total", async () => {
+  const base = "/repos/civitaspo/testing-csm-ci-server/actions";
+  const fetch = fakeFetch([
+    { method: "GET", path: `${base}/workflows/csm-ci.yml/runs`, body: { total_count: 2, workflow_runs: [
+      { id: 10, created_at: "2026-10-25T00:02:00Z", status: "completed", conclusion: "success" },
+      { id: 11, created_at: "2026-10-25T00:01:00Z", status: "in_progress", conclusion: null },
+    ] } },
+    { method: "GET", path: `${base}/runs/10/jobs`, body: { jobs: [{ id: 20, name: "server / intake", conclusion: "success" }] } },
+    { method: "GET", path: `${base}/jobs/20/logs`, body: `accepted ${request.kind} for ${request.repository} {"pull_number":23,"comment_id":456}` },
+  ]);
+  const fetchWithUrl = Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
+    const response = await fetch(input, init);
+    Object.defineProperty(response, "url", { value: typeof input === "string" ? input : input instanceof URL ? input.href : input.url });
+    return response;
+  }, { preconnect: () => undefined });
+  const ctx = { gh: github("t", fetchWithUrl), urls: [], untrusted: undefined };
+  const since = new Date("2026-10-25T00:00:00Z");
+  const found = await serverRuns(ctx, request, since);
+  expect(found.map((run) => run.id)).toEqual([10]);
+  expect(completedRequestRuns(found, 2)).toBeUndefined();
+  expect(fetch.calls).not.toContain(`GET ${base}/runs/11/jobs`);
+  expect(fetch.calls).not.toContain(`GET ${base}/jobs/21/logs`);
+});

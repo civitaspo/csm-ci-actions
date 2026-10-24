@@ -22,6 +22,7 @@ export type Op = (typeof OPS)[number];
 export const PolicySchema = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("signed-commits") }),
   z.strictObject({ type: z.literal("trusted-committers") }),
+  z.strictObject({ type: z.literal("sensitive-paths"), paths: z.array(z.string().min(1)), exempt: z.array(Principal).default([]) }),
 ]);
 export type Policy = z.infer<typeof PolicySchema>;
 

@@ -206,12 +206,12 @@ export type RequestMatch = { kind: string; repository: string; args: Record<stri
 
 // signed: createCommitOnBranch, which GitHub signs as web-flow for the token's user.
 // Otherwise the REST contents API, whose commits GitHub leaves unsigned.
-export async function openPr(ctx: Ctx, kind: "signed" | "unsigned", as: GitHub = ctx.gh, author?: { name: string; email: string }): Promise<Pr> {
+export async function openPr(ctx: Ctx, kind: "signed" | "unsigned", as: GitHub = ctx.gh, author?: { name: string; email: string }, prAs: GitHub = ctx.gh, filePath?: string, draft = false): Promise<Pr> {
   const repo = splitRepository(CLIENT);
   const base = (await ctx.gh.rest.repos.getBranch({ ...repo, branch: "main" })).data.commit.sha;
   const branch = `e2e-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   await ctx.gh.rest.git.createRef({ ...repo, ref: `refs/heads/${branch}`, sha: base });
-  const path = `e2e/${branch}.txt`;
+  const path = filePath ?? `e2e/${branch}.txt`;
   let head: string;
   if (kind === "signed") {
     const data = await as.graphql<{ createCommitOnBranch: { commit: { oid: string } } }>(
@@ -237,7 +237,7 @@ export async function openPr(ctx: Ctx, kind: "signed" | "unsigned", as: GitHub =
     });
     head = data.commit.sha ?? "";
   }
-  const { data: pr } = await ctx.gh.rest.pulls.create({ ...repo, base: "main", head: branch, title: `e2e ${branch}` });
+  const { data: pr } = await prAs.rest.pulls.create({ ...repo, base: "main", head: branch, title: `e2e ${branch}`, ...(draft ? { draft: true } : {}) });
   return { number: pr.number, head, branch };
 }
 
