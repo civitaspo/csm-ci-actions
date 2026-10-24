@@ -17,6 +17,7 @@ export type CommentFacts = {
   issueUrl: string;
   createdAt: string;
   updatedAt: string;
+  lastEditedAt: string | null;
   user: { id: number; login: string; type: string } | null;
 };
 
@@ -29,7 +30,7 @@ export function validateComment(c: CommentFacts, repository: string, pullNumber:
   const command = parseCommand(c.body);
   if (!command) throw new Rejection(`comment ${c.id} is not exactly /approve or /recheck`);
   if (command.name === "recheck") return command;
-  if (c.createdAt !== c.updatedAt) throw new Rejection(`comment ${c.id} was edited after it was posted`);
+  if (c.lastEditedAt !== null || c.createdAt !== c.updatedAt) throw new Rejection(`comment ${c.id} was edited after it was posted`);
   const age = now.getTime() - new Date(c.createdAt).getTime();
   if (!(age >= 0 && age <= COMMAND_TTL_MS)) throw new Rejection(`comment ${c.id} is older than 60 minutes`);
   return command;

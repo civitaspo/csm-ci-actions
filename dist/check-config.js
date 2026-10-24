@@ -30523,7 +30523,8 @@ var Owner = string2().regex(/^[A-Za-z0-9-]+$/).transform((s) => s.toLowerCase())
 var OPS = ["approve", "merge", "policy-check", "securefix", "release"];
 var PolicySchema = discriminatedUnion("type", [
   strictObject({ type: literal("signed-commits") }),
-  strictObject({ type: literal("trusted-committers") })
+  strictObject({ type: literal("trusted-committers") }),
+  strictObject({ type: literal("sensitive-paths"), paths: array(string2().min(1)), exempt: array(Principal).default([]) })
 ]);
 var RepositoryEntry = strictObject({
   name: string2().min(1).transform((s) => s.toLowerCase()),

@@ -1,10 +1,9 @@
 import { type CommentFacts, checkPullState, type PullFacts, requirePrincipal, validateComment } from "./command.ts";
-import type { Config, Policy } from "./config.ts";
+import type { Config } from "./config.ts";
 import { type GitHub, splitRepository } from "./github.ts";
 import { hasServerMarker, marker, postResult } from "./notify.ts";
-import { evaluatePolicies } from "./policies/index.ts";
+import { evaluatePullPolicies, updatePolicyCheck } from "./policy-check.ts";
 import { Rejection } from "./request.ts";
-import { evaluateTrust, fetchCommitFacts } from "./trust.ts";
 
 export type ApproveContext = { server: GitHub; approver: GitHub; config: Config; repository: string; now: () => Date };
 export type ApproveOutcome = { result: "approved" | "already-approved" | "declined" | "dismissed"; head: string; problems: string[] };
@@ -26,28 +25,31 @@ export async function fetchPull(gh: GitHub, repository: string, pullNumber: numb
 
 export async function fetchComment(gh: GitHub, repository: string, commentId: number): Promise<CommentFacts> {
   const { data: c } = await gh.rest.issues.getComment({ ...splitRepository(repository), comment_id: commentId });
+  if (!c.node_id) throw new Error(`comment ${commentId} has no GraphQL node id`);
+  const edit = await gh.graphql<{ node: { lastEditedAt: string | null } | null }>(
+    "query($id: ID!) { node(id: $id) { ... on IssueComment { lastEditedAt } } }",
+    { id: c.node_id },
+  );
+  if (!edit.node) throw new Rejection(`comment ${commentId} no longer exists`);
   return {
     id: Number(c.id),
     body: c.body ?? "",
     issueUrl: c.issue_url,
     createdAt: c.created_at,
     updatedAt: c.updated_at,
+    lastEditedAt: edit.node.lastEditedAt,
     user: c.user ? { id: Number(c.user.id), login: c.user.login, type: c.user.type } : null,
   };
 }
 
-async function trustFor(ctx: ApproveContext, pull: PullFacts) {
-  return evaluateTrust(await fetchCommitFacts(ctx.server, ctx.repository, pull.number), pull.headSha, ctx.config);
-}
-
 // The review pins commit_id to the head the checks ran on. A push in between would leave an
 // approval that no push dismisses, so the head is read again and a moved head dismisses it.
-async function approveHead(ctx: ApproveContext, pull: PullFacts, body: string): Promise<ApproveOutcome> {
+async function approveHead(ctx: ApproveContext, pull: PullFacts, body: string, forceMarker = false): Promise<ApproveOutcome> {
   const repo = splitRepository(ctx.repository);
   const head = pull.headSha;
   if (pull.authorId === ctx.config.approver.id) throw new Rejection(`the approver authored #${pull.number}`);
   const reviews = await ctx.server.paginate(ctx.server.rest.pulls.listReviews, { ...repo, pull_number: pull.number, per_page: 100 });
-  if (reviews.some((r) => Number(r.user?.id) === ctx.config.approver.id && r.state === "APPROVED" && r.commit_id === head)) {
+  if (!forceMarker && reviews.some((r) => Number(r.user?.id) === ctx.config.approver.id && r.state === "APPROVED" && r.commit_id === head)) {
     return { result: "already-approved", head, problems: [] };
   }
   const { data: review } = await ctx.approver.rest.pulls.createReview({ ...repo, pull_number: pull.number, event: "APPROVE", commit_id: head, body });
@@ -64,19 +66,24 @@ async function approveHead(ctx: ApproveContext, pull: PullFacts, body: string): 
   return { result: "approved", head, problems: [] };
 }
 
-// Plan S3 holds whatever csm-ci.yaml lists, so the trust policies always run.
-const ALWAYS: Policy[] = [{ type: "signed-commits" }, { type: "trusted-committers" }];
-
 async function policyProblems(ctx: ApproveContext, pull: PullFacts): Promise<string[]> {
-  const policies = [...ALWAYS, ...ctx.config.policies.filter((p) => !ALWAYS.some((a) => a.type === p.type))];
-  const results = evaluatePolicies(policies, { trust: await trustFor(ctx, pull) });
+  const results = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull });
   return results.flatMap((r) => r.problems.map((p) => `${r.type}: ${p}`));
+}
+
+async function refreshPolicy(ctx: ApproveContext, pull: PullFacts): Promise<void> {
+  await updatePolicyCheck({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull });
 }
 
 export async function autoApprove(ctx: ApproveContext, pull: PullFacts): Promise<ApproveOutcome> {
   const problems = await policyProblems(ctx, pull);
-  if (problems.length > 0) return { result: "declined", head: pull.headSha, problems };
-  return approveHead(ctx, pull, "");
+  if (problems.length > 0) {
+    await refreshPolicy(ctx, pull);
+    return { result: "declined", head: pull.headSha, problems };
+  }
+  const outcome = await approveHead(ctx, pull, "");
+  await refreshPolicy(ctx, outcome.result === "dismissed" ? await fetchPull(ctx.server, ctx.repository, pull.number) : pull);
+  return outcome;
 }
 
 // Plan S5 without a sha: the head the server observes is pinned, so a head pushed after the
@@ -95,12 +102,15 @@ async function checkHeadPredatesComment(ctx: ApproveContext, pull: PullFacts, co
 
 async function commandApprove(ctx: ApproveContext, pull: PullFacts, comment: CommentFacts): Promise<ApproveOutcome> {
   checkPullState(pull);
-  const problems = await policyProblems(ctx, pull);
-  if (problems.length > 0) throw new Rejection(`/approve needs every commit signed by a trusted committer: ${problems.join("; ")}`);
+  const results = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull }, { commentId: comment.id, authorId: comment.user?.id ?? -1, head: pull.headSha });
+  const problems = results.flatMap((r) => r.problems.map((p) => `${r.type}: ${p}`));
+  if (problems.length > 0) throw new Rejection(`/approve cannot proceed because policy checks failed: ${problems.join("; ")}`);
   await checkHeadPredatesComment(ctx, pull, comment);
   // Kill switch: the approver can stop the request by editing or deleting the comment.
   validateComment(await fetchComment(ctx.server, ctx.repository, comment.id), ctx.repository, pull.number, ctx.now());
-  return approveHead(ctx, pull, marker("approve:command", comment.id));
+  const outcome = await approveHead(ctx, pull, marker("approve:command", comment.id), true);
+  await refreshPolicy(ctx, outcome.result === "dismissed" ? await fetchPull(ctx.server, ctx.repository, pull.number) : pull);
+  return outcome;
 }
 
 async function react(ctx: ApproveContext, commentId: number): Promise<void> {

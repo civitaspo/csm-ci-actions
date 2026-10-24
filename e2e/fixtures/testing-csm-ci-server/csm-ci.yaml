@@ -13,5 +13,6 @@ trust:
 policies:
   - { type: signed-commits }
   - { type: trusted-committers }
+  - { type: sensitive-paths, paths: [".github/**", "package.json", "bun.lock"], exempt: [{ id: 4525500, login: civitaspo }] }
 repositories:
   - { name: civitaspo/testing-csm-ci-client, ops: [approve, merge, policy-check] }
