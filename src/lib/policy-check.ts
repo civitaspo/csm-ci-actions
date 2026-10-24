@@ -9,7 +9,11 @@ export type PolicyCheckContext = { server: GitHub; config: Config; repository: s
 
 export async function evaluatePullPolicies(ctx: PolicyCheckContext, commandApproval?: { commentId: number; authorId: number; head: string }): Promise<PolicyResult[]> {
   const trust = evaluateTrust(await fetchCommitFacts(ctx.server, ctx.repository, ctx.pull.number), ctx.pull.headSha, ctx.config);
-  const policies = [...ALWAYS, ...ctx.config.policies.filter((p) => !ALWAYS.some((a) => a.type === p.type))];
+  const protectedRepository = ctx.repository.toLowerCase() === ctx.config.server_repository || ctx.repository.toLowerCase() === "civitaspo/csm-ci-actions";
+  const hasSensitivePaths = ctx.config.policies.some((p) => p.type === "sensitive-paths");
+  const configured = [...ctx.config.policies.filter((p) => !ALWAYS.some((a) => a.type === p.type))];
+  if (protectedRepository && !hasSensitivePaths) configured.push({ type: "sensitive-paths", paths: ["**"], exempt: [] });
+  const policies = [...ALWAYS, ...configured];
   return evaluatePolicies(policies, {
     trust, gh: ctx.server, config: ctx.config, repository: ctx.repository,
     pullNumber: ctx.pull.number, head: ctx.pull.headSha, authorId: ctx.pull.authorId,
