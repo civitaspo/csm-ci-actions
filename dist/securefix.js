@@ -36931,9 +36931,6 @@ function validateSecurefixRun(run, expectedRunId, repository) {
   if (run.event === "pull_request" && run.pull_requests[0]?.head.ref !== run.head_branch) {
     throw new Rejection("securefix workflow branch does not match the pull request head");
   }
-  if (run.event === "pull_request" && run.pull_requests[0]?.head.sha !== run.head_sha) {
-    throw new Rejection("securefix workflow head does not match the pull request head");
-  }
   if (run.event !== "pull_request" && run.event !== "push" && run.event !== "workflow_dispatch") {
     throw new Rejection(`securefix does not accept ${run.event} events`);
   }
@@ -36946,8 +36943,8 @@ function bindSecurefixPullRequest(run, defaultBranch, pull, openPullsFromHead, r
     throw new Rejection("securefix workflow is not bound to an open, ready pull request");
   if (pull.head.repo?.full_name.toLowerCase() !== repository.toLowerCase())
     throw new Rejection("securefix does not accept fork pull requests");
-  if (listed.head.sha !== run.head_sha)
-    throw new Rejection("the workflow head does not match the pull request head recorded for the run");
+  if (pull.head.ref !== run.head_branch)
+    throw new Rejection("securefix PR head branch does not match the workflow run");
   if (pull.base.ref !== defaultBranch || listed.base.ref !== defaultBranch)
     throw new Rejection("securefix PR must target the default branch");
   if (openPullsFromHead !== 1)

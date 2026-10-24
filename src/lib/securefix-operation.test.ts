@@ -316,6 +316,20 @@ describe("securefix retry inspection", () => {
     expect(result.status).toBe("already-applied");
   });
 
+  test("accepts the exact server-made retry when GitHub updates the run's pull request head", async () => {
+    const result = await inspectCurrentCommit(false, [], "generated.txt", {}, "100644", {
+      run: { pull_requests: [{ number: 7, head: { ref: "feature", sha: appliedSha }, base: { ref: "main", sha: runSha } }] },
+    });
+    expect(result.status).toBe("already-applied");
+  });
+
+  test("rejects a GitHub-updated PR head when it is not the exact server-made commit", async () => {
+    await expect(inspectCurrentCommit(false, [], "generated.txt", {}, "100644", {
+      run: { pull_requests: [{ number: 7, head: { ref: "feature", sha: appliedSha }, base: { ref: "main", sha: runSha } }] },
+      commit: { parents: [{ sha: "f".repeat(40) }] },
+    })).rejects.toThrow("the branch moved after the request");
+  });
+
   test("does not call a server commit with extra changed files already applied", async () => {
     await expect(inspectCurrentCommit(true)).rejects.toThrow("the branch moved after the request");
   });

@@ -360,7 +360,6 @@ describe("securefix run and path bindings", () => {
     [{ ...run, event: "schedule" }, "securefix does not accept schedule events"],
     [{ ...run, pull_requests: [] }, "securefix PR run must map to exactly one pull request"],
     [{ ...run, pull_requests: [{ ...run.pull_requests[0]!, head: { ...run.pull_requests[0]!.head, ref: "elsewhere" } }] }, "securefix workflow branch does not match the pull request head"],
-    [{ ...run, pull_requests: [{ ...run.pull_requests[0]!, head: { ...run.pull_requests[0]!.head, sha: "b".repeat(40) } }] }, "securefix workflow head does not match the pull request head"],
   ])("rejects an untrusted run", (value, message) => {
     expect(() => validateSecurefixRun(value, 42, repo)).toThrow(message);
   });
@@ -376,7 +375,7 @@ describe("securefix run and path bindings", () => {
     { name: "different PR", value: { ...pull, number: 8 }, count: 1, message: "securefix workflow is not bound to an open, ready pull request" },
     { name: "closed PR", value: { ...pull, state: "closed" }, count: 1, message: "securefix workflow is not bound to an open, ready pull request" },
     { name: "draft PR", value: { ...pull, draft: true }, count: 1, message: "securefix workflow is not bound to an open, ready pull request" },
-    { name: "recorded head mismatch", value: pull, count: 1, message: "the workflow head does not match the pull request head recorded for the run", sourceRun: { ...run, pull_requests: [{ ...run.pull_requests[0]!, head: { ...run.pull_requests[0]!.head, sha: "b".repeat(40) } }] } },
+    { name: "current head branch mismatch", value: { ...pull, head: { ...pull.head, ref: "renamed" } }, count: 1, message: "securefix PR head branch does not match the workflow run" },
     { name: "recorded base mismatch", value: pull, count: 1, message: "securefix PR must target the default branch", sourceRun: { ...run, pull_requests: [{ ...run.pull_requests[0]!, base: { ref: "attacker", sha } }] } },
     { name: "ambiguous branch", value: pull, count: 2, message: "securefix PR head has more than one open pull request" },
   ];
@@ -387,6 +386,12 @@ describe("securefix run and path bindings", () => {
   test("defers current-head matching until exact retry recovery is checked", () => {
     const moved = { ...pull, head: { ...pull.head, sha: "b".repeat(40) } };
     expect(() => bindSecurefixPullRequest(run, "main", moved, 1, repo)).not.toThrow();
+  });
+
+  test("uses the workflow run head when GitHub updates the run's pull request head", () => {
+    const updatedRun = { ...run, pull_requests: [{ ...run.pull_requests[0]!, head: { ...run.pull_requests[0]!.head, sha: "b".repeat(40) } }] };
+    expect(() => validateSecurefixRun(updatedRun, 42, repo)).not.toThrow();
+    expect(() => bindSecurefixPullRequest(updatedRun, "main", pull, 1, repo)).not.toThrow();
   });
 
   test("rejects route workflow, scope and moved source head", () => {
