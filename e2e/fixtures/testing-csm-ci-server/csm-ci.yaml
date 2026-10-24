@@ -10,6 +10,13 @@ trust:
     - { id: 4525500, login: civitaspo }
   approvers:
     - { id: 4525500, login: civitaspo }
+  mergers:
+    - { id: 4525500, login: civitaspo }
+  bot_mergers: []
+merge:
+  required_checks:
+    - { name: csm-ci/policy, app_id: 5455185 }
+  deadline_minutes: 1
 policies:
   - { type: signed-commits }
   - { type: trusted-committers }

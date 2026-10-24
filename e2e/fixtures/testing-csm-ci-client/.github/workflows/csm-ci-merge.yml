@@ -1,0 +1,12 @@
+name: csm-ci-merge
+run-name: "csm-ci merge request #${{ github.event.issue.number }} comment #${{ github.event.comment.id }}"
+# jactionlint ignore=concurrency-limits,dangerous-triggers
+on:
+  issue_comment:
+    types: [created]
+permissions: {}
+jobs:
+  merge:
+    # jactionlint ignore=unpinned-uses,secrets-inherit
+    uses: civitaspo/csm-ci-actions/.github/workflows/client-merge.yml@e2e
+    secrets: inherit

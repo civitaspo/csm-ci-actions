@@ -10,9 +10,10 @@ import { type GitHub, github, splitRepository } from "../src/lib/github.ts";
 import { approve } from "./approve.ts";
 import { ACTIONS, assert, type Ctx, hasStatus, moveE2eBranch, type Scenario, sleep, syncFixtures } from "./harness.ts";
 import { policyCheck } from "./policy-check.ts";
+import { merge } from "./merge.ts";
 import { smoke } from "./smoke.ts";
 
-const FEATURES: Record<string, Scenario[]> = { smoke, approve, "policy-check": policyCheck };
+const FEATURES: Record<string, Scenario[]> = { smoke, approve, merge, "policy-check": policyCheck };
 
 const LOCK = "e2e-lock";
 const LOCK_TTL_MS = 60 * 60_000;
@@ -78,7 +79,7 @@ async function main(): Promise<void> {
   try {
     await moveE2eBranch(actions, values.ref);
     await syncFixtures(gh);
-    const results = await Promise.all(scenarios.map(async (scenario) => {
+    const runScenario = async (scenario: Scenario) => {
       if (scenario.needsUntrusted && !untrustedToken) {
         console.log(`SKIP ${scenario.name}: needs CSM_CI_UNTRUSTED_COMMITTER_TOKEN, which only the e2e workflow has`);
         return { failed: false, skipped: true };
@@ -96,7 +97,9 @@ async function main(): Promise<void> {
         for (const url of ctx.urls) console.log(`  ${url}`);
         return { failed: true, skipped: false };
       }
-    }));
+    };
+    const results = await Promise.all(scenarios.filter((scenario) => !scenario.serial).map(runScenario));
+    for (const scenario of scenarios.filter((item) => item.serial)) results.push(await runScenario(scenario));
     failed = results.filter((r) => r.failed).length;
     skipped = results.filter((r) => r.skipped).length;
   } finally {

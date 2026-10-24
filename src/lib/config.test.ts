@@ -7,6 +7,7 @@ describe("parseConfig", () => {
     const c = config();
     expect(c.owners).toEqual(["owner"]);
     expect(c.server_repository).toBe("owner/server");
+    expect(c.merge.deadline_minutes).toBe(60);
   });
 
   const rejects: [string, string, RegExp][] = [
@@ -17,9 +18,10 @@ describe("parseConfig", () => {
     ["approver bot as trusted committer", CONFIG_YAML.replace("committers: [{ id: 10, login: alice }", "committers: [{ id: 4000, login: alice }"), /must not be in a trust list/],
     ["server bot as approver", CONFIG_YAML.replace("approvers: [{ id: 10, login: alice }]", "approvers: [{ id: 3000, login: alice }]"), /must not be in a trust list/],
     ["missing approver", CONFIG_YAML.replace(/approver: \{[^\n]*\n/, ""), /approver/],
+    ["server bot as bot merger", CONFIG_YAML.replace("bot_mergers: [{ id: 20, login: \"renovate[bot]\" }]", "bot_mergers: [{ id: 3000, login: \"renovate[bot]\" }]"), /must not be in a trust list/],
     ["server repository outside owners", CONFIG_YAML.replace("Owner/Server", "Other/Server"), /owner must be listed in owners/],
-    ["duplicate op", CONFIG_YAML.replace("ops: [approve, policy-check]", "ops: [approve, approve]"), /duplicate op/],
-    ["unknown op", CONFIG_YAML.replace("ops: [approve, policy-check]", "ops: [deploy]"), /ops/],
+    ["duplicate op", CONFIG_YAML.replace("ops: [approve, merge, policy-check]", "ops: [approve, approve]"), /duplicate op/],
+    ["unknown op", CONFIG_YAML.replace("ops: [approve, merge, policy-check]", "ops: [deploy]"), /ops/],
     ["non-positive id", CONFIG_YAML.replace("client_bot_id: 2000", "client_bot_id: 0"), /client_bot_id/],
     ["missing repositories", CONFIG_YAML.replace(/repositories:[\s\S]*$/, "repositories: []\n"), /repositories/],
     ["malformed server repository", CONFIG_YAML.replace("Owner/Server", "Owner"), /server_repository/],
@@ -31,7 +33,7 @@ describe("parseConfig", () => {
 
 describe("repositoryEntry", () => {
   const cases: [string, string, Op[] | undefined][] = [
-    ["glob match, case-insensitive", "Owner/Repo", ["approve", "policy-check"]],
+    ["glob match, case-insensitive", "Owner/Repo", ["approve", "merge", "policy-check"]],
     ["first match wins", "owner/no-ops", []],
     ["owner not listed", "other/repo", undefined],
     ["owner prefix is not enough", "owner-evil/repo", undefined],
@@ -42,7 +44,7 @@ describe("repositoryEntry", () => {
 
   test("owners bound even a catch-all glob", () => {
     const c = parseConfig(CONFIG_YAML.replace("name: owner/*", "name: '*/*'"));
-    expect(repositoryEntry(c, "owner/repo")?.ops).toEqual(["approve", "policy-check"]);
+    expect(repositoryEntry(c, "owner/repo")?.ops).toEqual(["approve", "merge", "policy-check"]);
     expect(repositoryEntry(c, "other/repo")).toBeUndefined();
   });
 });

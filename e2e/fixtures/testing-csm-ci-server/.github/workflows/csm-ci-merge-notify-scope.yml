@@ -1,0 +1,104 @@
+name: csm-ci-merge-notify-scope
+
+on:
+  workflow_dispatch:
+    inputs:
+      pull_number:
+        description: Isolated approved pull request number.
+        required: true
+        type: string
+      head_sha:
+        description: Expected pull request head.
+        required: true
+        type: string
+      comment_id:
+        description: Existing comment to react to.
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: csm-ci
+    permissions: {}
+    steps:
+      - id: notification-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: civitaspo
+          repositories: testing-csm-ci-client
+          permission-issues: write
+          permission-pull-requests: write
+      - name: Verify notification access cannot merge
+        env:
+          GH_TOKEN: ${{ steps.notification-token.outputs.token }}
+          PULL_NUMBER: ${{ inputs.pull_number }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          COMMENT_ID: ${{ inputs.comment_id }}
+        run: |
+          node --input-type=module <<'NODE'
+          const owner = "civitaspo";
+          const repo = "testing-csm-ci-client";
+          const pullNumber = Number(process.env.PULL_NUMBER);
+          const headSha = process.env.HEAD_SHA;
+          const commentId = Number(process.env.COMMENT_ID);
+          const headers = {
+            accept: "application/vnd.github+json",
+            authorization: `Bearer ${process.env.GH_TOKEN}`,
+            "x-github-api-version": "2022-11-28",
+            "content-type": "application/json",
+          };
+          const api = (path, init = {}) => fetch(`https://api.github.com/repos/${owner}/${repo}${path}`, { ...init, headers });
+          const json = async (response) => {
+            const text = await response.text();
+            return text ? JSON.parse(text) : undefined;
+          };
+          const beforeResponse = await api(`/pulls/${pullNumber}`);
+          if (!beforeResponse.ok) throw new Error(`could not read pull request: HTTP ${beforeResponse.status}`);
+          const before = await json(beforeResponse);
+          if (before.state !== "open" || before.head?.sha !== headSha || before.merged) {
+            throw new Error("probe requires the expected pull request head to remain open and unmerged");
+          }
+
+          const reaction = await api(`/issues/comments/${commentId}/reactions`, {
+            method: "POST",
+            body: JSON.stringify({ content: "rocket" }),
+          });
+          if (reaction.status !== 201) throw new Error(`notification reaction failed: HTTP ${reaction.status}`);
+
+          let probeCommentId;
+          try {
+            const created = await api(`/issues/${pullNumber}/comments`, {
+              method: "POST",
+              body: JSON.stringify({ body: "csm-ci e2e notification permission probe" }),
+            });
+            if (created.status !== 201) throw new Error(`notification comment failed: HTTP ${created.status}`);
+            probeCommentId = (await json(created)).id;
+
+            const merge = await api(`/pulls/${pullNumber}/merge`, {
+              method: "PUT",
+              body: JSON.stringify({ sha: headSha, merge_method: "squash" }),
+            });
+            const mergeBody = await json(merge);
+            if (merge.status !== 403) throw new Error(`expected merge to be denied with HTTP 403, received HTTP ${merge.status}`);
+            if (mergeBody?.message !== "Resource not accessible by integration") throw new Error(`unexpected merge denial: ${mergeBody?.message}`);
+            console.log(`notification reaction: HTTP ${reaction.status}; notification comment: HTTP ${created.status}; merge denied: HTTP ${merge.status} (${mergeBody?.message ?? "no message"})`);
+
+            const afterResponse = await api(`/pulls/${pullNumber}`);
+            if (!afterResponse.ok) throw new Error(`could not verify pull request after denied merge: HTTP ${afterResponse.status}`);
+            const after = await json(afterResponse);
+            if (after.state !== "open" || after.head?.sha !== headSha || after.merged) {
+              throw new Error("pull request changed after the notification-only merge attempt");
+            }
+          } finally {
+            if (probeCommentId) {
+              const deleted = await api(`/issues/comments/${probeCommentId}`, { method: "DELETE" });
+              if (deleted.status !== 204) throw new Error(`could not remove notification probe comment: HTTP ${deleted.status}`);
+            }
+          }
+          NODE

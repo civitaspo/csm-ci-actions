@@ -90,7 +90,8 @@ async function commandApprove(ctx: ApproveContext, pull: PullFacts, comment: Com
   if (problems.length > 0) throw new Rejection(`/approve cannot proceed because policy checks failed: ${problems.join("; ")}`);
   await checkHeadPredatesComment(ctx, pull, comment);
   // Kill switch: the approver can stop the request by editing or deleting the comment.
-  validateComment(await fetchComment(ctx.server, ctx.repository, comment.id), ctx.repository, pull.number, ctx.now());
+  const currentCommand = validateComment(await fetchComment(ctx.server, ctx.repository, comment.id), ctx.repository, pull.number, ctx.now());
+  if (currentCommand.name !== "approve") throw new Rejection(`comment ${comment.id} is no longer exactly /approve`);
   const outcome = await approveHead(ctx, pull, marker("approve:command", comment.id), true);
   await refreshPolicy(ctx, outcome.result === "dismissed" ? await fetchPull(ctx.server, ctx.repository, pull.number) : pull);
   return outcome;
@@ -113,6 +114,7 @@ export async function runApprove(ctx: ApproveContext, args: { pull_number: numbe
     checkPullState(pull);
     return autoApprove(ctx, pull);
   }
+  if (command.name !== "approve") throw new Rejection(`comment ${comment.id} is not exactly /approve`);
   // Replays and requests from non-approvers get neither a rocket nor a receipt, so a label
   // cannot make the server post on a pull request again and again.
   const receipt = marker("approve", comment.id);

@@ -13,7 +13,7 @@ describe("parseCommand", () => {
     ["please /approve", undefined],
     ["/approved", undefined],
     ["/recheck now", undefined],
-    ["/merge", undefined],
+    ["/merge", { name: "merge" }],
     ["", undefined],
   ];
   test.each(cases)("%p", (body, expected) => {

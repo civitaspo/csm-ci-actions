@@ -1,0 +1,299 @@
+import { describe, expect, test } from "bun:test";
+import { github } from "./github.ts";
+import { marker } from "./notify.ts";
+import { Rejection } from "./request.ts";
+import type { Config } from "./config.ts";
+import { config, fakeFetch, SERVER_BOT_ID } from "./testing.ts";
+import { postMergeFailureReceipt, runMerge, waitForMerge, type MergeContext } from "./merge.ts";
+
+const HEAD = "a".repeat(40);
+const NEXT = "b".repeat(40);
+const P = "/repos/owner/repo";
+const alice = { id: 10, login: "alice", type: "User" };
+
+function pull(over: Record<string, unknown> = {}, repository = "owner/repo") {
+  return { number: 12, state: "open", draft: false, user: alice, title: "Example title", body: "Description\nCo-authored-by: Alice <alice@example.com>\nCo-authored-by: alice <ALICE@example.com>\nCo-authored-by: Bob <bob@example.com>", head: { sha: HEAD, repo: { full_name: repository } }, base: { ref: "main", repo: { full_name: repository, default_branch: "main" } }, ...over };
+}
+function comment(over: Record<string, unknown> = {}, repository = "owner/repo") {
+  return { id: 9, body: "/merge", issue_url: `https://api.github.com/repos/${repository}/issues/12`, created_at: "2026-10-24T11:30:00Z", updated_at: "2026-10-24T11:30:00Z", node_id: "comment-node", user: alice, ...over };
+}
+type Setup = { repository?: string; policies?: Config["policies"]; files?: unknown[]; pull?: unknown; pullAfter?: unknown; pullThen?: unknown[]; comment?: unknown; commentStatus?: number; commentAfter?: unknown; lastEditedAt?: string | null; comments?: unknown[]; timeline?: unknown[]; headDate?: string; commits?: unknown[]; reviews?: unknown[]; reviewThen?: unknown[]; checks?: unknown[]; protectedServerRepo?: boolean; receiptStatus?: number };
+function context(s: Setup = {}) {
+  const repository = s.repository ?? "owner/repo";
+  const path = `/repos/${repository}`;
+  const server = fakeFetch([
+    { method: "GET", path: `${path}/pulls/12`, body: s.pull ?? pull({}, repository), then: s.pullThen ?? [s.pullAfter ?? s.pull ?? pull({}, repository)] },
+    { method: "GET", path: `${path}/issues/comments/9`, status: s.commentStatus ?? 200, body: s.comment ?? comment({}, repository), then: [s.commentAfter ?? s.comment ?? comment({}, repository)] },
+    { method: "POST", path: "/graphql", body: { data: { node: { databaseId: 9, lastEditedAt: s.lastEditedAt ?? null } } } },
+    { method: "GET", path: `${path}/issues/12/comments`, body: s.comments ?? [] },
+    { method: "GET", path: `${path}/commits/${HEAD}`, body: { sha: HEAD, commit: { committer: { date: s.headDate ?? "2026-10-24T11:00:00Z" } } } },
+    { method: "GET", path: `${path}/issues/12/timeline`, body: s.timeline ?? [] },
+    { method: "GET", path: `${path}/pulls/12/commits`, body: s.commits ?? [{ sha: HEAD, commit: { verification: { verified: true } }, author: alice, committer: alice }] },
+    { method: "GET", path: `${path}/pulls/12/reviews`, body: s.reviews ?? [{ id: 40, user: { id: 4000 }, state: "APPROVED", commit_id: HEAD, submitted_at: "2026-10-24T11:20:00Z" }], ...(s.reviewThen ? { then: s.reviewThen } : {}) },
+    { method: "GET", path: `${path}/commits/${HEAD}/check-runs`, body: s.checks ?? [{ id: 50, name: "status-check", app: { id: 15368 }, status: "completed", conclusion: "success", started_at: "2026-10-24T11:10:00Z" }] },
+    { method: "GET", path: `${path}/pulls/12/files`, body: s.files ?? [] },
+  ]);
+  let time = new Date("2026-10-24T11:30:01Z").getTime();
+  const cfg = config();
+  cfg.merge.deadline_minutes = 1;
+  if (s.policies) cfg.policies = s.policies;
+  if (s.protectedServerRepo) cfg.server_repository = "owner/repo";
+  const notify = fakeFetch([
+    { method: "POST", path: `${P}/issues/comments/9/reactions`, status: 201, body: { id: 3 } },
+    { method: "GET", path: `${path}/issues/12/comments`, body: [] },
+    { method: "POST", path: `${path}/issues/12/comments`, status: s.receiptStatus ?? 201, body: { id: 4 } },
+  ]);
+  const ctx: MergeContext = { server: github("s", server), notify: github("n", notify), config: cfg, repository, now: () => new Date(time), sleep: async (ms) => { time += ms; } };
+  return { ctx, server, notify };
+}
+
+describe("waitForMerge", () => {
+  test("pins an authorized /merge to a ready head", async () => {
+    const { ctx } = context();
+    expect(await waitForMerge(ctx, { pull_number: 12, comment_id: 9 })).toEqual({ head: HEAD });
+  });
+
+  test("rechecks the current server configuration without blocking a still-authorized merger", async () => {
+    const { ctx } = context();
+    const config = ctx.config;
+    ctx.reloadConfig = async () => config;
+    expect(await waitForMerge(ctx, { pull_number: 12, comment_id: 9 })).toEqual({ head: HEAD });
+  });
+
+  test("rejects a merger removed from the current server configuration while waiting", async () => {
+    const { ctx, notify } = context();
+    const config = ctx.config;
+    let reads = 0;
+    ctx.reloadConfig = async () => {
+      reads += 1;
+      return reads === 1 ? config : { ...config, trust: { ...config.trust, mergers: [] } };
+    };
+    await expect(waitForMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow(/alice is not one of the mergers/);
+    expect(reads).toBe(2);
+    expect(notify.calls).toContain(`POST ${P}/issues/comments/9/reactions`);
+    expect(notify.calls).toContain(`POST ${P}/issues/12/comments`);
+  });
+
+  test("rejects merge when the current server configuration disables the operation", async () => {
+    const { ctx } = context();
+    const config = ctx.config;
+    let reads = 0;
+    ctx.reloadConfig = async () => {
+      reads += 1;
+      return reads === 1 ? config : {
+        ...config,
+        repositories: config.repositories.map((entry) => entry.name === "owner/*" ? { ...entry, ops: ["approve", "policy-check"] } : entry),
+      };
+    };
+    await expect(waitForMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow(/repository owner\/repo no longer enables merge/);
+    expect(reads).toBe(2);
+  });
+
+  test("rejects merge when the current server configuration removes the repository", async () => {
+    const { ctx } = context();
+    const config = ctx.config;
+    let reads = 0;
+    ctx.reloadConfig = async () => reads++ === 0 ? config : { ...config, repositories: config.repositories.filter((entry) => entry.name !== "owner/*") };
+    await expect(waitForMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow(/repository owner\/repo is no longer managed by this server/);
+    expect(reads).toBe(2);
+  });
+
+  test("posts an accepted-command failure receipt even after current config disables merge", async () => {
+    const { ctx, notify } = context();
+    ctx.reloadConfig = async () => ({ ...ctx.config, repositories: ctx.config.repositories.map((entry) => ({ ...entry, ops: ["approve", "policy-check"] })) });
+    await postMergeFailureReceipt(ctx, { pull_number: 12, comment_id: 9 }, "merge retry window expired");
+    expect(notify.calls).toContain(`POST ${P}/issues/12/comments`);
+  });
+
+  test("preserves the readiness error when posting its failure receipt also fails", async () => {
+    const { ctx } = context({ pullAfter: pull({ state: "closed" }), receiptStatus: 500 });
+    await expect(waitForMerge(ctx, { pull_number: 12, comment_id: 9 }))
+      .rejects.toThrow(/#12 is closed; additionally failed to post the merge failure receipt/);
+  });
+
+  test("allows a configured bot to merge its own pull request when every commit is by that bot", async () => {
+    const bot = { id: 20, login: "renovate[bot]", type: "Bot" };
+    const { ctx } = context({
+      pull: pull({ user: bot }),
+      comment: comment({ user: bot }),
+      commits: [{ sha: HEAD, commit: { verification: { verified: true } }, author: bot, committer: bot }],
+    });
+    expect(await waitForMerge(ctx, { pull_number: 12, comment_id: 9 })).toEqual({ head: HEAD });
+  });
+
+  const rejects: [string, Setup, RegExp][] = [
+    ["a commenter outside the merger allowlist", { comment: comment({ user: { id: 66, login: "mallory", type: "User" } }) }, /mallory is not one of the mergers/],
+    ["a non-command comment", { comment: comment({ body: "LGTM" }) }, /not exactly/],
+    ["a draft pull request", { pull: pull({ draft: true }) }, /is a draft/],
+    ["a replayed command", { comments: [{ user: { id: SERVER_BOT_ID }, body: `${marker("merge", 9)}\nmerged` }] }, /already handled/],
+    ["a deleted comment author", { comment: comment({ user: null }) }, /merge comment author was deleted/],
+    ["a deleted command", { commentStatus: 404 }, /Unknown error/],
+    ["a wrong command routed to merge", { comment: comment({ body: "/approve" }) }, /comment 9 is not \/merge/],
+    ["a command changed to another operation while waiting", { commentAfter: comment({ body: "/approve" }) }, /comment 9 is no longer \/merge/],
+    ["a head newer than the command", { headDate: "2026-10-24T11:30:01Z" }, /newer than comment 9/],
+    ["a force-push after the command", { timeline: [{ event: "head_ref_force_pushed", created_at: "2026-10-24T11:40:00Z" }] }, /force-pushed after comment 9/],
+    ["an edited command", { comment: comment({ updated_at: "2026-10-24T11:31:00Z" }) }, /was edited/],
+    ["a command edited in the same second", { lastEditedAt: "2026-10-24T11:30:00Z" }, /was edited/],
+    ["a changed head while waiting", { pull: pull(), pullAfter: pull({ head: { sha: NEXT, repo: { full_name: "owner/repo" } } }) }, /head changed from/],
+    ["a bot merging another author's pull request", { pull: pull({ user: { id: 10, login: "alice" } }), comment: comment({ user: { id: 20, login: "renovate[bot]", type: "Bot" } }) }, /bot merger renovate\[bot\] can merge only its own/],
+    ["a bot merger with another committer's commit", { pull: pull({ user: { id: 20, login: "renovate[bot]" } }), comment: comment({ user: { id: 20, login: "renovate[bot]", type: "Bot" } }), commits: [{ sha: HEAD, commit: { verification: { verified: true } }, author: alice, committer: alice }] }, /bot merger renovate\[bot\] can merge only commits by itself/],
+    ["a bot merger targeting the server repository", { protectedServerRepo: true, pull: pull({ user: { id: 20, login: "renovate[bot]" } }), comment: comment({ user: { id: 20, login: "renovate[bot]", type: "Bot" } }) }, /bot mergers cannot merge pull requests in protected repository/],
+    ["a bot merger targeting csm-ci-actions", { repository: "civitaspo/csm-ci-actions", pull: pull({}, "civitaspo/csm-ci-actions"), comment: comment({ user: { id: 20, login: "renovate[bot]", type: "Bot" } }, "civitaspo/csm-ci-actions") }, /bot mergers cannot merge pull requests in protected repository/],
+    ["an unsupported account type", { comment: comment({ user: { id: 20, login: "some-org", type: "Organization" } }) }, /some-org has unsupported account type Organization/],
+    ["an unsigned commit", { commits: [{ sha: HEAD, commit: { verification: { verified: false } }, author: alice, committer: alice }] }, /trust failed: signed-commits: .*not signed/],
+    ["a latest review that requests changes", { reviews: [{ user: { id: 4000 }, state: "APPROVED", commit_id: HEAD, submitted_at: "2026-10-24T11:20:00Z" }, { user: { id: 4000 }, state: "CHANGES_REQUESTED", commit_id: HEAD, submitted_at: "2026-10-24T11:40:00Z" }] }, /readiness deadline passed: the approver has not approved/],
+    ["a latest review for another head", { reviews: [{ id: 40, user: { id: 4000 }, state: "APPROVED", commit_id: NEXT, submitted_at: "2026-10-24T11:20:00Z" }] }, /readiness deadline passed: the approver has not approved/],
+    ["an approval from another reviewer", { reviews: [{ user: { id: 10 }, state: "APPROVED", commit_id: HEAD, submitted_at: "2026-10-24T11:20:00Z" }] }, /readiness deadline passed: the approver has not approved/],
+    ["a later review ID at the same timestamp", { reviews: [{ id: 41, user: { id: 4000 }, state: "CHANGES_REQUESTED", commit_id: HEAD, submitted_at: "2026-10-24T11:20:00Z" }, { id: 40, user: { id: 4000 }, state: "APPROVED", commit_id: HEAD, submitted_at: "2026-10-24T11:20:00Z" }] }, /readiness deadline passed: the approver has not approved/],
+    ["an untrusted check producer", { checks: [{ id: 50, name: "status-check", app: { id: 999 }, status: "completed", conclusion: "success", started_at: "2026-10-24T11:10:00Z" }] }, /readiness deadline passed: status-check from app 15368/],
+    ["a required check that is still running", { checks: [{ id: 50, name: "status-check", app: { id: 15368 }, status: "in_progress", conclusion: "success", started_at: "2026-10-24T11:10:00Z" }] }, /readiness deadline passed: status-check from app 15368/],
+    ["a missing required check name", { checks: [{ id: 50, name: "other-check", app: { id: 15368 }, status: "completed", conclusion: "success", started_at: "2026-10-24T11:10:00Z" }] }, /readiness deadline passed: status-check from app 15368/],
+    ["a failed required check", { checks: [{ id: 50, name: "status-check", app: { id: 15368 }, status: "completed", conclusion: "failure", started_at: "2026-10-24T11:10:00Z" }] }, /readiness deadline passed: status-check from app 15368/],
+    ["a newer failed check run with the same timestamp", { checks: [{ id: 51, name: "status-check", app: { id: 15368 }, status: "completed", conclusion: "failure", started_at: "2026-10-24T11:10:00Z" }, { id: 50, name: "status-check", app: { id: 15368 }, status: "completed", conclusion: "success", started_at: "2026-10-24T11:10:00Z" }] }, /readiness deadline passed: status-check from app 15368/],
+    ["a sensitive-path policy that is not yet approved", { policies: [{ type: "sensitive-paths", paths: ["protected/**"], exempt: [] }], files: [{ filename: "protected/file.txt" }] }, /merge readiness deadline passed: policies failed: sensitive-paths: .*need a trusted approver's \/approve/],
+  ];
+  test.each(rejects)("rejects %s with an observable reason", async (_, setup, message) => {
+    const { ctx, notify } = context(setup);
+    if (_ === "a bot merger targeting csm-ci-actions") {
+      ctx.config.owners.push("civitaspo");
+      ctx.config.repositories.push({ name: "civitaspo/csm-ci-actions", ops: ["merge"] });
+    }
+    await expect(waitForMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow(message);
+    const accepted = !["a commenter outside the merger allowlist", "a non-command comment", "a draft pull request", "a replayed command", "a deleted comment author", "a deleted command", "a wrong command routed to merge", "a head newer than the command", "a force-push after the command", "an edited command", "a command edited in the same second", "a bot merging another author's pull request", "a bot merger with another committer's commit", "a bot merger targeting the server repository", "a bot merger targeting csm-ci-actions", "an unsupported account type"].includes(_);
+    expect(notify.calls.includes(`POST ${P}/issues/comments/9/reactions`)).toBe(accepted);
+    if (accepted) expect(notify.calls).toContain(`POST ${P}/issues/12/comments`);
+  });
+});
+
+describe("runMerge", () => {
+  function writableContext(mergeStatus: number, mergeBody: unknown = { merged: true, sha: "c".repeat(40) }, setup: Setup = {}) {
+    const base = context(setup);
+    const write = fakeFetch([
+      { method: "PUT", path: `${P}/pulls/12/merge`, status: mergeStatus, body: mergeBody },
+    ]);
+    base.ctx.write = github("w", write);
+    return { ...base, write, notify: base.notify };
+  }
+
+  test("squash merges the pinned head and posts one receipt", async () => {
+    const { ctx, write, notify } = writableContext(200);
+    expect(await runMerge(ctx, { pull_number: 12, comment_id: 9 }, { head: HEAD })).toEqual({ result: "merged", head: HEAD, mergeCommit: "c".repeat(40) });
+    expect(write.calls.filter((call) => call === "PUT /repos/owner/repo/pulls/12/merge")).toHaveLength(1);
+    expect(notify.calls.filter((call) => call === "POST /repos/owner/repo/issues/12/comments")).toHaveLength(1);
+  });
+
+  test("passes the pull request title and body with duplicate coauthor lines removed", async () => {
+    const { ctx, write } = writableContext(200);
+    await runMerge(ctx, { pull_number: 12, comment_id: 9 }, { head: HEAD });
+    const request = write.requests.find((item) => item.method === "PUT" && item.path === `${P}/pulls/12/merge`);
+    expect(request?.body).toBeDefined();
+    const payload = JSON.parse(request?.body ?? "{}");
+    expect(payload.commit_title).toBe("Example title");
+    expect(payload.commit_message).toBe("Description\nCo-authored-by: Alice <alice@example.com>\nCo-authored-by: Bob <bob@example.com>");
+  });
+
+  test("rejects a successful HTTP response that does not report a merged pull request", async () => {
+    const { ctx, write } = writableContext(200, { merged: false, sha: null });
+    await expect(runMerge(ctx, { pull_number: 12, comment_id: 9 }, { head: HEAD })).rejects.toThrow(/GitHub did not merge/);
+    expect(write.calls.filter((call) => call === `PUT ${P}/pulls/12/merge`)).toHaveLength(1);
+  });
+
+  test("preserves the readiness error when posting the merge failure receipt also fails", async () => {
+    const { ctx } = writableContext(200, undefined, { pull: pull({ state: "closed" }), receiptStatus: 500 });
+    await expect(runMerge(ctx, { pull_number: 12, comment_id: 9 }, { head: HEAD })).rejects.toThrow(/#12 is closed; additionally failed to post the merge failure receipt/);
+  });
+
+  test("fails a 409 base conflict without retrying", async () => {
+    const { ctx, write } = writableContext(409, { message: "Conflict" });
+    await expect(runMerge(ctx, { pull_number: 12, comment_id: 9 }, { head: HEAD })).rejects.toThrow(/base changed/);
+    expect(write.calls.filter((call) => call === "PUT /repos/owner/repo/pulls/12/merge")).toHaveLength(1);
+  });
+
+  test("rejects a replay before reacting or merging", async () => {
+    const { ctx, write, notify } = writableContext(200);
+    ctx.server = github("s", fakeFetch([
+      { method: "GET", path: `${P}/issues/12/comments`, body: [{ user: { id: SERVER_BOT_ID }, body: `${marker("merge", 9)} done` }] },
+    ]));
+    await expect(runMerge(ctx, { pull_number: 12, comment_id: 9 }, { head: HEAD })).rejects.toThrow(/already handled/);
+    expect(write.calls).toEqual([]);
+    expect(notify.calls).toEqual([]);
+  });
+
+  test.each([502, 504])("reconciles a %i merge response against the merged pull request", async (status) => {
+    const merged = pull({ state: "closed", merged: true, merged_by: { id: SERVER_BOT_ID }, merge_commit_sha: "c".repeat(40) });
+    const { ctx, write, notify } = writableContext(status, { message: "upstream error" }, { pullThen: [pull(), pull(), merged, merged] });
+    expect(await runMerge(ctx, { pull_number: 12, comment_id: 9 }, { head: HEAD })).toEqual({ result: "merged", head: HEAD, mergeCommit: "c".repeat(40) });
+    expect(write.calls.filter((call) => call === "PUT /repos/owner/repo/pulls/12/merge")).toHaveLength(1);
+    expect(notify.calls.filter((call) => call === "POST /repos/owner/repo/issues/12/comments")).toHaveLength(1);
+  });
+
+  test("reconciles a timed out merge request without retrying or posting a failure receipt", async () => {
+    const merged = pull({ state: "closed", merged: true, merged_by: { id: SERVER_BOT_ID }, merge_commit_sha: "c".repeat(40) });
+    const { ctx, notify } = writableContext(200, undefined, { pullThen: [pull(), pull(), merged, merged] });
+    const timedOutFetch = (async () => { throw new DOMException("GitHub request timed out", "TimeoutError"); }) as unknown as typeof globalThis.fetch;
+    ctx.write = github("w", timedOutFetch);
+    expect(await runMerge(ctx, { pull_number: 12, comment_id: 9 }, { head: HEAD })).toEqual({ result: "merged", head: HEAD, mergeCommit: "c".repeat(40) });
+    expect(notify.calls.filter((call) => call === "POST /repos/owner/repo/issues/12/comments")).toHaveLength(1);
+  });
+
+  test("reconciles a network failure after merge acceptance without retrying", async () => {
+    const merged = pull({ state: "closed", merged: true, merged_by: { id: SERVER_BOT_ID }, merge_commit_sha: "c".repeat(40) });
+    const { ctx, write, notify } = writableContext(200, undefined, { pullThen: [pull(), pull(), merged, merged] });
+    let mergeRequests = 0;
+    const failAfterAccept = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+      if (url.pathname === `${P}/pulls/12/merge`) {
+        mergeRequests += 1;
+        throw new TypeError("fetch failed");
+      }
+      return write(input, init);
+    }) as unknown as typeof globalThis.fetch;
+    ctx.write = github("w", failAfterAccept);
+    expect(await runMerge(ctx, { pull_number: 12, comment_id: 9 }, { head: HEAD })).toEqual({ result: "merged", head: HEAD, mergeCommit: "c".repeat(40) });
+    expect(mergeRequests).toBe(1);
+    expect(notify.calls.filter((call) => call === "POST /repos/owner/repo/issues/12/comments")).toHaveLength(1);
+  });
+
+  test("does not retry an ambiguous 502 when the pull request remains open", async () => {
+    const { ctx, write, notify } = writableContext(502, { message: "upstream error" });
+    await expect(runMerge(ctx, { pull_number: 12, comment_id: 9 }, { head: HEAD })).rejects.toThrow();
+    expect(write.calls.filter((call) => call === "PUT /repos/owner/repo/pulls/12/merge")).toHaveLength(1);
+    expect(notify.calls.filter((call) => call === "POST /repos/owner/repo/issues/12/comments")).toHaveLength(1);
+  });
+
+  test.each([
+    ["head", pull({ state: "closed", merged: true, merged_by: { id: SERVER_BOT_ID }, merge_commit_sha: "c".repeat(40), head: { sha: NEXT, repo: { full_name: "owner/repo" } } })],
+    ["merger", pull({ state: "closed", merged: true, merged_by: { id: 10 }, merge_commit_sha: "c".repeat(40) })],
+    ["merged state", pull({ state: "closed", merged: false, merged_by: { id: SERVER_BOT_ID }, merge_commit_sha: "c".repeat(40) })],
+    ["merge commit SHA", pull({ state: "closed", merged: true, merged_by: { id: SERVER_BOT_ID }, merge_commit_sha: null })],
+  ])("does not reconcile a 502 with a mismatched %s", async (_, snapshot) => {
+    const { ctx, write, notify } = writableContext(502, { message: "upstream error" }, { pullThen: [pull(), pull(), snapshot] });
+    await expect(runMerge(ctx, { pull_number: 12, comment_id: 9 }, { head: HEAD })).rejects.toThrow(/upstream error/);
+    expect(write.calls.filter((call) => call === "PUT /repos/owner/repo/pulls/12/merge")).toHaveLength(1);
+    expect(notify.calls.filter((call) => call === "POST /repos/owner/repo/issues/12/comments")).toHaveLength(1);
+    const receipt = notify.requests.find((request) => request.method === "POST" && request.path === `${P}/issues/12/comments`);
+    expect(receipt?.body).toContain("failed");
+  });
+
+  test("revalidates readiness before retrying a 405", async () => {
+    const { ctx, write, notify } = writableContext(405, { message: "not mergeable" });
+    await expect(runMerge(ctx, { pull_number: 12, comment_id: 9 }, { head: HEAD })).rejects.toThrow();
+    expect(write.calls.filter((call) => call === "PUT /repos/owner/repo/pulls/12/merge")).toHaveLength(3);
+    expect(notify.calls.filter((call) => call === "POST /repos/owner/repo/issues/12/comments")).toHaveLength(1);
+  });
+
+  test("stops a retry after approval is withdrawn during the revalidation", async () => {
+    const withdrawn = [{ id: 41, user: { id: 4000 }, state: "CHANGES_REQUESTED", commit_id: HEAD, submitted_at: "2026-10-24T11:40:00Z" }];
+    const { ctx, server, write } = writableContext(405, { message: "not mergeable" }, { reviewThen: [withdrawn] });
+    await expect(runMerge(ctx, { pull_number: 12, comment_id: 9 }, { head: HEAD })).rejects.toThrow(/approver has not approved/);
+    expect(write.calls.filter((call) => call === `PUT ${P}/pulls/12/merge`)).toHaveLength(1);
+    expect(server.calls.filter((call) => call === `GET ${P}/pulls/12/reviews`)).toHaveLength(2);
+  });
+
+  test.each([422, 503])("revalidates readiness before retrying a %i", async (status) => {
+    const { ctx, write, notify } = writableContext(status, { message: "temporary blocker" });
+    await expect(runMerge(ctx, { pull_number: 12, comment_id: 9 }, { head: HEAD })).rejects.toThrow();
+    expect(write.calls.filter((call) => call === "PUT /repos/owner/repo/pulls/12/merge")).toHaveLength(3);
+    expect(notify.calls.filter((call) => call === "POST /repos/owner/repo/issues/12/comments")).toHaveLength(1);
+  });
+});

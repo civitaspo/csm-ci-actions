@@ -324,7 +324,7 @@ After Phase 0, phases 1, 2, 3, 4, 5a, and 6 can proceed independently in paralle
 
 ### Phase 2: merge
 
-- **client**: on `/merge [sha]`, `owner/repo/<pr>/<comment_id>`
+- **client**: on an exact `/merge` comment (no arguments), `owner/repo/<pr>/<comment_id>`
 - **server**
   1. Validate S5. The author is in `mergers`, or in `bot_mergers` with the PR author and the effective identity of every commit being that same bot.
   2. Check the PR state, pass S3, and pin the head.
@@ -342,7 +342,7 @@ After Phase 0, phases 1, 2, 3, 4, 5a, and 6 can proceed independently in paralle
   - The success case merges.
   - A `/merge` from a non-merger is rejected.
   - Even with the ruleset removed, a PR that is not approved is rejected (defense in depth).
-  - It aborts on a head change, a force-push, or a comment edit or deletion while waiting.
+  - It aborts on a head change, a force-push, or a comment edit or deletion while waiting. Live e2e force-push coverage requires explicit authorization to mutate a testing-client PR branch; the current authorization permits force-pushing only the csm-ci-actions `e2e` branch. Unit and mutation tests cover force-push rejection until that authorization changes.
   - It aborts when the deadline passes.
   - A replay is rejected.
   - A bot can merge only its own PR.
@@ -617,7 +617,7 @@ The differences in security rules are summarized in the comparison table in the 
 | client caller | Pin to the runtime SHA, and reject callers of an old runtime | Pin to a SHA of csm-ci-actions (updated by Renovate). The server does not check the caller's pin |
 | approve | Automatic for trusted commits. The owner's `/approve` approves sensitive paths. It adds an owner marker comment | The meaning is the same (`/approve` takes no argument and covers trusted commits only). The marker goes in the review body, and no owner marker comment is added. A push right after approval causes a dismiss |
 | Re-run | None | **`/recheck`** can redo policy-check and the automatic approve |
-| merge | The client records the acceptance time and head in a manifest and watches the timeline broadly. Renovate rebase recovery exists | Based on the comment creation time, and optionally accepts `/merge <sha>`. Policies are re-evaluated inside the server. No rebase recovery |
+| merge | The client records the acceptance time and head in a manifest and watches the timeline broadly. Renovate rebase recovery exists | Based on the exact `/merge` comment creation time and pins the server-read head. Policies are re-evaluated inside the server. No rebase recovery |
 | policy-check | The check name is `securefix-policy-check`. An approval of the current head is also a condition to pass. On failure it posts a comment and minimizes old ones | The check name is `csm-ci/policy`. Approval is not a condition (the ruleset and the merge side check it). Policies can be added declaratively. The result is only in the check summary, and no comment is posted |
 | securefix | The PR fix workflow path is fixed to `pull_request.yml`. It does not update the PR title and body (release-pr-sync fills the gap) | A PR-mode run is bound to the target PR and to the base being the default branch (the workflow path does not matter). Route mode is a general configuration and also updates the PR title and body. release-pr-sync is not needed |
 | release tag | Created with the client's `GITHUB_TOKEN` (`contents: write`) | **The server creates it**. The client needs no write permission. The tag ruleset allows only the Server App to create it |

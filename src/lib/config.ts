@@ -37,14 +37,18 @@ export const ConfigSchema = z
     server_repository: RepoName,
     apps: z.strictObject({ client_bot_id: Id, server_app_id: Id, server_bot_id: Id }),
     approver: Principal,
-    trust: z.strictObject({ committers: z.array(Principal), approvers: z.array(Principal) }),
+    trust: z.strictObject({ committers: z.array(Principal), approvers: z.array(Principal), mergers: z.array(Principal), bot_mergers: z.array(Principal) }),
+    merge: z.strictObject({
+      required_checks: z.array(z.strictObject({ name: z.string().min(1), app_id: Id })),
+      deadline_minutes: z.number().int().positive().default(60),
+    }),
     policies: z.array(PolicySchema),
     repositories: z.array(RepositoryEntry).min(1),
   })
   .superRefine((c, ctx) => {
-    for (const list of ["committers", "approvers"] as const) {
+    for (const list of ["committers", "approvers", "mergers", "bot_mergers"] as const) {
       if (c.trust[list].some((p) => p.id === c.apps.server_bot_id || p.id === c.approver.id)) {
-        ctx.addIssue({ code: "custom", path: ["trust", list], message: "the server and approver bots must not be in a trust list" });
+      ctx.addIssue({ code: "custom", path: ["trust", list], message: "the server and approver bots must not be in a trust list" });
       }
     }
     const [serverOwner] = c.server_repository.split("/");

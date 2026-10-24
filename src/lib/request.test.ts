@@ -82,7 +82,11 @@ describe("validateIntake", () => {
     ["repository with no ops", event({ label: { name: "csm-ci-approve-a", description: "owner/no-ops/1" } }), env, /does not enable approve/],
   ];
   test.each(rejects)("rejects %s", (_, e, en, message) => {
-    expect(() => validateIntake(e, en, config())).toThrow(message);
+    const cfg = config();
+    if (e.label.name.startsWith("csm-ci-merge-")) {
+      cfg.repositories = cfg.repositories.map((entry) => ({ ...entry, ops: entry.ops.filter((op) => op !== "merge") }));
+    }
+    expect(() => validateIntake(e, en, cfg)).toThrow(message);
   });
 });
 

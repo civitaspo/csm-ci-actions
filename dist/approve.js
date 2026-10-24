@@ -32313,11 +32313,15 @@ var ConfigSchema = strictObject({
   server_repository: RepoName,
   apps: strictObject({ client_bot_id: Id, server_app_id: Id, server_bot_id: Id }),
   approver: Principal,
-  trust: strictObject({ committers: array(Principal), approvers: array(Principal) }),
+  trust: strictObject({ committers: array(Principal), approvers: array(Principal), mergers: array(Principal), bot_mergers: array(Principal) }),
+  merge: strictObject({
+    required_checks: array(strictObject({ name: string2().min(1), app_id: Id })),
+    deadline_minutes: number2().int().positive().default(60)
+  }),
   policies: array(PolicySchema),
   repositories: array(RepositoryEntry).min(1)
 }).superRefine((c, ctx) => {
-  for (const list of ["committers", "approvers"]) {
+  for (const list of ["committers", "approvers", "mergers", "bot_mergers"]) {
     if (c.trust[list].some((p) => p.id === c.apps.server_bot_id || p.id === c.approver.id)) {
       ctx.addIssue({ code: "custom", path: ["trust", list], message: "the server and approver bots must not be in a trust list" });
     }
@@ -32359,6 +32363,8 @@ function parseCommand(body) {
   const text = body.trim();
   if (text === "/approve")
     return { name: "approve" };
+  if (text === "/merge")
+    return { name: "merge" };
   if (text === "/recheck")
     return { name: "recheck" };
   return;
@@ -32369,7 +32375,7 @@ function validateComment(c, repository, pullNumber, now) {
   }
   const command = parseCommand(c.body);
   if (!command)
-    throw new Rejection(`comment ${c.id} is not exactly /approve or /recheck`);
+    throw new Rejection(`comment ${c.id} is not exactly /approve, /merge or /recheck`);
   if (command.name === "recheck")
     return command;
   if (c.lastEditedAt !== null || c.createdAt !== c.updatedAt)
@@ -36424,7 +36430,12 @@ function isRetryableError(error, timedOut) {
     return false;
   if ("status" in error && (error.status === 502 || error.status === 503 || error.status === 504))
     return true;
-  if (!("cause" in error))
+  return isNetworkFailure(error);
+}
+function isNetworkFailure(error) {
+  if (error instanceof TypeError)
+    return true;
+  if (typeof error !== "object" || error === null || !("cause" in error))
     return false;
   const cause = error.cause;
   return cause instanceof TypeError || cause instanceof Error && ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EAI_AGAIN", "ENETUNREACH"].some((code) => cause.message.includes(code));
@@ -36752,7 +36763,9 @@ async function commandApprove(ctx, pull, comment) {
   if (problems.length > 0)
     throw new Rejection(`/approve cannot proceed because policy checks failed: ${problems.join("; ")}`);
   await checkHeadPredatesComment(ctx, pull, comment);
-  validateComment(await fetchComment(ctx.server, ctx.repository, comment.id), ctx.repository, pull.number, ctx.now());
+  const currentCommand = validateComment(await fetchComment(ctx.server, ctx.repository, comment.id), ctx.repository, pull.number, ctx.now());
+  if (currentCommand.name !== "approve")
+    throw new Rejection(`comment ${comment.id} is no longer exactly /approve`);
   const outcome = await approveHead(ctx, pull, marker("approve:command", comment.id), true);
   await refreshPolicy(ctx, outcome.result === "dismissed" ? await fetchPull(ctx.server, ctx.repository, pull.number) : pull);
   return outcome;
@@ -36773,6 +36786,8 @@ async function runApprove(ctx, args) {
     checkPullState(pull);
     return autoApprove(ctx, pull);
   }
+  if (command.name !== "approve")
+    throw new Rejection(`comment ${comment.id} is not exactly /approve`);
   const receipt = marker("approve", comment.id);
   const comments = await ctx.server.paginate(ctx.server.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: pull.number, per_page: 100 });
   if (hasServerMarker(comments, receipt, ctx.config.apps.server_bot_id))

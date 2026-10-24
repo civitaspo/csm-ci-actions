@@ -16,7 +16,7 @@ const TIMEOUT_MS = 10 * 60_000;
 
 export type Run = { id: number; html_url: string; status: string | null; conclusion: string | null; created_at: string; display_title: string };
 export type Ctx = { gh: GitHub; urls: string[]; untrusted: GitHub | undefined };
-export type Scenario = { name: string; needsUntrusted?: boolean; run: (ctx: Ctx) => Promise<void> };
+export type Scenario = { name: string; needsUntrusted?: boolean; serial?: boolean; run: (ctx: Ctx) => Promise<void> };
 
 export function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -247,10 +247,10 @@ export async function closePr(ctx: Ctx, pr: Pr): Promise<void> {
   await ctx.gh.rest.git.deleteRef({ ...repo, ref: `heads/${pr.branch}` });
 }
 
-export async function postComment(ctx: Ctx, pr: Pr, body: string, as: GitHub = ctx.gh): Promise<{ id: number; since: Date }> {
+export async function postComment(ctx: Ctx, pr: Pr, body: string, as: GitHub = ctx.gh): Promise<{ id: number; since: Date; authorAssociation: string }> {
   const since = new Date(Date.now() - 2_000);
   const { data } = await as.rest.issues.createComment({ ...splitRepository(CLIENT), issue_number: pr.number, body });
-  return { id: Number(data.id), since };
+  return { id: Number(data.id), since, authorAssociation: data.author_association ?? "" };
 }
 
 export async function approverReviews(ctx: Ctx, pr: Pr): Promise<{ id: number; state: string; commit_id: string | null; body: string }[]> {
