@@ -27,7 +27,7 @@ export const smoke: Scenario[] = [
     name: "a client app label passes intake and is deleted",
     run: async (ctx) => {
       const request = await smokeRequest(ctx, "policy-check", "1");
-      await expectServer(ctx, { kind: "policy-check", repository: CLIENT, args: { pull_number: 1 } }, request.since, "success", "success", /accepted policy-check for civitaspo\/testing-csm-ci-client \{"pull_number":1\}/);
+      await expectServer(ctx, { kind: "policy-check", repository: CLIENT, args: { pull_number: 1 }, label: request.label }, request.since, "success", "success", /accepted policy-check for civitaspo\/testing-csm-ci-client \{"pull_number":1\}/);
     },
   },
   {

@@ -1,9 +1,10 @@
 // Helpers shared by the e2e scenarios. GitHub is the system under test, so every check reads the API.
+import { randomUUID } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { parseArgs } from "node:util";
 import { type GitHub, splitRepository } from "../src/lib/github.ts";
-import { matchesAcceptedRequest, recentItems } from "./correlation.ts";
+import { findRunByTitle, matchesAcceptedRequest, recentItems } from "./correlation.ts";
 
 export const OWNER = "civitaspo";
 export const ACTIONS = `${OWNER}/csm-ci-actions`;
@@ -89,10 +90,11 @@ export async function syncFixtures(gh: GitHub): Promise<void> {
 }
 
 export async function dispatch(ctx: Ctx, repository: string, workflow: string, inputs: Record<string, string> = {}): Promise<Run> {
-  const since = new Date(Date.now() - 2_000);
+  const correlation = workflow === "csm-ci-smoke.yml" ? randomUUID() : undefined;
+  const dispatchInputs = correlation ? { ...inputs, correlation } : inputs;
   await until(`dispatch of ${workflow}`, async () => {
     try {
-      await ctx.gh.rest.actions.createWorkflowDispatch({ ...splitRepository(repository), workflow_id: workflow, ref: "main", inputs });
+      await ctx.gh.rest.actions.createWorkflowDispatch({ ...splitRepository(repository), workflow_id: workflow, ref: "main", inputs: dispatchInputs });
       return true;
     } catch (e) {
       // A just-synced workflow is briefly unknown to the dispatch API.
@@ -100,9 +102,9 @@ export async function dispatch(ctx: Ctx, repository: string, workflow: string, i
       throw e;
     }
   });
-  const run = await until(`a ${workflow} run`, async () => {
+  const run = await until(`the ${workflow} run ${correlation ?? ""}`, async () => {
     const { data } = await ctx.gh.rest.actions.listWorkflowRuns({ ...splitRepository(repository), workflow_id: workflow, event: "workflow_dispatch", per_page: 5 });
-    return data.workflow_runs.find((r) => new Date(r.created_at) >= since);
+    return correlation ? findRunByTitle(data.workflow_runs, `csm-ci-smoke ${correlation}`) : data.workflow_runs[0];
   });
   return waitRun(ctx, repository, run.id);
 }
@@ -154,11 +156,6 @@ export async function jobLog(ctx: Ctx, repository: string, jobId: number): Promi
   return String(data);
 }
 
-export async function requestLabels(ctx: Ctx): Promise<string[]> {
-  const labels = await ctx.gh.paginate(ctx.gh.rest.issues.listLabelsForRepo, { ...splitRepository(SERVER), per_page: 100 });
-  return labels.map((l) => l.name).filter((n) => n.startsWith("csm-ci-"));
-}
-
 export type Conclusion = "success" | "failure" | "skipped";
 
 export async function expectServer(ctx: Ctx, match: RequestMatch, since: Date, intake: Conclusion, op: Conclusion, logPattern?: RegExp): Promise<void> {
@@ -173,8 +170,15 @@ export async function expectServer(ctx: Ctx, match: RequestMatch, since: Date, i
     const log = await jobLog(ctx, SERVER, intakeJob.id);
     assert(logPattern.test(log), `intake log does not match ${logPattern} (${run.html_url})`);
   }
-  const left = await requestLabels(ctx);
-  assert(left.length === 0, `request labels left in ${SERVER}: ${left.join(", ")}`);
+  assert(match.label, "request label is required to verify cleanup");
+  let labelExists = false;
+  try {
+    await ctx.gh.rest.issues.getLabel({ ...splitRepository(SERVER), name: match.label });
+    labelExists = true;
+  } catch (e) {
+    if (!hasStatus(e, 404)) throw e;
+  }
+  assert(!labelExists, `request label ${match.label} remains in ${SERVER}`);
 }
 
 export async function smokeRequest(ctx: Ctx, kind: string, args: string): Promise<{ since: Date; label: string }> {

@@ -2,6 +2,10 @@ import type { RequestMatch } from "./harness.ts";
 
 export type Timestamped = { created_at: string };
 
+export function findRunByTitle<T extends { display_title: string }>(runs: readonly T[], title: string): T | undefined {
+  return runs.find((run) => run.display_title === title);
+}
+
 export async function recentItems<T extends Timestamped>(pages: AsyncIterable<readonly T[]>, since: Date): Promise<T[]> {
   const result: T[] = [];
   // Workflow runs are returned newest first, so an old item ends the useful range.
