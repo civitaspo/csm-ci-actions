@@ -1,0 +1,110 @@
+name: csm-ci server
+
+# Called from the server repository on `label: created` with `secrets: inherit`.
+# Each job checks out csm-ci-actions at job.workflow_sha so it runs the actions of the same commit.
+on:
+  workflow_call:
+    inputs:
+      config-path:
+        description: Path of csm-ci.yaml in the server repository.
+        type: string
+        default: csm-ci.yaml
+
+permissions: {}
+
+jobs:
+  intake:
+    if: >-
+      github.event_name == 'label' && github.event.action == 'created' &&
+      startsWith(github.event.label.name, 'csm-ci-') && github.event.sender.type == 'Bot'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      kind: ${{ steps.intake.outputs.kind }}
+      owner: ${{ steps.intake.outputs.owner }}
+      name: ${{ steps.intake.outputs.name }}
+      args: ${{ steps.intake.outputs.args }}
+      concurrency-key: ${{ steps.intake.outputs.concurrency-key }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .csm-ci-actions
+          persist-credentials: false
+      - id: intake
+        uses: ./.csm-ci-actions/actions/intake
+        with:
+          config-path: ${{ inputs.config-path }}
+
+  op:
+    needs: [intake]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    environment: csm-ci
+    # Keyed on the normalized repository and number from intake, so spelling variants share a group.
+    concurrency:
+      group: csm-ci-${{ needs.intake.outputs.concurrency-key }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .csm-ci-actions
+          persist-credentials: false
+      - id: server-token
+        if: needs.intake.outputs.kind == 'approve'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ needs.intake.outputs.owner }}
+          repositories: ${{ needs.intake.outputs.name }}
+          permission-contents: read
+          permission-pull-requests: write
+      # The approver App needs contents:write for its approval to count, but GitHub checks the
+      # App's permissions, so this token stays at pull_requests:write.
+      - id: approver-token
+        if: needs.intake.outputs.kind == 'approve'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_APPROVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_APPROVER_APP_PRIVATE_KEY }}
+          owner: ${{ needs.intake.outputs.owner }}
+          repositories: ${{ needs.intake.outputs.name }}
+          permission-pull-requests: write
+      - if: needs.intake.outputs.kind == 'approve'
+        uses: ./.csm-ci-actions/actions/approve
+        with:
+          config-path: ${{ inputs.config-path }}
+          server-token: ${{ steps.server-token.outputs.token }}
+          approver-token: ${{ steps.approver-token.outputs.token }}
+          repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
+          args: ${{ needs.intake.outputs.args }}
+      - if: needs.intake.outputs.kind != 'approve'
+        env:
+          KIND: ${{ needs.intake.outputs.kind }}
+        run: echo "no $KIND handler yet"
+
+  cleanup:
+    needs: [intake, op]
+    if: >-
+      always() && github.event_name == 'label' && github.event.action == 'created' &&
+      startsWith(github.event.label.name, 'csm-ci-')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Delete the request label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LABEL: ${{ github.event.label.name }}
+          REPOSITORY: ${{ github.repository }}
+        run: gh label delete "$LABEL" --repo "$REPOSITORY" --yes

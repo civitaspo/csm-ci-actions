@@ -1,0 +1,36 @@
+name: csm-ci server check
+
+# Called from the server repository on push and pull_request. It validates csm-ci.yaml with the
+# schema of the same csm-ci-actions commit the server workflow uses, and lints the workflows.
+on:
+  workflow_call:
+    inputs:
+      config-path:
+        description: Path of csm-ci.yaml in the server repository.
+        type: string
+        default: csm-ci.yaml
+
+permissions: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .csm-ci-actions
+          persist-credentials: false
+      - uses: ./.csm-ci-actions/actions/check-config
+        with:
+          path: ${{ inputs.config-path }}
+      - uses: jdx/jactionlint@a65ab044e916760429068fe5794b8306abdfcbb9 # v2.3.0
+        with:
+          online: "true"
