@@ -1,5 +1,6 @@
 import { splitRepository } from "../src/lib/github.ts";
 import { marker } from "../src/lib/notify.ts";
+import { completedRequestRuns, matchesAcceptedRequest, runsForComments } from "./correlation.ts";
 import {
   approverReviews,
   assert,
@@ -16,6 +17,7 @@ import {
   jobs,
   SERVER,
   serverComments,
+  recentWorkflowRuns,
   sleep,
   until,
 } from "./harness.ts";
@@ -27,7 +29,7 @@ async function withPr(ctx: Ctx, kind: "signed" | "unsigned", fn: (pr: Pr) => Pro
   const pr = await openPr(ctx, kind, as, author);
   try {
     // Opening the pull request runs the automatic path once.
-    await expectOp(ctx, since, "success");
+    await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number } }, since, "success");
     await fn(pr);
   } finally {
     await closePr(ctx, pr);
@@ -53,20 +55,22 @@ async function rocketFromServer(ctx: Ctx, commentId: number): Promise<boolean> {
 async function expectRejectedCommand(ctx: Ctx, pr: Pr, body: string, pattern: RegExp, receipt: boolean): Promise<void> {
   const before = (await approverReviews(ctx, pr)).length;
   const c = await postComment(ctx, pr, body);
-  await expectOp(ctx, c.since, "failure", pattern);
+  await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: c.id } }, c.since, "failure", pattern);
   assert((await approverReviews(ctx, pr)).length === before, "a rejected command created a review");
   const receipts = (await serverComments(ctx, pr)).filter((b) => b.includes(marker("approve", c.id)));
   assert(receipts.length === (receipt ? 1 : 0), `expected ${receipt ? "one receipt" : "no receipt"}, found ${receipts.length}`);
 }
 
-// Waits until every server run since `since` is done, then checks each op job. A short pause first
-// lets a label that is still on its way start its run.
-async function expectEveryOp(ctx: Ctx, since: Date, op: "success" | "failure", logPattern: RegExp): Promise<void> {
-  await sleep(20_000);
+// The completed client runs determine how many labels must reach the server.
+async function expectEveryOp(ctx: Ctx, match: {kind:string; repository:string; args:Record<string,number>}, since: Date, expectedCount: number, op: "success" | "failure", logPattern: RegExp): Promise<void> {
   const runs = await until("the server runs to finish", async () => {
-    const { data } = await ctx.gh.rest.actions.listWorkflowRuns({ ...splitRepository(SERVER), workflow_id: "csm-ci.yml", event: "label", per_page: 10 });
-    const found = data.workflow_runs.filter((r) => new Date(r.created_at) >= since);
-    return found.length > 0 && found.every((r) => r.status === "completed") ? found : undefined;
+    const recent = await recentWorkflowRuns(ctx, SERVER, "csm-ci.yml", "label", since);
+    const found = [];
+    for (const run of recent) {
+      const intake = (await jobs(ctx, SERVER, run.id)).get("intake");
+      if (intake && intake.conclusion !== "skipped" && matchesAcceptedRequest(await jobLog(ctx, SERVER, intake.id), match)) found.push(run);
+    }
+    return completedRequestRuns(found, expectedCount);
   });
   for (const run of runs) {
     ctx.urls.push(run.html_url);
@@ -76,15 +80,31 @@ async function expectEveryOp(ctx: Ctx, since: Date, op: "success" | "failure", l
   }
 }
 
+async function commentRequestCount(ctx: Ctx, since: Date, pr: number, commentId: number): Promise<number> {
+  const run = await until(`the client run for comment ${commentId}`, async () => {
+    const recent = await recentWorkflowRuns(ctx, CLIENT, "csm-ci-approve.yml", "issue_comment", since);
+    const found = runsForComments(recent, pr, [commentId])?.[0];
+    return found?.status === "completed" ? found : undefined;
+  });
+  ctx.urls.push(run.html_url);
+  const request = await until(`the request job of ${run.html_url}`, async () => (await jobs(ctx, CLIENT, run.id)).get("request"));
+  if (request.conclusion === "skipped") return 0;
+  assert(request.conclusion === "success", `client request job concluded ${request.conclusion} (${run.html_url})`);
+  const labels = (await jobLog(ctx, CLIENT, request.id)).match(/created label csm-ci-[^ ]+ \(/g) ?? [];
+  assert(labels.length === 1, `expected one client request label, found ${labels.length} (${run.html_url})`);
+  return 1;
+}
+
 // Waits for the issue_comment runs of the client workflow and checks that their request job was skipped.
-async function expectClientSkipped(ctx: Ctx, since: Date, count: number): Promise<void> {
-  const runs = await until(`${count} client issue_comment runs`, async () => {
-    const { data } = await ctx.gh.rest.actions.listWorkflowRuns({ ...splitRepository(CLIENT), workflow_id: "csm-ci-approve.yml", event: "issue_comment", per_page: 10 });
-    const found = data.workflow_runs.filter((r) => new Date(r.created_at) >= since);
-    return found.length >= count && found.every((r) => r.status === "completed") ? found : undefined;
+async function expectClientSkipped(ctx: Ctx, since: Date, pr: number, commentIds: number[]): Promise<void> {
+  const runs = await until(`${commentIds.length} client issue_comment runs`, async () => {
+    const recent = await recentWorkflowRuns(ctx, CLIENT, "csm-ci-approve.yml", "issue_comment", since);
+    const found = runsForComments(recent, pr, commentIds);
+    return found?.every((r) => r.status === "completed") ? found : undefined;
   });
   for (const run of runs) {
     ctx.urls.push(run.html_url);
+    assert(run.display_title?.includes(`request #${pr}`), `client run does not identify PR ${pr} (${run.html_url})`);
     // Right after a run completes, its job list can still be empty.
     const request = await until(`the request job of ${run.html_url}`, async () => (await jobs(ctx, CLIENT, run.id)).get("request"));
     assert(request.conclusion === "skipped", `client request job concluded ${request.conclusion} (${run.html_url})`);
@@ -92,10 +112,14 @@ async function expectClientSkipped(ctx: Ctx, since: Date, count: number): Promis
 }
 
 // After the client runs are done, no label can still be on its way.
-async function expectNoServerRun(ctx: Ctx, since: Date): Promise<void> {
+async function expectNoServerRun(ctx: Ctx, since: Date, match: {kind:string; repository:string; args:Record<string,number>}): Promise<void> {
   await sleep(15_000);
-  const { data } = await ctx.gh.rest.actions.listWorkflowRuns({ ...splitRepository(SERVER), workflow_id: "csm-ci.yml", event: "label", per_page: 10 });
-  const runs = data.workflow_runs.filter((r) => new Date(r.created_at) >= since);
+  const recent = await recentWorkflowRuns(ctx, SERVER, "csm-ci.yml", "label", since);
+  const runs = [];
+  for (const run of recent) {
+    const intake = (await jobs(ctx, SERVER, run.id)).get("intake");
+    if (intake && intake.conclusion !== "skipped" && matchesAcceptedRequest(await jobLog(ctx, SERVER, intake.id), match)) runs.push(run);
+  }
   assert(runs.length === 0, `expected no server run, found ${runs.map((r) => r.html_url).join(", ")}`);
 }
 
@@ -136,7 +160,7 @@ export const approve: Scenario[] = [
       withPr(ctx, "signed", async (pr) => {
         await dismissApprovals(ctx, pr);
         const c = await postComment(ctx, pr, "/approve");
-        await expectOp(ctx, c.since, "success");
+        await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: c.id } }, c.since, "success");
         const approvals = await approvedAt(ctx, pr);
         assert(approvals.length === 1 && approvals[0]?.body.includes(marker("approve:command", c.id)), "no /approve approval at the head");
         assert(await rocketFromServer(ctx, c.id), "the server did not react with a rocket");
@@ -149,8 +173,8 @@ export const approve: Scenario[] = [
       withPr(ctx, "signed", async (pr) => {
         await dismissApprovals(ctx, pr);
         const c = await postComment(ctx, pr, "/approve");
-        await expectOp(ctx, c.since, "success");
-        await expectOp(ctx, await labelFor(ctx, pr, c.id), "failure", /already handled/);
+        await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: c.id } }, c.since, "success");
+        await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: c.id } }, await labelFor(ctx, pr, c.id), "failure", /already handled/);
         assert((await receipts(ctx, pr, c.id)).length === 1, "the replay posted another receipt");
       }),
   },
@@ -168,7 +192,8 @@ export const approve: Scenario[] = [
         const c = await postComment(ctx, pr, "e2e: about to become /approve");
         await ctx.gh.rest.issues.updateComment({ ...splitRepository(CLIENT), comment_id: c.id, body: "/approve" });
         await labelFor(ctx, pr, c.id);
-        await expectEveryOp(ctx, c.since, "failure", /was edited/);
+        const expectedRequests = 1 + await commentRequestCount(ctx, c.since, pr.number, c.id);
+        await expectEveryOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: c.id } }, c.since, expectedRequests, "failure", /was edited/);
         assert((await approvedAt(ctx, pr)).length === 0, "an edited command approved");
         assert(!(await rocketFromServer(ctx, c.id)), "the server reacted to an edited command");
       }),
@@ -179,7 +204,7 @@ export const approve: Scenario[] = [
       withPr(ctx, "signed", async (pr) => {
         await dismissApprovals(ctx, pr);
         const c = await postComment(ctx, pr, "/recheck");
-        await expectOp(ctx, c.since, "success");
+        await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: c.id } }, c.since, "success");
         assert((await approvedAt(ctx, pr)).length === 1, "/recheck did not approve");
         assert(await rocketFromServer(ctx, c.id), "the server did not react with a rocket");
       }),
@@ -221,7 +246,7 @@ export const approve: Scenario[] = [
       withPr(ctx, "signed", async (pr) => {
         await dismissApprovals(ctx, pr);
         const c = await postComment(ctx, pr, "/approve", ctxUntrusted(ctx));
-        await expectOp(ctx, await labelFor(ctx, pr, c.id), "failure", /is not one of the approvers/);
+        await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: c.id } }, await labelFor(ctx, pr, c.id), "failure", /is not one of the approvers/);
         assert((await receipts(ctx, pr, c.id)).length === 0, "the server posted a receipt for a non-approver");
         assert(!(await rocketFromServer(ctx, c.id)), "the server reacted to a non-approver");
       }),
@@ -233,9 +258,10 @@ export const approve: Scenario[] = [
       withPr(ctx, "signed", async (pr) => {
         const untrusted = ctxUntrusted(ctx);
         const a = await postComment(ctx, pr, "/approve", untrusted);
-        await postComment(ctx, pr, "/recheck", untrusted);
-        await expectClientSkipped(ctx, a.since, 2);
-        await expectNoServerRun(ctx, a.since);
+        const b = await postComment(ctx, pr, "/recheck", untrusted);
+        await expectClientSkipped(ctx, a.since, pr.number, [a.id, b.id]);
+        await expectNoServerRun(ctx, a.since, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: a.id } });
+        await expectNoServerRun(ctx, b.since, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: b.id } });
       }),
   },
 ];
