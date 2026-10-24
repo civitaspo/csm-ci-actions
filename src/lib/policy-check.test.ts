@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { PullFacts } from "./command.ts";
+import type { Config } from "./config.ts";
 import { config, fakeFetch } from "./testing.ts";
 import { github } from "./github.ts";
-import { updatePolicyCheck } from "./policy-check.ts";
+import { evaluatePullPolicies, updatePolicyCheck } from "./policy-check.ts";
 
 const head = "a".repeat(40);
 const pull: PullFacts = { number: 12, state: "open", draft: false, headSha: head, headRepository: "owner/repo", baseRepository: "owner/repo", baseRef: "main", defaultBranch: "main", authorId: 10 };
@@ -27,6 +28,22 @@ function setup(checkRuns: unknown[]) {
 }
 
 describe("updatePolicyCheck", () => {
+  const protectedCases: Array<[string, Config["policies"]]> = [
+    ["omitted policy", []],
+    ["exemption", [{ type: "sensitive-paths", paths: [], exempt: [{ id: 10, login: "alice" }] }]],
+  ];
+  test.each(protectedCases)("forces every path in the protected server repository despite %s", async (_case, policies) => {
+    const protectedConfig = config();
+    protectedConfig.policies = policies;
+    const fetch = fakeFetch([
+      { method: "GET", path: "/repos/owner/server/pulls/12/commits", body: [{ sha: head, commit: { verification: { verified: true } }, author: { id: 10, login: "alice" }, committer: { id: 10, login: "alice" } }] },
+      { method: "GET", path: "/repos/owner/server/pulls/12/files", body: [{ filename: "ordinary.txt" }] },
+      { method: "GET", path: "/repos/owner/server/pulls/12/reviews", body: [] },
+    ]);
+    const results = await evaluatePullPolicies({ server: github("token", fetch), config: protectedConfig, repository: "owner/server", pull });
+    expect(results.find((result) => result.type === "sensitive-paths")).toEqual({ type: "sensitive-paths", ok: false, problems: ["sensitive paths need a trusted approver's /approve: ordinary.txt"] });
+  });
+
   test("creates a current-head check run with the Server App and a result table", async () => {
     const { server, sent } = setup([]);
     await updatePolicyCheck({ server, config: config(), repository: "owner/repo", pull });
