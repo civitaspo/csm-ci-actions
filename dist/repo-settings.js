@@ -37462,7 +37462,7 @@ async function inspectRepoSettings(args) {
   }
   return {
     target: args.target,
-    changes: { settings: repoSettings.settings !== undefined && !sameSettings(repositoryResponse.data, repoSettings.settings), immutableReleases: !immutableEnabled, rulesets: rulesetsToChange },
+    changes: { settings: changedSettings(repositoryResponse.data, repoSettings.settings ?? {}), immutableReleases: !immutableEnabled, rulesets: rulesetsToChange },
     rulesetIds: ids,
     rulesetEnforcements: enforcements
   };
@@ -37477,7 +37477,7 @@ async function applyRepoSettings(args) {
   let immutableReleasesEnabled = 0;
   let rulesetsUpdated = 0;
   let rulesetsCreated = 0;
-  if (inspection.changes.settings && repoSettings.settings) {
+  if (inspection.changes.settings.length > 0 && repoSettings.settings) {
     const desired = repoSettings.settings;
     await args.adminGH.rest.repos.update({
       ...address,
@@ -37527,8 +37527,12 @@ function validateDispatchPreflight(preflight) {
 function sameServerPullRequestBypass(bypassActors, serverAppId) {
   return bypassActors.length === 1 && bypassActors[0]?.actor_id === serverAppId && bypassActors[0]?.actor_type === "Integration" && bypassActors[0]?.bypass_mode === "pull_request";
 }
-function sameSettings(repository, desired) {
-  return Object.entries(desired).every(([key, value]) => repository[key] === value);
+function changedSettings(repository, desired) {
+  return Object.entries(desired).filter(([key, value]) => {
+    if (!(key in repository))
+      throw new Rejection(`repository setting ${key} is not visible to the inspection token`);
+    return repository[key] !== value;
+  }).map(([key]) => key);
 }
 function sameRuleSet(existing, desired, preserveEnforcement) {
   return canonical({ enforcement: preserveEnforcement ?? existing.enforcement, target: existing.target, conditions: existing.conditions, rules: existing.rules, bypass_actors: existing.bypass_actors }) === canonical({ enforcement: preserveEnforcement ?? desired.enforcement, target: desired.target, conditions: desired.conditions, rules: desired.rules, bypass_actors: desired.bypass_actors });
@@ -37637,11 +37641,13 @@ async function main() {
     const approverAppSlug = input("approver-app-slug");
     if (mode === "inspect") {
       const result = await inspectRepoSettings({ readGH, adminGH: github(input("admin-token", true)), config, target, mode: eventMode(input("event-mode", true)), ...approverAppSlug ? { approverAppSlug } : {}, actionsRepository });
+      info(`drift for ${target.name}: ${JSON.stringify(result.changes)}`);
       setOutput("changes", JSON.stringify(result.changes));
-      setOutput("has-changes", String(result.changes.settings || result.changes.immutableReleases || result.changes.rulesets.length > 0));
+      setOutput("has-changes", String(result.changes.settings.length > 0 || result.changes.immutableReleases || result.changes.rulesets.length > 0));
       return;
     }
     const result = await applyRepoSettings({ readGH, adminGH: github(input("admin-token", true)), config, target, mode: eventMode(input("event-mode", true)), ...approverAppSlug ? { approverAppSlug } : {}, actionsRepository });
+    info(`applied to ${target.name}: ${JSON.stringify(result)}`);
     setOutput("result", JSON.stringify(result));
     return;
   }

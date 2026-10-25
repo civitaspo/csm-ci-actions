@@ -183,7 +183,7 @@ export function repoSettingsRuleSets(config: Config): RuleSetDefinition[] {
 
 export type RepoSettingsInspection = {
   target: RepoSettingsTarget;
-  changes: { settings: boolean; immutableReleases: boolean; rulesets: string[] };
+  changes: { settings: string[]; immutableReleases: boolean; rulesets: string[] };
   rulesetIds: Record<string, number | undefined>;
   rulesetEnforcements: Record<string, RuleSet["enforcement"] | undefined>;
 };
@@ -247,7 +247,7 @@ export async function inspectRepoSettings(args: {
   }
   return {
     target: args.target,
-    changes: { settings: repoSettings.settings !== undefined && !sameSettings(repositoryResponse.data, repoSettings.settings), immutableReleases: !immutableEnabled, rulesets: rulesetsToChange },
+    changes: { settings: changedSettings(repositoryResponse.data, repoSettings.settings ?? {}), immutableReleases: !immutableEnabled, rulesets: rulesetsToChange },
     rulesetIds: ids,
     rulesetEnforcements: enforcements,
   };
@@ -270,7 +270,7 @@ export async function applyRepoSettings(args: {
   let immutableReleasesEnabled = 0;
   let rulesetsUpdated = 0;
   let rulesetsCreated = 0;
-  if (inspection.changes.settings && repoSettings.settings) {
+  if (inspection.changes.settings.length > 0 && repoSettings.settings) {
     const desired = repoSettings.settings;
     await args.adminGH.rest.repos.update({
       ...address,
@@ -318,8 +318,11 @@ function sameServerPullRequestBypass(bypassActors: RuleSet["bypass_actors"], ser
   return bypassActors.length === 1 && bypassActors[0]?.actor_id === serverAppId && bypassActors[0]?.actor_type === "Integration" && bypassActors[0]?.bypass_mode === "pull_request";
 }
 
-function sameSettings(repository: Record<string, unknown>, desired: NonNullable<RepoSettingsConfig["settings"]>): boolean {
-  return Object.entries(desired).every(([key, value]) => repository[key] === value);
+function changedSettings(repository: Record<string, unknown>, desired: NonNullable<RepoSettingsConfig["settings"]>): string[] {
+  return Object.entries(desired).filter(([key, value]) => {
+    if (!(key in repository)) throw new Rejection(`repository setting ${key} is not visible to the inspection token`);
+    return repository[key] !== value;
+  }).map(([key]) => key);
 }
 
 function sameRuleSet(existing: RuleSet, desired: RuleSetDefinition, preserveEnforcement?: RuleSet["enforcement"]): boolean {

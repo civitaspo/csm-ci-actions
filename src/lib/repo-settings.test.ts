@@ -98,8 +98,29 @@ describe("inspectRepoSettings", () => {
     ]);
     const readFetch = fakeFetch([]);
     const plan = await inspectRepoSettings({ readGH: github("read", readFetch), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "schedule" });
-    expect(plan.changes).toEqual({ settings: false, immutableReleases: false, rulesets: [] });
+    expect(plan.changes).toEqual({ settings: [], immutableReleases: false, rulesets: [] });
     expect(readFetch.calls).toEqual([]);
+  });
+
+  test("reports each drifted repository setting", async () => {
+    const fetch = fakeFetch([
+      { method: "GET", path: "/repos/owner/client", body: { ...repository, allow_auto_merge: false } },
+      { method: "GET", path: "/repos/owner/client/rulesets", body: [] },
+      { method: "GET", path: "/repos/owner/client/immutable-releases", body: { enabled: true } },
+    ]);
+    const plan = await inspectRepoSettings({ readGH: github("read", fakeFetch([])), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "schedule" });
+    expect(plan.changes.settings).toEqual(["allow_auto_merge"]);
+  });
+
+  test("rejects a repository setting hidden from the token", async () => {
+    const { allow_auto_merge: _hidden, ...hidden } = repository;
+    const fetch = fakeFetch([
+      { method: "GET", path: "/repos/owner/client", body: hidden },
+      { method: "GET", path: "/repos/owner/client/rulesets", body: [] },
+      { method: "GET", path: "/repos/owner/client/immutable-releases", body: { enabled: true } },
+    ]);
+    await expect(inspectRepoSettings({ readGH: github("read", fakeFetch([])), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "schedule" }))
+      .rejects.toThrow("repository setting allow_auto_merge is not visible to the inspection token");
   });
 
   test("rejects a ruleset whose bypass actors are hidden from the token", async () => {
