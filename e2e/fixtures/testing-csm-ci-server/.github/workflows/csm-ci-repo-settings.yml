@@ -29,6 +29,7 @@ permissions: {}
 jobs:
   dispatch:
     if: inputs.event-mode == 'dispatch'
+    # jactionlint ignore=unpinned-uses,secrets-inherit
     uses: civitaspo/csm-ci-actions/.github/workflows/server-repo-settings.yml@e2e
     with:
       repository: ${{ inputs.repository }}
@@ -38,6 +39,7 @@ jobs:
       contents: read
   schedule:
     if: inputs.event-mode == 'schedule'
+    # jactionlint ignore=unpinned-uses,secrets-inherit
     uses: civitaspo/csm-ci-actions/.github/workflows/server-repo-settings-target.yml@e2e
     with:
       repository: ${{ inputs.repository }}
