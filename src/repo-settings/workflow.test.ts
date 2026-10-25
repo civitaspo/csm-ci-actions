@@ -28,7 +28,9 @@ describe("repo-settings reusable workflows", () => {
     expect(clients.needs).toBe("discover");
     const server = record(jobs.server);
     expect(server.needs).toEqual(["discover", "clients"]);
-    expect(server.if).toContain("needs.clients.result == 'success' || needs.clients.result == 'skipped'");
+    // A failing client must not stall the server's own drift repair; the server still runs last.
+    expect(server.if).toContain("needs.clients.result != 'cancelled'");
+    expect(server.if).not.toContain("needs.clients.result == 'success'");
     expect(server.if).toContain("needs.discover.outputs.has-server == 'true'");
   });
 
@@ -66,6 +68,8 @@ describe("repo-settings reusable workflows", () => {
     const inspect = record(steps.find((step) => step.id === "inspect")?.with);
     expect(inspect["admin-token"]).toBe("${{ steps.admin-token.outputs.token }}");
     expect(inspect).not.toHaveProperty("read-token");
+    // Settings apply before managed files, so a rejected managed branch cannot block them.
+    expect(steps.findIndex((step) => step.name === "Apply repository settings")).toBeLessThan(names.indexOf("managed-inspect"));
     const apply = steps.find((step) => step.name === "Apply repository settings");
     expect(record(apply?.with)["approver-app-slug"]).toBe("${{ steps.approver-token.outputs.app-slug }}");
   });

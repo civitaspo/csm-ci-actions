@@ -821,7 +821,7 @@ Final local smoke at the same commit passed 5/5 with no skips: [server check](ht
 
 Phase 6 uses one global `repo_settings` block, the four fixed S6 rulesets, and a separate managed-file PR operation. A per-target reconciler owns observation and application, avoiding a general serialized plan/executor layer. The settings schema allows only merge-related booleans, with the merge methods fixed to squash only. Managed files are a map of safe literal paths to text, supplied by the trusted server configuration. A fixed template catalog was rejected because the specification does not prescribe one. Repository entries have no policy overrides.
 
-Tokens come only from the official action. Discovery uses a metadata-only installation token for the server's owner. Each target gets a contents and pull-requests read token for the activation preflight and managed-file inspection, an `administration: write` token for reading and changing settings, rulesets and immutable releases, and a contents and pull-requests write token for managed files, with workflows write added only for workflow paths or the branch reset. The server job runs only after every client job succeeded or the client wave was empty.
+Tokens come only from the official action. Discovery uses a metadata-only installation token for the server's owner. Each target gets a contents and pull-requests read token for the activation preflight and managed-file inspection, an `administration: write` token for reading and changing settings, rulesets and immutable releases, and a contents and pull-requests write token for managed files, with workflows write added only for workflow paths or the branch reset. The server job runs last, after the client wave finishes; a final review showed that requiring every client to succeed let one repository writer stall the server's repair by poisoning `csm-ci/repo-settings`, so it now runs unless the wave was cancelled, and each target applies settings before managed files.
 
 The S4 history proof moved from securefix into `src/lib/server-owned-history.ts` and is shared by the securefix route and managed files. It now paginates the comparison, requires a merge base, and checks that the single-parent chain links the merge base to the branch head.
 
@@ -849,6 +849,7 @@ The S4 history proof moved from securefix into `src/lib/server-owned-history.ts`
 
 - Changing the content of an existing `csm-ci/repo-settings` branch resets it with a Git lease. Only creation and exact repetition ran live, because force-pushes in the testing repositories are not authorized. Unit and local Git tests cover the reset.
 - Whether GitHub requires workflows write for that reset is unknown. The workflow mints it for every reset to fail safe.
+- After that reset, GitHub may update an open managed PR's head asynchronously, or close the PR. The PR step then rejects with "managed files pull request head does not match the branch head" and the next run should recover. Watch the first changed-content update.
 - The e2e fixture calls the per-target workflow with the schedule mode. The cron trigger and the outer workflow's discovery of every installed repository were not exercised.
 - Activating `controlled-merges` on the server, which depends on the approver installation above.
 

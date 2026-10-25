@@ -80,7 +80,7 @@ jobs:
     if: >-
       always() && needs.discover.result == 'success' &&
       needs.discover.outputs.has-server == 'true' &&
-      (needs.clients.result == 'success' || needs.clients.result == 'skipped')
+      needs.clients.result != 'cancelled'
     # The called job needs the Server App credentials from the csm-ci environment.
     # jactionlint ignore=secrets-inherit
     uses: ./.github/workflows/server-repo-settings-target.yml

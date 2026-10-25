@@ -381,4 +381,72 @@ describe("inspectManagedFiles", () => {
     expect(result.targetSha).toBeNull();
     expect(result.requiresPullRequestUpdate).toBe(false);
   });
+
+  const pullBody = "Update files managed by csm-ci.\n\n<!-- csm-ci:repo-settings:managed-files -->";
+  const outdatedPulls: [string, { title: string; body: string | null }][] = [
+    ["title", { title: "Old title", body: pullBody }],
+    ["body", { title: "Sync managed files", body: "Old body" }],
+    ["missing body", { title: "Sync managed files", body: null }],
+  ];
+
+  test.each(outdatedPulls)("requests a pull request update when the existing pull request has an outdated %s", async (_name, drift) => {
+    const pulls = [{ number: 73, ...drift, base: { ref: "main" }, head: { sha: targetSha } }];
+    const result = await inspectManagedFiles(githubFixture({ pulls }), input);
+    expect(result.status).toBe("ready");
+    expect(result.branchNeedsWrite).toBe(false);
+    expect(result.requiresPullRequestUpdate).toBe(true);
+    expect(result.pullRequest).toBe(73);
+  });
+
+  test.each(outdatedPulls)("apply rewrites the title and body of a pull request with an outdated %s", async (_name, drift) => {
+    const pulls = [{ number: 73, ...drift, base: { ref: "main" }, head: { sha: targetSha } }];
+    const updates: unknown[] = [];
+    const writeClient = {
+      rest: {
+        git: { getRef: async ({ ref }: { ref: string }) => ({ data: { object: { sha: ref === "heads/main" ? defaultSha : targetSha } } }) },
+        pulls: { list: async () => ({ data: pulls }), update: async (args: unknown) => { updates.push(args); return { data: { number: 73 } }; } },
+      },
+      paginate: async () => pulls,
+    } as unknown as GitHub;
+    const result = await applyManagedFiles(githubFixture({ pulls }), { ...input, writeToken: "unused", writeClient });
+    expect(result).toEqual({ status: "applied", commit: targetSha, pullRequest: 73 });
+    expect(updates).toEqual([{ owner: "owner", repo: "repo", pull_number: 73, title: "Sync managed files", body: pullBody }]);
+  });
+
+  const commitCases: [string, { targetMissing: true } | { targetContent: string }][] = [
+    ["create path", { targetMissing: true }],
+    ["reset path", { targetContent: "stale\n" }],
+  ];
+  test.each(commitCases)("the managed branch commit is pinned to the observed default SHA on the %s", async (_name, options) => {
+    const read = githubFixture(options);
+    const mutations: { query: string; variables: { input: Record<string, unknown> } }[] = [];
+    let branchSha = defaultSha;
+    const writeClient = {
+      rest: {
+        git: {
+          getRef: async ({ ref }: { ref: string }) => ({ data: { object: { sha: ref === "heads/main" ? defaultSha : branchSha } } }),
+          createRef: async () => ({ data: {} }),
+        },
+        pulls: { list: async () => ({ data: [] }), create: async () => ({ data: { number: 75 } }) },
+      },
+      paginate: async () => [],
+      graphql: async (query: string, variables: { input: Record<string, unknown> }) => {
+        mutations.push({ query, variables });
+        branchSha = targetSha;
+        return { createCommitOnBranch: { commit: { oid: targetSha } } };
+      },
+    } as unknown as GitHub;
+    const reset = spyOn(gitRef, "resetBranchWithLease").mockImplementation(async () => undefined);
+    try {
+      await applyManagedFiles(read, { ...input, writeToken: "unused", writeClient });
+    } finally {
+      reset.mockRestore();
+    }
+    expect(mutations).toHaveLength(1);
+    expect(mutations[0]?.variables.input).toMatchObject({
+      branch: { repositoryNameWithOwner: "owner/repo", branchName: "csm-ci/repo-settings" },
+      expectedHeadOid: defaultSha,
+    });
+    expect(mutations[0]?.variables.input.expectedHeadOid).not.toBe(targetSha);
+  });
 });

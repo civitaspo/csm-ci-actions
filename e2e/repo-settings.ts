@@ -198,7 +198,7 @@ async function cleanupManagedState(ctx: Ctx, observedHead: string | undefined, p
   assert(pull, `ref ${BRANCH} in ${repository} has no matching managed pull request; refusing cleanup`);
   const address = splitRepository(repository);
   const currentHead = await managedBranchHead(ctx.gh, repository);
-    assert(currentHead === observedHead, `ref ${BRANCH} moved in ${repository}; refusing cleanup`);
+  assert(currentHead === observedHead, `ref ${BRANCH} moved in ${repository}; refusing cleanup`);
   if (pull) {
     const { data } = await ctx.gh.rest.pulls.get({ ...address, pull_number: pull.number });
     if (data.state === "open" && data.head.ref === BRANCH && data.head.sha === observedHead && data.body?.includes(MANAGED_MARKER)) {

@@ -31,7 +31,7 @@ GitHub requests have a timeout and bounded retries for reads. See [GitHub API re
 | `csm-ci-server` | the server and every client repository | Contents, Pull requests, Issues, Checks, Workflows, Administration and Attestations: write. Actions: read | the server repository, environment `csm-ci` (main only) |
 | `csm-ci-approver` | every client repository, and the server repository where repo-settings activates `controlled-merges` | Pull requests: write. Contents: write, because an App approval counts toward required approvals only with it | the server repository, environment `csm-ci` |
 
-Each server job mints a token for one repository with only the permissions that job needs. Administration is minted only by the repo-settings job.
+Each server job mints a token for one repository with only the permissions that job needs, except repo-settings discovery, which lists the installation with metadata read. Administration is minted only by the repo-settings job.
 
 ## Known compromises
 
