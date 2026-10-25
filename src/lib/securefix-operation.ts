@@ -3,6 +3,7 @@ import { type GitHub, splitRepository } from "./github.ts";
 import { MAX_SECUREFIX_FILE_SIZE, MAX_SECUREFIX_TOTAL_SIZE, SECUREFIX_ARTIFACT, bindSecurefixPullRequest, findSecurefixRoute, readSecurefixArtifact, validateRouteChanges, validateSecurefixRouteCommitFile, validateSecurefixRouteHead, validateSecurefixRun, type SecurefixChange, type SecurefixManifest, type SecurefixRun, SecurefixRunSchema } from "./securefix.ts";
 import { Rejection } from "./request.ts";
 import { GitRefChanged, resetBranchWithLease } from "./git-ref.ts";
+import { isServerMadeCommit as verifyServerMadeCommit, loadServerOwnedHistory } from "./server-owned-history.ts";
 
 type Artifact = { id: number; name: string; expired: boolean; size_in_bytes: number };
 type Repo = { id: number | bigint; default_branch: string };
@@ -253,14 +254,7 @@ async function contentMatches(gh: GitHub, context: Context, ref: string, changes
 }
 
 async function isServerMadeCommit(gh: GitHub, context: Context, sha: string, serverBotId: number): Promise<boolean> {
-  const { data: commit } = await gh.rest.repos.getCommit({ owner: context.owner, repo: context.repo, ref: sha });
-  if (commit.committer?.login !== "web-flow" || commit.author?.id !== serverBotId || commit.commit.verification?.verified !== true) return false;
-  const data = await gh.graphql<{ repository: { commit: { signature: { isValid: boolean; wasSignedByGitHub: boolean } | null } | null } }>(
-    "query($owner: String!, $repo: String!, $sha: GitObjectID!) { repository(owner: $owner, name: $repo) { commit: object(oid: $sha) { ... on Commit { signature { isValid wasSignedByGitHub } } } } }",
-    { owner: context.owner, repo: context.repo, sha },
-  );
-  const facts = data.repository.commit;
-  return facts?.signature?.isValid === true && facts.signature.wasSignedByGitHub === true;
+  return verifyServerMadeCommit(gh, { owner: context.owner, repo: context.repo, sha, serverBotId });
 }
 
 async function validateRouteBranch(gh: GitHub, config: Config, context: Context): Promise<string | null> {
@@ -274,15 +268,22 @@ async function validateRouteBranch(gh: GitHub, config: Config, context: Context)
     throw error;
   }
   if (targetSha === context.run.head_sha) return targetSha;
-  const comparison = await gh.rest.repos.compareCommitsWithBasehead({ owner: context.owner, repo: context.repo, basehead: `${context.run.head_sha}...${targetSha}`, per_page: 100 });
-  if (comparison.data.ahead_by > comparison.data.commits.length) throw new Rejection("securefix route target branch commit list is incomplete");
-  for (const commit of comparison.data.commits) {
-    if (!await isServerMadeCommit(gh, context, commit.sha, config.apps.server_bot_id)) throw new Rejection("securefix route target branch contains a commit not made by the server");
-    const { data } = await gh.rest.repos.getCommit({ owner: context.owner, repo: context.repo, ref: commit.sha });
-    if (data.files === undefined || data.files.length >= 300) throw new Rejection("securefix route target branch change list is incomplete");
-    if (data.parents.length !== 1) throw new Rejection("securefix route target branch contains a merge or root commit");
-    for (const file of data.files) {
-      const beforeSha = data.parents[0]?.sha;
+  const history = await loadServerOwnedHistory(gh, {
+    owner: context.owner,
+    repo: context.repo,
+    baseSha: context.run.head_sha,
+    headSha: targetSha,
+    serverBotId: config.apps.server_bot_id,
+    messages: {
+      incomplete: "securefix route target branch commit list is incomplete",
+      untrusted: "securefix route target branch contains a commit not made by the server",
+      changesIncomplete: "securefix route target branch change list is incomplete",
+      nonLinear: "securefix route target branch contains a merge or root commit",
+    },
+  });
+  for (const commit of history) {
+    for (const file of commit.files) {
+      const beforeSha = commit.parentSha;
       if (!beforeSha) throw new Rejection("securefix route target branch contains a root commit");
       const before = await readRepositoryFile(gh, context, file.filename, beforeSha);
       const after = file.status === "removed" ? null : await readRepositoryFile(gh, context, file.filename, commit.sha);

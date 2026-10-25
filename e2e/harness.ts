@@ -92,7 +92,7 @@ export async function syncFixtures(gh: GitHub): Promise<void> {
 
 export async function dispatch(ctx: Ctx, repository: string, workflow: string, inputs: Record<string, string> = {}): Promise<Run> {
   const since = new Date(Date.now() - 2_000);
-  const correlatedWorkflow = workflow === "csm-ci-smoke.yml" || workflow === "csm-ci-release-verify.yml" || workflow === "csm-ci-release-pr.yml";
+  const correlatedWorkflow = workflow === "csm-ci-smoke.yml" || workflow === "csm-ci-release-verify.yml" || workflow === "csm-ci-release-pr.yml" || workflow === "csm-ci-repo-settings.yml";
   const correlation = correlatedWorkflow ? randomUUID() : undefined;
   const dispatchInputs = correlation ? { ...inputs, correlation } : inputs;
   await until(`dispatch of ${workflow}`, async () => {
@@ -259,12 +259,12 @@ export async function withServerConfig<T>(ctx: Ctx, edit: (text: string) => stri
   parseConfig(changed);
   if (changed === original.text) return run();
   try {
-    await write(original.sha, changed, "Temporarily configure release e2e");
+    await write(original.sha, changed, "Temporarily configure e2e server fixture");
     return await run();
   } finally {
     const latest = await read();
-    if (latest.text === changed) await write(latest.sha, original.text, "Restore release e2e server fixture");
-    else if (latest.text !== original.text) throw new Error("server fixture changed unexpectedly during release e2e; refusing to overwrite it");
+    if (latest.text === changed) await write(latest.sha, original.text, "Restore e2e server fixture");
+    else if (latest.text !== original.text) throw new Error("server fixture changed unexpectedly during e2e; refusing to overwrite it");
   }
 }
 

@@ -59,6 +59,46 @@ const SecurefixSchema = z.strictObject({
 });
 export type SecurefixConfig = z.infer<typeof SecurefixSchema>;
 
+const RepoSettings = z.strictObject({
+  settings: z.strictObject({
+    delete_branch_on_merge: z.boolean().optional(),
+    allow_auto_merge: z.boolean().optional(),
+    allow_squash_merge: z.literal(true).optional(),
+    allow_merge_commit: z.literal(false).optional(),
+    allow_rebase_merge: z.literal(false).optional(),
+  }).optional(),
+  managed_files: z.record(z.string(), z.string()).default({}),
+}).superRefine((value, ctx) => {
+  const paths = Object.keys(value.managed_files);
+  if (paths.length > 512) ctx.addIssue({ code: "custom", path: ["managed_files"], message: "must contain at most 512 files" });
+  let totalBytes = 0;
+  for (const path of paths) {
+    const content = value.managed_files[path] ?? "";
+    const bytes = new TextEncoder().encode(content).byteLength;
+    totalBytes += bytes;
+    if (!isSafeManagedFilePath(path)) {
+      ctx.addIssue({ code: "custom", path: ["managed_files", path], message: "must be a safe literal relative file path" });
+    }
+    if (bytes > 8 * 1024 * 1024) {
+      ctx.addIssue({ code: "custom", path: ["managed_files", path], message: "file must be at most 8 MiB" });
+    }
+  }
+  if (totalBytes > 10 * 1024 * 1024) {
+    ctx.addIssue({ code: "custom", path: ["managed_files"], message: "total file content must be at most 10 MiB" });
+  }
+  for (const path of paths) {
+    if (paths.some((other) => other !== path && other.startsWith(`${path}/`))) {
+      ctx.addIssue({ code: "custom", path: ["managed_files", path], message: "file paths must not contain a file as a directory prefix" });
+    }
+  }
+});
+export type RepoSettingsConfig = z.infer<typeof RepoSettings>;
+
+function isSafeManagedFilePath(path: string): boolean {
+  return !/^[A-Za-z]:/u.test(path) && !path.includes("\\") && !/[\u0000-\u001f\u007f]/u.test(path) &&
+    !/[?*\[\]{}!()]/u.test(path) && path.split("/").every((segment) => segment !== "" && segment !== "." && segment !== ".." && segment.toLowerCase() !== ".git");
+}
+
 const RepositoryEntry = z.strictObject({
   name: z.string().min(1).transform((s) => s.toLowerCase()),
   ops: z.array(z.enum(OPS)).refine((ops) => new Set(ops).size === ops.length, "duplicate op"),
@@ -82,6 +122,7 @@ export const ConfigSchema = z
     }),
     policies: z.array(PolicySchema),
     securefix: SecurefixSchema.optional(),
+    repo_settings: RepoSettings.optional(),
     repositories: z.array(RepositoryEntry).min(1),
   })
   .superRefine((c, ctx) => {

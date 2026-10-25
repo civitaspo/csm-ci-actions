@@ -1,0 +1,67 @@
+name: csm-ci repository settings
+description: Discover configured repositories and reconcile settings, rulesets, and managed files.
+inputs:
+  mode:
+    description: validate-target, discover, preflight, inspect, apply, managed-inspect, or managed-apply.
+    required: true
+  github-token:
+    description: GITHUB_TOKEN with contents:read on the server repository to read the pinned config.
+    default: ${{ github.token }}
+  discovery-token:
+    description: Server App token used only to list repositories in its installation.
+  read-token:
+    description: Target-scoped Server App token with contents and pull_requests read.
+  admin-token:
+    description: Target-scoped Server App token with administration:write. Inspection reads rulesets with it because GitHub hides bypass actors from read-only callers.
+  contents-token:
+    description: Target-scoped Server App token with contents:write and pull_requests:write.
+  config-path:
+    description: Path of csm-ci.yaml in the server repository.
+    default: csm-ci.yaml
+  repository:
+    description: owner/repo of one target repository.
+  requested-repository:
+    description: Optional owner/repo selection for discovery.
+  event-mode:
+    description: schedule or dispatch, derived by the trusted caller workflow.
+  actions-repository:
+    description: owner/repo where the reusable caller workflows are distributed.
+    required: true
+  approver-app-slug:
+    description: App slug returned by the official create-github-app-token action.
+outputs:
+  clients:
+    description: JSON array of selected client repository targets.
+  client-count:
+    description: Number of selected client repository targets.
+  has-clients:
+    description: true when at least one client repository was selected.
+  has-server:
+    description: true when the selected target set includes the server repository.
+  server:
+    description: JSON target for the server repository, always processed last.
+  caller-distributed:
+    description: Whether a valid reusable caller is present on the default branch.
+  auto-merge-queue-count:
+    description: Count of open pull requests with auto-merge enabled.
+  changes:
+    description: JSON summary of repository settings and ruleset drift.
+  activation-required:
+    description: true when a dispatch would create controlled-merges or make it active, which requires the preflight.
+  has-changes:
+    description: Whether this target needs settings or managed-file changes.
+  requires-workflows-write:
+    description: true when managed files include workflow paths or the managed branch is reset, which require workflows:write.
+  changed-paths:
+    description: JSON list of managed file paths that differ.
+  target-owner:
+    description: Validated owner of the target repository.
+  target-name:
+    description: Validated name of the target repository.
+  is-server:
+    description: true when the target is the server repository.
+  result:
+    description: JSON result for an apply operation, or the managed-file inspection state.
+runs:
+  using: node24
+  main: ../../dist/repo-settings.js

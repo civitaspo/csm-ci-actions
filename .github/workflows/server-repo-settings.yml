@@ -1,0 +1,93 @@
+name: csm-ci repository settings
+
+# Called by the server repository's schedule or workflow_dispatch caller. The
+# event mode comes from the caller's event. The target workflow takes the mode
+# as an input and trusts its caller, a workflow on the server's default branch.
+on:
+  workflow_call:
+    inputs:
+      config-path:
+        description: Path of csm-ci.yaml in the server repository.
+        type: string
+        default: csm-ci.yaml
+      repository:
+        description: Optional configured repository to reconcile.
+        type: string
+        default: ''
+
+permissions: {}
+
+jobs:
+  discover:
+    if: contains(fromJSON('["schedule", "workflow_dispatch"]'), github.event_name)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: csm-ci
+    permissions:
+      contents: read
+    outputs:
+      clients: ${{ steps.discover.outputs.clients }}
+      has-clients: ${{ steps.discover.outputs.has-clients }}
+      server: ${{ steps.discover.outputs.server }}
+      has-server: ${{ steps.discover.outputs.has-server }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .csm-ci-actions
+          persist-credentials: false
+      - id: discovery-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          # Discovery lists installation repositories and reads only metadata.
+          # jactionlint ignore=github-app
+          owner: ${{ github.repository_owner }}
+          permission-metadata: read
+      - id: discover
+        uses: ./.csm-ci-actions/actions/repo-settings
+        with:
+          mode: discover
+          github-token: ${{ github.token }}
+          config-path: ${{ inputs.config-path }}
+          actions-repository: ${{ job.workflow_repository }}
+          discovery-token: ${{ steps.discovery-token.outputs.token }}
+          requested-repository: ${{ inputs.repository }}
+
+  clients:
+    needs: discover
+    if: needs.discover.result == 'success' && needs.discover.outputs.has-clients == 'true'
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        target: ${{ fromJSON(needs.discover.outputs.clients) }}
+    # The called job needs the Server App credentials from the csm-ci environment.
+    # jactionlint ignore=secrets-inherit
+    uses: ./.github/workflows/server-repo-settings-target.yml
+    permissions:
+      contents: read
+    with:
+      repository: ${{ matrix.target.name }}
+      event-mode: ${{ github.event_name == 'schedule' && 'schedule' || 'dispatch' }}
+      config-path: ${{ inputs.config-path }}
+    secrets: inherit
+
+  server:
+    needs: [discover, clients]
+    if: >-
+      always() && needs.discover.result == 'success' &&
+      needs.discover.outputs.has-server == 'true' &&
+      (needs.clients.result == 'success' || needs.clients.result == 'skipped')
+    # The called job needs the Server App credentials from the csm-ci environment.
+    # jactionlint ignore=secrets-inherit
+    uses: ./.github/workflows/server-repo-settings-target.yml
+    permissions:
+      contents: read
+    with:
+      repository: ${{ fromJSON(needs.discover.outputs.server).name }}
+      event-mode: ${{ github.event_name == 'schedule' && 'schedule' || 'dispatch' }}
+      config-path: ${{ inputs.config-path }}
+    secrets: inherit

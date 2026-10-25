@@ -36614,6 +36614,43 @@ var SecurefixSchema = strictObject({
   allow_workflow_changes: boolean2(),
   routes: array(SecurefixRoute).refine((routes) => new Set(routes.map((route) => route.name)).size === routes.length, "duplicate route name")
 });
+var RepoSettings = strictObject({
+  settings: strictObject({
+    delete_branch_on_merge: boolean2().optional(),
+    allow_auto_merge: boolean2().optional(),
+    allow_squash_merge: literal(true).optional(),
+    allow_merge_commit: literal(false).optional(),
+    allow_rebase_merge: literal(false).optional()
+  }).optional(),
+  managed_files: record(string2(), string2()).default({})
+}).superRefine((value, ctx) => {
+  const paths = Object.keys(value.managed_files);
+  if (paths.length > 512)
+    ctx.addIssue({ code: "custom", path: ["managed_files"], message: "must contain at most 512 files" });
+  let totalBytes = 0;
+  for (const path of paths) {
+    const content = value.managed_files[path] ?? "";
+    const bytes = new TextEncoder().encode(content).byteLength;
+    totalBytes += bytes;
+    if (!isSafeManagedFilePath(path)) {
+      ctx.addIssue({ code: "custom", path: ["managed_files", path], message: "must be a safe literal relative file path" });
+    }
+    if (bytes > 8 * 1024 * 1024) {
+      ctx.addIssue({ code: "custom", path: ["managed_files", path], message: "file must be at most 8 MiB" });
+    }
+  }
+  if (totalBytes > 10 * 1024 * 1024) {
+    ctx.addIssue({ code: "custom", path: ["managed_files"], message: "total file content must be at most 10 MiB" });
+  }
+  for (const path of paths) {
+    if (paths.some((other) => other !== path && other.startsWith(`${path}/`))) {
+      ctx.addIssue({ code: "custom", path: ["managed_files", path], message: "file paths must not contain a file as a directory prefix" });
+    }
+  }
+});
+function isSafeManagedFilePath(path) {
+  return !/^[A-Za-z]:/u.test(path) && !path.includes("\\") && !/[\u0000-\u001f\u007f]/u.test(path) && !/[?*\[\]{}!()]/u.test(path) && path.split("/").every((segment) => segment !== "" && segment !== "." && segment !== ".." && segment.toLowerCase() !== ".git");
+}
 var RepositoryEntry = strictObject({
   name: string2().min(1).transform((s) => s.toLowerCase()),
   ops: array(_enum(OPS)).refine((ops) => new Set(ops).size === ops.length, "duplicate op"),
@@ -36635,6 +36672,7 @@ var ConfigSchema = strictObject({
   }),
   policies: array(PolicySchema),
   securefix: SecurefixSchema.optional(),
+  repo_settings: RepoSettings.optional(),
   repositories: array(RepositoryEntry).min(1)
 }).superRefine((c, ctx) => {
   for (const list of ["committers", "approvers", "mergers", "bot_mergers"]) {
@@ -37098,6 +37136,56 @@ esac
   }
 }
 
+// src/lib/server-owned-history.ts
+async function isServerMadeCommit(gh, input) {
+  const { data: commit } = await gh.rest.repos.getCommit({ owner: input.owner, repo: input.repo, ref: input.sha });
+  if (commit.committer?.login !== "web-flow" || Number(commit.author?.id) !== input.serverBotId || commit.commit.verification?.verified !== true)
+    return false;
+  const data = await gh.graphql("query($owner: String!, $repo: String!, $sha: GitObjectID!) { repository(owner: $owner, name: $repo) { commit: object(oid: $sha) { ... on Commit { signature { isValid wasSignedByGitHub } } } } }", { owner: input.owner, repo: input.repo, sha: input.sha });
+  const signature = data.repository.commit?.signature;
+  return signature?.isValid === true && signature.wasSignedByGitHub === true;
+}
+async function loadServerOwnedHistory(gh, input) {
+  const comparisonInput = {
+    owner: input.owner,
+    repo: input.repo,
+    basehead: `${input.baseSha}...${input.headSha}`,
+    per_page: 100
+  };
+  const comparison = await gh.rest.repos.compareCommitsWithBasehead(comparisonInput);
+  const comparedCommits = [...comparison.data.commits];
+  const seen = new Set(comparedCommits.map(({ sha }) => sha));
+  for (let page = 2;comparedCommits.length < comparison.data.ahead_by; page++) {
+    const next = await gh.rest.repos.compareCommitsWithBasehead({ ...comparisonInput, page });
+    if (next.data.commits.length === 0 || next.data.commits.some(({ sha }) => seen.has(sha)))
+      throw new Rejection(input.messages.incomplete);
+    for (const commit of next.data.commits) {
+      seen.add(commit.sha);
+      comparedCommits.push(commit);
+    }
+  }
+  const result = [];
+  const mergeBaseSha = comparison.data.merge_base_commit?.sha;
+  if (!mergeBaseSha)
+    throw new Rejection(input.messages.incomplete);
+  let expectedParent = mergeBaseSha;
+  for (const compared of comparedCommits) {
+    if (!await isServerMadeCommit(gh, { owner: input.owner, repo: input.repo, sha: compared.sha, serverBotId: input.serverBotId })) {
+      throw new Rejection(input.messages.untrusted);
+    }
+    const { data: commit } = await gh.rest.repos.getCommit({ owner: input.owner, repo: input.repo, ref: compared.sha });
+    if (commit.parents.length !== 1 || commit.parents[0]?.sha !== expectedParent)
+      throw new Rejection(input.messages.nonLinear);
+    if (commit.files === undefined || commit.files.length >= 300)
+      throw new Rejection(input.messages.changesIncomplete);
+    result.push({ sha: compared.sha, parentSha: expectedParent, files: commit.files });
+    expectedParent = compared.sha;
+  }
+  if (expectedParent !== input.headSha)
+    throw new Rejection(input.messages.incomplete);
+  return result;
+}
+
 // src/lib/securefix-operation.ts
 var MAX_ARTIFACT_SIZE = MAX_SECUREFIX_TOTAL_SIZE + 1024 * 1024;
 function httpStatus(error) {
@@ -37302,7 +37390,7 @@ async function isAlreadyApplied(gh, config, context, changes) {
   const { data: commit } = await gh.rest.repos.getCommit({ owner: context.owner, repo: context.repo, ref: head });
   if (commit.parents.length !== 1 || commit.parents[0]?.sha !== context.run.head_sha)
     return false;
-  if (!await isServerMadeCommit(gh, context, head, config.apps.server_bot_id))
+  if (!await isServerMadeCommit2(gh, context, head, config.apps.server_bot_id))
     return false;
   if (!await exactChangedPaths(gh, context, commit.parents[0].sha, commit.commit.tree.sha, changes))
     return false;
@@ -37345,13 +37433,8 @@ async function contentMatches(gh, context, ref, changes) {
   }));
   return results.every(Boolean);
 }
-async function isServerMadeCommit(gh, context, sha, serverBotId) {
-  const { data: commit } = await gh.rest.repos.getCommit({ owner: context.owner, repo: context.repo, ref: sha });
-  if (commit.committer?.login !== "web-flow" || commit.author?.id !== serverBotId || commit.commit.verification?.verified !== true)
-    return false;
-  const data = await gh.graphql("query($owner: String!, $repo: String!, $sha: GitObjectID!) { repository(owner: $owner, name: $repo) { commit: object(oid: $sha) { ... on Commit { signature { isValid wasSignedByGitHub } } } } }", { owner: context.owner, repo: context.repo, sha });
-  const facts = data.repository.commit;
-  return facts?.signature?.isValid === true && facts.signature.wasSignedByGitHub === true;
+async function isServerMadeCommit2(gh, context, sha, serverBotId) {
+  return isServerMadeCommit(gh, { owner: context.owner, repo: context.repo, sha, serverBotId });
 }
 async function validateRouteBranch(gh, config, context) {
   const route = context.route;
@@ -37367,19 +37450,22 @@ async function validateRouteBranch(gh, config, context) {
   }
   if (targetSha === context.run.head_sha)
     return targetSha;
-  const comparison = await gh.rest.repos.compareCommitsWithBasehead({ owner: context.owner, repo: context.repo, basehead: `${context.run.head_sha}...${targetSha}`, per_page: 100 });
-  if (comparison.data.ahead_by > comparison.data.commits.length)
-    throw new Rejection("securefix route target branch commit list is incomplete");
-  for (const commit of comparison.data.commits) {
-    if (!await isServerMadeCommit(gh, context, commit.sha, config.apps.server_bot_id))
-      throw new Rejection("securefix route target branch contains a commit not made by the server");
-    const { data } = await gh.rest.repos.getCommit({ owner: context.owner, repo: context.repo, ref: commit.sha });
-    if (data.files === undefined || data.files.length >= 300)
-      throw new Rejection("securefix route target branch change list is incomplete");
-    if (data.parents.length !== 1)
-      throw new Rejection("securefix route target branch contains a merge or root commit");
-    for (const file of data.files) {
-      const beforeSha = data.parents[0]?.sha;
+  const history = await loadServerOwnedHistory(gh, {
+    owner: context.owner,
+    repo: context.repo,
+    baseSha: context.run.head_sha,
+    headSha: targetSha,
+    serverBotId: config.apps.server_bot_id,
+    messages: {
+      incomplete: "securefix route target branch commit list is incomplete",
+      untrusted: "securefix route target branch contains a commit not made by the server",
+      changesIncomplete: "securefix route target branch change list is incomplete",
+      nonLinear: "securefix route target branch contains a merge or root commit"
+    }
+  });
+  for (const commit of history) {
+    for (const file of commit.files) {
+      const beforeSha = commit.parentSha;
       if (!beforeSha)
         throw new Rejection("securefix route target branch contains a root commit");
       const before = await readRepositoryFile(gh, context, file.filename, beforeSha);

@@ -1,0 +1,159 @@
+name: csm-ci repository settings target
+
+on:
+  workflow_call:
+    inputs:
+      repository:
+        description: Validated owner/repo target selected by the server workflow.
+        type: string
+        required: true
+      event-mode:
+        description: schedule or dispatch, derived by the trusted server workflow.
+        type: string
+        required: true
+      config-path:
+        description: Path of csm-ci.yaml in the server repository.
+        type: string
+        default: csm-ci.yaml
+
+permissions: {}
+
+concurrency:
+  group: csm-ci-repo-settings-${{ inputs.repository }}
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: csm-ci
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .csm-ci-actions
+          persist-credentials: false
+      - id: target
+        uses: ./.csm-ci-actions/actions/repo-settings
+        with:
+          mode: validate-target
+          github-token: ${{ github.token }}
+          config-path: ${{ inputs.config-path }}
+          repository: ${{ inputs.repository }}
+          actions-repository: ${{ job.workflow_repository }}
+      - id: read-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ steps.target.outputs.target-owner }}
+          repositories: ${{ steps.target.outputs.target-name }}
+          permission-contents: read
+          permission-pull-requests: read
+      # GitHub returns ruleset bypass actors only to callers with write access
+      # to the ruleset, so inspection already needs this token. Writes stay in
+      # the apply stage, which reruns the activation preflight first.
+      - id: admin-token
+        name: Mint administration write token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ steps.target.outputs.target-owner }}
+          repositories: ${{ steps.target.outputs.target-name }}
+          permission-administration: write
+      - id: inspect
+        uses: ./.csm-ci-actions/actions/repo-settings
+        with:
+          mode: inspect
+          github-token: ${{ github.token }}
+          config-path: ${{ inputs.config-path }}
+          repository: ${{ inputs.repository }}
+          event-mode: ${{ inputs.event-mode }}
+          admin-token: ${{ steps.admin-token.outputs.token }}
+          actions-repository: ${{ job.workflow_repository }}
+      - id: preflight
+        if: inputs.event-mode == 'dispatch' && steps.inspect.outputs.activation-required == 'true'
+        uses: ./.csm-ci-actions/actions/repo-settings
+        with:
+          mode: preflight
+          github-token: ${{ github.token }}
+          config-path: ${{ inputs.config-path }}
+          repository: ${{ inputs.repository }}
+          actions-repository: ${{ job.workflow_repository }}
+          read-token: ${{ steps.read-token.outputs.token }}
+      # Successful token issuance proves contents:write capability. This is
+      # delayed until the caller and auto-merge queue checks passed.
+      - id: approver-token
+        name: Mint approver contents token
+        if: >-
+          inputs.event-mode == 'dispatch' &&
+          steps.inspect.outputs.activation-required == 'true' &&
+          steps.preflight.outputs.caller-distributed == 'true' &&
+          steps.preflight.outputs.auto-merge-queue-count == '0'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_APPROVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_APPROVER_APP_PRIVATE_KEY }}
+          owner: ${{ steps.target.outputs.target-owner }}
+          repositories: ${{ steps.target.outputs.target-name }}
+          permission-contents: write
+      - id: managed-inspect
+        uses: ./.csm-ci-actions/actions/repo-settings
+        with:
+          mode: managed-inspect
+          github-token: ${{ github.token }}
+          config-path: ${{ inputs.config-path }}
+          repository: ${{ inputs.repository }}
+          actions-repository: ${{ job.workflow_repository }}
+          read-token: ${{ steps.read-token.outputs.token }}
+      - id: contents-token
+        name: Mint managed contents token
+        if: steps.managed-inspect.outputs.has-changes == 'true' && steps.managed-inspect.outputs.requires-workflows-write != 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ steps.target.outputs.target-owner }}
+          repositories: ${{ steps.target.outputs.target-name }}
+          permission-contents: write
+          permission-pull-requests: write
+      - id: workflow-token
+        name: Mint managed workflows token
+        if: steps.managed-inspect.outputs.has-changes == 'true' && steps.managed-inspect.outputs.requires-workflows-write == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ steps.target.outputs.target-owner }}
+          repositories: ${{ steps.target.outputs.target-name }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
+      - name: Apply repository settings
+        if: steps.inspect.outputs.has-changes == 'true'
+        uses: ./.csm-ci-actions/actions/repo-settings
+        with:
+          mode: apply
+          github-token: ${{ github.token }}
+          config-path: ${{ inputs.config-path }}
+          repository: ${{ inputs.repository }}
+          event-mode: ${{ inputs.event-mode }}
+          read-token: ${{ steps.read-token.outputs.token }}
+          admin-token: ${{ steps.admin-token.outputs.token }}
+          actions-repository: ${{ job.workflow_repository }}
+          approver-app-slug: ${{ steps.approver-token.outputs.app-slug }}
+      - name: Apply managed files
+        if: steps.managed-inspect.outputs.has-changes == 'true'
+        uses: ./.csm-ci-actions/actions/repo-settings
+        with:
+          mode: managed-apply
+          github-token: ${{ github.token }}
+          config-path: ${{ inputs.config-path }}
+          repository: ${{ inputs.repository }}
+          actions-repository: ${{ job.workflow_repository }}
+          read-token: ${{ steps.read-token.outputs.token }}
+          contents-token: ${{ steps.workflow-token.outputs.token || steps.contents-token.outputs.token }}
