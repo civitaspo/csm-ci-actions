@@ -496,6 +496,9 @@ After Phase 0, phases 1, 2, 3, 4, 5a, and 6 can proceed independently in paralle
 
 ### Phase 6: repo-settings
 
+- **Target selection**
+  - Discover installed repositories under the configured owners and select only repositories matched by `repositories`. Keep the server configured and process it last.
+  - The actions repository can be a managed client when installed and configured, including when selected explicitly for `reconcile` or `managed-files-only`. Do not exclude it by its role as the source of the reusable workflows. Its fixed all-paths-sensitive policy still applies.
 - **Trigger and permissions**
   - `server-repo-settings.yml` starts on a schedule and on `workflow_dispatch(repository?, mode?)`. The reusable workflow accepts `mode: reconcile | managed-files-only`, defaulting to `reconcile`. A schedule always uses `reconcile`; reject a scheduled request for `managed-files-only` and reject unknown modes before target writes.
   - The environment is `csm-ci`.
@@ -543,6 +546,8 @@ After Phase 0, phases 1, 2, 3, 4, 5a, and 6 can proceed independently in paralle
 1. Create `csm-ci-server` and the `csm-ci-{client,server}` Apps.
 2. Replace the caller one repo at a time.
 3. When all repos are moved, archive securefix-server.
+
+Use an explicit production target list derived from the old server's policy. Exclude retired securefix-server repositories and include `csm-ci-actions` as a maintained client of `csm-ci-server`, including repository-settings reconciliation. Before activating protection on any target, verify its new callers and required checks. Release configurations must preserve the target's publishing requirements; the supported build types do not add Terraform Registry signing or publishing.
 
 ---
 
