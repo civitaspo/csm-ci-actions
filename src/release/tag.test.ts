@@ -28,14 +28,14 @@ function response(body: unknown, status = 200): Response {
 }
 
 describe("ensureReleaseTag", () => {
-  test("creates an annotated tag and verifies the resulting ref", async () => {
+  test.each([1, 2, 3, 4])("verifies an annotated tag after %i missing reads", async (missingReads) => {
     let refReads = 0;
     const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
       const method = (init?.method ?? "GET").toUpperCase();
       if (method === "GET" && url.pathname.endsWith("/git/ref/tags%2Fv1.2.3")) {
         refReads += 1;
-        return refReads === 1
+        return refReads <= missingReads
           ? response({ message: "Not Found" }, 404)
           : response({ object: { type: "tag", sha: "tag-sha" } });
       }
@@ -45,7 +45,7 @@ describe("ensureReleaseTag", () => {
       return response({ message: `Unexpected ${method} ${url.pathname}` }, 500);
     };
     await expect(ensureReleaseTag(github("token", fetch as typeof globalThis.fetch), plan)).resolves.toEqual(plan);
-    expect(refReads).toBe(2);
+    expect(refReads).toBe(missingReads + 1);
   });
 
   test("returns without writing when the verified tag already exists", async () => {
@@ -91,6 +91,26 @@ describe("ensureReleaseTag", () => {
       return response({ message: `Unexpected ${method} ${url.pathname}` }, 500);
     };
     await expect(ensureReleaseTag(github("token", fetch as typeof globalThis.fetch), plan)).rejects.toThrow("tag v1.2.3 was not created");
+    expect(refReads).toBe(5);
+  });
+
+  test.each([
+    { name: "API denial", status: 403, body: { message: "verification forbidden" }, message: "verification forbidden" },
+    { name: "foreign ref", status: 200, body: { object: { type: "commit", sha: mergeSha } }, message: "is not an annotated tag created by the Server bot" },
+  ])("does not retry a post-write $name", async ({ status, body, message }) => {
+    let refReads = 0;
+    const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (method === "GET" && url.pathname.endsWith("/git/ref/tags%2Fv1.2.3")) {
+        refReads += 1;
+        return refReads === 1 ? response({ message: "Not Found" }, 404) : response(body, status);
+      }
+      if (method === "POST" && url.pathname.endsWith("/git/tags")) return response({ sha: "tag-sha" }, 201);
+      if (method === "POST" && url.pathname.endsWith("/git/refs")) return response({ ref: "refs/tags/v1.2.3" }, 201);
+      throw new Error(`Unexpected ${method} ${url.pathname}`);
+    };
+    await expect(ensureReleaseTag(github("token", fetch as typeof globalThis.fetch), plan)).rejects.toThrow(message);
     expect(refReads).toBe(2);
   });
 
@@ -101,5 +121,6 @@ describe("ensureReleaseTag", () => {
       { method: "POST", path: "/repos/owner/repo/git/refs", status: 503, body: { message: "temporary outage" } },
     ]);
     await expect(ensureReleaseTag(github("token", fetch), plan)).rejects.toThrow("temporary outage");
+    expect(fetch.requests.map(({ method }) => method)).toEqual(["GET", "POST", "POST"]);
   });
 });

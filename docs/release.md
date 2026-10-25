@@ -32,3 +32,5 @@ jq -e 'any(.[].verificationResult.statement;
   .predicate.merge_sha == "<merge-sha>" and
   .predicate.tag == "v<version>")' verified.json
 ```
+
+After creating the protected annotated tag, verification tolerates short read-after-write visibility delays. A missing ref is read at most four times, waiting 250, 500 and 1,000 ms between reads. The same bounded verification applies to a 422 ref-creation race. Writes are not retried; unexpected API errors and tags with the wrong identity or target fail immediately.

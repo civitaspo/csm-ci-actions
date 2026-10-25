@@ -35005,6 +35005,9 @@ function splitRepository(fullName) {
   return { owner, repo };
 }
 
+// src/release/tag.ts
+import { setTimeout as delay2 } from "node:timers/promises";
+
 // src/release/semver.ts
 var IDENTIFIER = "(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)";
 var VERSION7 = new RegExp(`^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(${IDENTIFIER}(?:\\.${IDENTIFIER})*))?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$`);
@@ -35069,16 +35072,25 @@ async function ensureReleaseTag(gh, input) {
     type: "commit",
     tagger: { name: plan.serverBotLogin, email: `${plan.serverBotId}+${plan.serverBotLogin}@users.noreply.github.com` }
   });
+  const verifyCreatedTag = async () => {
+    for (let attempt = 0;attempt < 4; attempt += 1) {
+      if (attempt > 0)
+        await delay2(250 * 2 ** (attempt - 1));
+      if (await verifyReleaseTag(gh, repo, plan.tag, { id: plan.serverBotId, login: plan.serverBotLogin }, plan.mergeSha))
+        return true;
+    }
+    return false;
+  };
   try {
     await gh.rest.git.createRef({ ...repo, ref: `refs/tags/${plan.tag}`, sha: tag.data.sha });
   } catch (error) {
     if (status2(error) !== 422)
       throw error;
-    if (await verifyReleaseTag(gh, repo, plan.tag, { id: plan.serverBotId, login: plan.serverBotLogin }, plan.mergeSha))
+    if (await verifyCreatedTag())
       return plan;
     throw error;
   }
-  if (!await verifyReleaseTag(gh, repo, plan.tag, { id: plan.serverBotId, login: plan.serverBotLogin }, plan.mergeSha)) {
+  if (!await verifyCreatedTag()) {
     throw new Rejection(`tag ${plan.tag} was not created`);
   }
   return plan;

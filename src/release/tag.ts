@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { type GitHub, splitRepository } from "../lib/github.ts";
 import { Rejection } from "../lib/request.ts";
 import { type ReleasePlan, ReleasePlanSchema, verifyReleaseTag } from "./plan.ts";
@@ -14,14 +15,21 @@ export async function ensureReleaseTag(gh: GitHub, input: unknown): Promise<Rele
     type: "commit",
     tagger: { name: plan.serverBotLogin, email: `${plan.serverBotId}+${plan.serverBotLogin}@users.noreply.github.com` },
   });
+  const verifyCreatedTag = async () => {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      if (attempt > 0) await delay(250 * 2 ** (attempt - 1));
+      if (await verifyReleaseTag(gh, repo, plan.tag, { id: plan.serverBotId, login: plan.serverBotLogin }, plan.mergeSha)) return true;
+    }
+    return false;
+  };
   try {
     await gh.rest.git.createRef({ ...repo, ref: `refs/tags/${plan.tag}`, sha: tag.data.sha });
   } catch (error) {
     if (status(error) !== 422) throw error;
-    if (await verifyReleaseTag(gh, repo, plan.tag, { id: plan.serverBotId, login: plan.serverBotLogin }, plan.mergeSha)) return plan;
+    if (await verifyCreatedTag()) return plan;
     throw error;
   }
-  if (!(await verifyReleaseTag(gh, repo, plan.tag, { id: plan.serverBotId, login: plan.serverBotLogin }, plan.mergeSha))) {
+  if (!(await verifyCreatedTag())) {
     throw new Rejection(`tag ${plan.tag} was not created`);
   }
   return plan;
