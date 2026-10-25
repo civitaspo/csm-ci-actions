@@ -91,7 +91,7 @@ src/lib/        config.ts, request.ts, github.ts, trust.ts, policies/*.ts,
 src/<feature>/  approve, merge, policy-check, securefix, release, repo-settings
 actions/<feature>/action.yml → dist/<feature>.js
 actions/release-build/<build_type>/action.yml   (one composite per build system)
-.github/workflows/server.yml, server-repo-settings.yml, client-<feature>.yml
+.github/workflows/server.yml, server-repo-settings.yml (+ server-repo-settings-target.yml, one target), client-<feature>.yml
 docs/, e2e/
 ```
 
@@ -122,6 +122,10 @@ securefix:                                          # global only
         paths: { CHANGELOG.md: any, .release-version: semver,
                  Cargo.toml: version-only, Cargo.lock: version-only,
                  package.json: version-only, pyproject.toml: version-only } }
+repo_settings:                                      # global only (Phase 6)
+  settings: { delete_branch_on_merge: true, allow_auto_merge: false,
+              allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false }
+  managed_files: { .github/PULL_REQUEST_TEMPLATE.md: "<text>" }   # literal path → content
 repositories:                                       # per repo, only ops and the release build type
   - name: owner/*                                   # first match wins
     ops: [approve, merge, policy-check, securefix, release]
@@ -230,7 +234,7 @@ repositories:                                       # per repo, only ops and the
       - It needs no renewal routine.
 - **ruleset** (synced in Phase 6. In Phase 2 we apply the same one by hand.)
   - `integrity` (default branch): `deletion`, `non_fast_forward`, `required_linear_history`, `required_signatures`. No bypass.
-  - `review-and-checks`: approval 1, `dismiss_stale_reviews_on_push`, `csm-ci/policy` (integration_id is the Server App) and `required_checks`, squash only.
+  - `review-and-checks`: approval 1, `dismiss_stale_reviews_on_push`, `csm-ci/policy` (integration_id is the Server App) and `required_checks`, squash only. Branches need not be up to date, because `/merge` does not update them.
   - `controlled-merges`: the `update` rule only. The bypass is the Server App only, with `bypass_mode: pull_request` (`always` would allow direct pushes).
   - `release-tags` (`refs/tags/v*`): forbids `creation`, `update`, and `deletion`. The bypass is the Server App only.
 
@@ -482,6 +486,8 @@ After Phase 0, phases 1, 2, 3, 4, 5a, and 6 can proceed independently in paralle
   - `server-repo-settings.yml` starts on a schedule and on `workflow_dispatch(repository?)`.
   - The environment is `csm-ci`.
   - Mint the Server App token per target repo with `administration: write` only. Mint a separate token for managed files.
+  - Read the settings and rulesets with that administration token too. GitHub returns a ruleset's `bypass_actors` only to callers with write access to it (testing-csm-ci-server run 40155267064), so a read-only token cannot see the bypass. The activation preflight and the managed-file inspection use a target-scoped contents and pull-requests read token.
+  - `repo_settings.settings` accepts only the merge booleans shown in the Configuration section, with the merge methods fixed to squash only to match `review-and-checks`. `managed_files` maps safe literal paths to text, with the securefix size limits.
 - **What gets synced** (all validated with zod)
   - Repository settings
   - The 4 rulesets in S6. Upsert by name and `source_type == Repository`, and replace the whole ruleset. If more than one ruleset has the same name, raise an error.
@@ -489,15 +495,16 @@ After Phase 0, phases 1, 2, 3, 4, 5a, and 6 can proceed independently in paralle
   - Collaborators: handled only when the approver uses the PAT approach. If the Phase 1 spike lands on the App approach, they are not needed.
 - **controlled-merges**
   - A schedule run **does not create it and does not change it from `disabled → active`**. This respects the emergency stop.
-  - Enabling happens only on dispatch, after a preflight. The preflight confirms the following:
+  - A schedule run repairs an existing `controlled-merges` without sending its enforcement, so a stop set during the run is kept. A PUT without `enforcement` keeps the current value (verified on testing-csm-ci-client).
+  - Enabling happens only on dispatch, after a preflight. The preflight runs only when the dispatch would create the ruleset or make it active; an already-active one is repaired without it. The preflight confirms the following:
     - The caller has been distributed.
-    - The approver bot has write permission.
+    - The approver bot has write permission. The approver App must be installed on the target, the server included.
     - The auto-merge queue is empty.
     - The only bypass is the Server App's `pull_request`.
   - Disable it with `disabled`, not by deleting the ruleset.
   - Process the server repo last.
 - **managed files**
-  - Writes use the Server App's contents / workflows permissions.
+  - Writes use the Server App's contents / workflows permissions. `workflows` is minted only when a managed path is a workflow, or when the branch is reset, because the reset may move it across workflow changes on default.
   - Apply the S4 server-owned branch rule to the branch `csm-ci/repo-settings`, write with `createCommitOnBranch`, and create a PR.
   - A human merges it with `/merge`.
 - **e2e**
