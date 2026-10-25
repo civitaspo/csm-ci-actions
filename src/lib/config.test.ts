@@ -88,6 +88,13 @@ describe("parseConfig", () => {
     ["release build with an unknown key", releaseConfig("{ build_type: none, target: linux }"), /Unrecognized key/],
     ["js-action release rejects unknown keys", releaseConfig("{ build_type: js-action, target: linux }"), /Unrecognized key/],
     ["GoReleaser release rejects unknown keys", releaseConfig("{ build_type: goreleaser, target: linux }"), /Unrecognized key/],
+    ["Terraform provider without a name", releaseConfig("{ build_type: terraform-provider }"), /provider_name/],
+    ...["", "Upper", "a/b", "-a", "a-", "a--b", "a_1", "a\\nb", "a".repeat(65)].map((name): [string, string, RegExp] => [
+      `Terraform provider with invalid name ${JSON.stringify(name)}`,
+      releaseConfig(`{ build_type: terraform-provider, provider_name: ${JSON.stringify(name)} }`),
+      /provider_name/,
+    ]),
+    ["Terraform provider with extra build settings", releaseConfig("{ build_type: terraform-provider, provider_name: sigma, targets: [linux] }"), /Unrecognized key/],
     ["Cargo release rejects unknown keys", releaseConfig("{ build_type: cargo, targets: [x86_64-unknown-linux-gnu], target: linux }"), /Unrecognized key/],
     ["cargo with no target triples", releaseConfig("{ build_type: cargo, targets: [] }"), /Too small/],
     ["cargo with unsupported target triple", releaseConfig("{ build_type: cargo, targets: [custom-runner] }"), /Invalid option/],

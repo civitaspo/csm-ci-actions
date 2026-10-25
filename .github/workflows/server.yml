@@ -460,7 +460,7 @@ jobs:
           path: .csm-ci-actions
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        if: contains(fromJSON('["cargo", "cargo-raw", "goreleaser"]'), needs.release-plan.outputs.build-type)
+        if: contains(fromJSON('["cargo", "cargo-raw", "goreleaser", "terraform-provider"]'), needs.release-plan.outputs.build-type)
         with:
           pattern: release-assets-*
           path: assets
@@ -469,7 +469,23 @@ jobs:
         uses: ./.csm-ci-actions/actions/server/release-assets
         with:
           directory: assets
-          release-config: ${{ toJSON(fromJSON(needs.release-plan.outputs.plan).release) }}
+          plan: ${{ needs.release-plan.outputs.plan }}
+          source-date-epoch: ${{ needs.release-plan.outputs.source-date-epoch }}
+          gpg-fingerprint: ${{ vars.CSM_CI_TERRAFORM_PROVIDER_GPG_FINGERPRINT }}
+          gpg-private-key: ${{ needs.release-plan.outputs.build-type == 'terraform-provider' && secrets.CSM_CI_TERRAFORM_PROVIDER_GPG_PRIVATE_KEY || '' }}
+          gpg-passphrase: ${{ needs.release-plan.outputs.build-type == 'terraform-provider' && secrets.CSM_CI_TERRAFORM_PROVIDER_GPG_PASSPHRASE || '' }}
+      - if: needs.release-plan.outputs.build-type == 'terraform-provider'
+        name: Save the public Registry verification key
+        env:
+          PUBLIC_KEY: ${{ steps.assets.outputs.gpg-public-key }}
+        run: printf '%s\n' "$PUBLIC_KEY" > "$RUNNER_TEMP/terraform-signing-public-key.asc"
+      - if: needs.release-plan.outputs.build-type == 'terraform-provider'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: terraform-signing-public-key
+          path: ${{ runner.temp }}/terraform-signing-public-key.asc
+          if-no-files-found: error
+          retention-days: 1
       - id: predicate
         env:
           CLIENT_REPOSITORY: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
@@ -495,6 +511,9 @@ jobs:
           plan: ${{ needs.release-plan.outputs.plan }}
           assets: ${{ steps.assets.outputs.assets }}
           directory: assets
+          gpg-public-key: ${{ steps.assets.outputs.gpg-public-key }}
+          gpg-fingerprint: ${{ vars.CSM_CI_TERRAFORM_PROVIDER_GPG_FINGERPRINT }}
+          source-date-epoch: ${{ needs.release-plan.outputs.source-date-epoch }}
 
   cleanup:
     needs: [intake, op, release-plan, release-build, release-publish]

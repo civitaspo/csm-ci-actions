@@ -1,7 +1,8 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { type GitHub, splitRepository } from "../lib/github.ts";
 import { Rejection } from "../lib/request.ts";
-import { type ReleasePlan, ReleasePlanSchema, verifyReleaseTag } from "./plan.ts";
+import { type ReleasePlan, ReleasePlanSchema } from "./plan-schema.ts";
+import { verifyReleaseTag } from "./plan.ts";
 
 export async function ensureReleaseTag(gh: GitHub, input: unknown): Promise<ReleasePlan> {
   const plan = ReleasePlanSchema.parse(input);

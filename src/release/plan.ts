@@ -1,22 +1,9 @@
-import { ReleaseSchema, type Release } from "../lib/config.ts";
+import type { Release } from "../lib/config.ts";
 import { type GitHub, splitRepository } from "../lib/github.ts";
 import { Rejection } from "../lib/request.ts";
 import { parseSemVer } from "./semver.ts";
 import { z } from "zod";
-
-export type ReleasePlan = {
-  repository: string;
-  pullNumber: number;
-  mergeSha: string;
-  tag: string;
-  version: string;
-  serverBotId: number;
-  serverBotLogin: string;
-  tagExists: boolean;
-  privateRepository: boolean;
-  release: Release;
-  prerelease: boolean;
-};
+import type { ReleasePlan } from "./plan-schema.ts";
 
 export type ReleasePlanInput = {
   repository: string;
@@ -24,20 +11,6 @@ export type ReleasePlanInput = {
   serverBotId: number;
   release: Release;
 };
-
-export const ReleasePlanSchema = z.strictObject({
-  repository: z.string().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/),
-  pullNumber: z.number().int().positive(),
-  mergeSha: z.string().regex(/^[a-f0-9]{40}$/i),
-  tag: z.string().min(2),
-  version: z.string().refine((version) => parseSemVer(version) !== undefined),
-  serverBotId: z.number().int().positive(),
-  serverBotLogin: z.string().min(1),
-  tagExists: z.boolean(),
-  privateRepository: z.boolean(),
-  release: ReleaseSchema,
-  prerelease: z.boolean(),
-});
 
 export async function planRelease(gh: GitHub, input: ReleasePlanInput): Promise<ReleasePlan> {
   const repo = splitRepository(input.repository);
@@ -66,6 +39,9 @@ export async function planRelease(gh: GitHub, input: ReleasePlanInput): Promise<
   const version = versionText.data.trim();
   const semver = parseSemVer(version);
   if (!semver) throw new Rejection(`.release-version ${JSON.stringify(version)} is not semver`);
+  if (input.release.build_type === "terraform-provider" && version.includes("+")) {
+    throw new Rejection("Terraform provider versions cannot contain SemVer build metadata");
+  }
   const tag = `v${version}`;
   const existingTag = await verifyReleaseTag(gh, repo, tag, { id: input.serverBotId, login: mergedBy.login }, mergeSha);
   const existingRelease = await getReleaseByTag(gh, repo, tag);

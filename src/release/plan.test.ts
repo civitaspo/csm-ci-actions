@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { github } from "../lib/github.ts";
 import { fakeFetch } from "../lib/testing.ts";
 import { planRelease, type ReleasePlanInput } from "./plan.ts";
+import { ReleasePlanSchema } from "./plan-schema.ts";
 
 const mergeSha = "0123456789abcdef0123456789abcdef01234567";
 const input: ReleasePlanInput = {
@@ -86,6 +87,18 @@ describe("planRelease", () => {
       tag: { tag: "v1.2.3", tagger: { name: "server[bot]", email: "3000+server[bot]@users.noreply.github.com" }, object: { type: "commit", sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } },
     });
     await expect(planRelease(github("t", fetch), input)).rejects.toThrow("tag v1.2.3 points to a different commit");
+  });
+
+  test.each(["1.2.3+build", "1.2.3-rc.1+build"])("rejects Terraform build metadata %s before checking or creating a tag", async (version) => {
+    const fetch = routes({ version });
+    await expect(planRelease(github("t", fetch), { ...input, release: { build_type: "terraform-provider", provider_name: "sigma" } }))
+      .rejects.toThrow("Terraform provider versions cannot contain SemVer build metadata");
+  });
+
+  test("rejects Terraform metadata when a serialized plan crosses the publish boundary", async () => {
+    const plan = await planRelease(github("t", routes()), input);
+    expect(() => ReleasePlanSchema.parse({ ...plan, version: "1.2.3+build", release: { build_type: "terraform-provider", provider_name: "sigma" } }))
+      .toThrow("Terraform provider versions cannot contain SemVer build metadata");
   });
 
   test("marks an existing verified tag so the workflow can skip its write token", async () => {

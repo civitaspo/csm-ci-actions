@@ -5,10 +5,24 @@ inputs:
     description: Directory containing build outputs.
     required: false
     default: assets
-  release-config:
-    description: Validated release build configuration, required for cargo-raw sidecars.
+  plan:
+    description: Validated release plan, including the build configuration and version.
+    required: true
+  source-date-epoch:
+    description: Merge commit timestamp, required for Terraform provider signing.
+    required: false
+  gpg-fingerprint:
+    description: Full primary RSA fingerprint for Terraform provider signing.
+    required: false
+  gpg-private-key:
+    description: Dedicated Terraform signing key from the server environment.
+    required: false
+  gpg-passphrase:
+    description: Passphrase for the dedicated Terraform signing key.
     required: false
 outputs:
+  gpg-public-key:
+    description: Public signing key for final Terraform asset revalidation.
   subject-path:
     description: Glob of all validated assets for actions/attest.
   assets:

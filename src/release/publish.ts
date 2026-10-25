@@ -2,9 +2,11 @@ import { readFile } from "node:fs/promises";
 import { type GitHub, splitRepository } from "../lib/github.ts";
 import { Rejection } from "../lib/request.ts";
 import { type AssetDigest, prepareAssets } from "./assets.ts";
-import { type ReleasePlan, ReleasePlanSchema, verifyReleaseTag } from "./plan.ts";
+import { type ReleasePlan, ReleasePlanSchema } from "./plan-schema.ts";
+import { verifyReleaseTag } from "./plan.ts";
 import { compareSemVer, parseSemVer } from "./semver.ts";
 import { z } from "zod";
+import type { TerraformVerification } from "./terraform.ts";
 
 const ExpectedAssets = z.array(z.strictObject({ name: z.string().min(1), sha256: z.string().regex(/^[a-f0-9]{64}$/) }));
 const ReleaseSnapshot = z.object({
@@ -17,14 +19,20 @@ const RemoteAsset = z.object({ name: z.string(), digest: z.string().regex(/^sha2
 
 export async function publishRelease(
   gh: GitHub,
-  input: { plan: unknown; expectedAssets: unknown; directory: string },
+  input: { plan: unknown; expectedAssets: unknown; directory: string; terraform?: Omit<TerraformVerification, "version"> },
 ): Promise<void> {
   const plan = ReleasePlanSchema.parse(input.plan);
   const expected = ExpectedAssets.parse(input.expectedAssets);
   if (new Set(expected.map(({ name }) => name)).size !== expected.length) {
     throw new Rejection("release asset manifest contains duplicate names");
   }
-  const local = await prepareAssets(input.directory, plan.release);
+  let local: AssetDigest[];
+  if (plan.release.build_type === "terraform-provider") {
+    if (!input.terraform) throw new Rejection("Terraform publication requires the verified public key and source timestamp");
+    local = await prepareAssets(input.directory, { ...plan.release, version: plan.version, ...input.terraform });
+  } else {
+    local = await prepareAssets(input.directory, plan.release);
+  }
   assertSameAssets(expected, local);
   const repo = splitRepository(plan.repository);
   await assertReleaseTag(gh, plan);

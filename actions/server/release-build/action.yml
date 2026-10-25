@@ -2,7 +2,7 @@ name: csm-ci release build
 description: Build release assets using the configured build type without publishing or signing.
 inputs:
   build-type:
-    description: One of none, js-action, goreleaser, cargo or cargo-raw.
+    description: One of none, js-action, goreleaser, cargo, cargo-raw or terraform-provider.
     required: true
   client-path:
     description: Path to the isolated source snapshot.
@@ -27,7 +27,7 @@ runs:
         BUILD_TYPE: ${{ inputs.build-type }}
       run: |
         case "$BUILD_TYPE" in
-          none|js-action|goreleaser|cargo|cargo-raw) ;;
+          none|js-action|goreleaser|cargo|cargo-raw|terraform-provider) ;;
           *) echo "unsupported release build type: $BUILD_TYPE" >&2; exit 1 ;;
         esac
     - if: inputs.build-type == 'none'
@@ -57,13 +57,23 @@ runs:
           exit 1
         fi
         mkdir -p ../assets
-    - if: inputs.build-type == 'goreleaser'
+    - if: inputs.build-type == 'terraform-provider'
+      uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+      with:
+        go-version: 1.27.2
+        cache: false
+    - if: inputs.build-type == 'goreleaser' || inputs.build-type == 'terraform-provider'
       uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a
       with:
         version: v2.19.0
         distribution: goreleaser
         workdir: ${{ inputs.client-path }}
         args: release --skip=publish,sign,announce --clean
+    - if: inputs.build-type == 'terraform-provider'
+      shell: bash
+      env:
+        CLIENT_PATH: ${{ inputs.client-path }}
+      run: python3 "$GITHUB_ACTION_PATH/terraform.py" "$CLIENT_PATH" assets
     - if: inputs.build-type == 'goreleaser'
       shell: bash
       env:

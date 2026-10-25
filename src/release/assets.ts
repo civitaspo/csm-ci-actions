@@ -3,11 +3,18 @@ import { lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Rejection } from "../lib/request.ts";
 import type { Release } from "../lib/config.ts";
+import { terraformAssets, type TerraformVerification } from "./terraform.ts";
 
 export type AssetDigest = { name: string; sha256: string; path: string };
+export type AssetRelease = Exclude<Release, { build_type: "terraform-provider" }>
+  | (Extract<Release, { build_type: "terraform-provider" }> & TerraformVerification);
 
-export async function prepareAssets(directory: string, release?: Release): Promise<AssetDigest[]> {
+export async function prepareAssets(directory: string, release?: AssetRelease): Promise<AssetDigest[]> {
   await mkdir(directory, { recursive: true });
+  if (release?.build_type === "terraform-provider") {
+    await terraformAssets({ directory, providerName: release.provider_name, ...release,
+      credentials: { mode: "verify", publicKey: release.publicKey } });
+  }
   const names = (await readdir(directory)).sort();
   const sumsPath = join(directory, "SHA256SUMS");
   const sumsInfo = names.includes("SHA256SUMS") ? await lstat(sumsPath) : undefined;

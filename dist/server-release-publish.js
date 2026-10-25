@@ -34825,6 +34825,10 @@ var ReleaseSchema = discriminatedUnion("build_type", [
   strictObject({ build_type: literal("js-action") }),
   strictObject({ build_type: literal("goreleaser") }),
   strictObject({
+    build_type: literal("terraform-provider"),
+    provider_name: string2().max(64).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*(?![\s\S])/u, "provider_name must be lowercase alphanumeric with single internal hyphens")
+  }),
+  strictObject({
     build_type: literal("cargo"),
     targets: array(_enum(CARGO_TARGETS)).min(1).refine((targets) => new Set(targets).size === targets.length, "duplicate cargo target")
   }),
@@ -35061,8 +35065,51 @@ import { readFile as readFile2 } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { lstat as lstat2, mkdir as mkdir2, readFile, readdir as readdir2, writeFile as writeFile2 } from "node:fs/promises";
 import { join } from "node:path";
+
+// src/release/terraform.ts
+import { spawn } from "node:child_process";
+import { resolve } from "node:path";
+async function terraformAssets(input) {
+  const helper = resolve(process.env.GITHUB_ACTION_PATH ?? "actions/server/release-assets", "../release-assets/terraform.py");
+  const credentials = input.credentials.mode === "prepare" ? { key: input.credentials.privateKey, passphrase: input.credentials.passphrase } : { key: input.credentials.publicKey };
+  const output = await new Promise((accept, reject) => {
+    const child = spawn("python3", [
+      "-B",
+      helper,
+      input.credentials.mode,
+      resolve(input.directory),
+      input.providerName,
+      input.version,
+      input.sourceDateEpoch,
+      input.fingerprint
+    ], { env: { PATH: process.env.PATH, LANG: "C.UTF-8" } });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (data) => {
+      stdout += data;
+    });
+    child.stderr.setEncoding("utf8").on("data", (data) => {
+      stderr += data;
+    });
+    child.on("error", reject);
+    child.on("close", (code) => code === 0 ? accept(stdout) : reject(new Rejection(stderr.trim() || "Terraform asset validation failed")));
+    child.stdin.on("error", () => {});
+    child.stdin.end(JSON.stringify(credentials));
+  });
+  return strictObject({ publicKey: string2().min(1) }).parse(JSON.parse(output)).publicKey;
+}
+
+// src/release/assets.ts
 async function prepareAssets(directory, release) {
   await mkdir2(directory, { recursive: true });
+  if (release?.build_type === "terraform-provider") {
+    await terraformAssets({
+      directory,
+      providerName: release.provider_name,
+      ...release,
+      credentials: { mode: "verify", publicKey: release.publicKey }
+    });
+  }
   const names = (await readdir2(directory)).sort();
   const sumsPath = join(directory, "SHA256SUMS");
   const sumsInfo = names.includes("SHA256SUMS") ? await lstat2(sumsPath) : undefined;
@@ -35170,7 +35217,7 @@ function compareNumeric(left, right) {
   return a === b ? 0 : a < b ? -1 : 1;
 }
 
-// src/release/plan.ts
+// src/release/plan-schema.ts
 var ReleasePlanSchema = strictObject({
   repository: string2().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/),
   pullNumber: number2().int().positive(),
@@ -35183,7 +35230,9 @@ var ReleasePlanSchema = strictObject({
   privateRepository: boolean2(),
   release: ReleaseSchema,
   prerelease: boolean2()
-});
+}).refine((plan) => plan.release.build_type !== "terraform-provider" || !plan.version.includes("+"), "Terraform provider versions cannot contain SemVer build metadata");
+
+// src/release/plan.ts
 async function verifyReleaseTag(gh, repo, tagName, bot, mergeSha) {
   let ref;
   try {
@@ -35225,7 +35274,14 @@ async function publishRelease(gh, input) {
   if (new Set(expected.map(({ name }) => name)).size !== expected.length) {
     throw new Rejection("release asset manifest contains duplicate names");
   }
-  const local = await prepareAssets(input.directory, plan.release);
+  let local;
+  if (plan.release.build_type === "terraform-provider") {
+    if (!input.terraform)
+      throw new Rejection("Terraform publication requires the verified public key and source timestamp");
+    local = await prepareAssets(input.directory, { ...plan.release, version: plan.version, ...input.terraform });
+  } else {
+    local = await prepareAssets(input.directory, plan.release);
+  }
   assertSameAssets(expected, local);
   const repo = splitRepository(plan.repository);
   await assertReleaseTag(gh, plan);
@@ -35382,7 +35438,12 @@ async function main() {
   await publishRelease(github(getInput("github-token", { required: true })), {
     plan: JSON.parse(getInput("plan", { required: true })),
     expectedAssets: JSON.parse(getInput("assets", { required: true })),
-    directory: getInput("directory", { required: true })
+    directory: getInput("directory", { required: true }),
+    terraform: {
+      publicKey: getInput("gpg-public-key"),
+      fingerprint: getInput("gpg-fingerprint"),
+      sourceDateEpoch: getInput("source-date-epoch")
+    }
   });
   info("published and verified the immutable release");
 }

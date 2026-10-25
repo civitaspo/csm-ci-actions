@@ -7,6 +7,29 @@ const SIGNER = "civitaspo/csm-ci-actions/.github/workflows/server.yml";
 type ReleasePr = Awaited<ReturnType<typeof openReleasePr>>;
 type ReleaseRun = { run: Run; jobRows: { name: string; id: number; conclusion: string | null }[]; label: string };
 
+const terraformFixture = {
+  ".goreleaser.yaml": `version: 2
+project_name: terraform-provider-csm-ci-test
+builds:
+  - main: ./cmd/release-fixture
+    env: [CGO_ENABLED=0]
+    goos: [freebsd, windows, linux, darwin]
+    goarch: [amd64, "386", arm, arm64]
+    goarm: ["6"]
+    ignore:
+      - { goos: darwin, goarch: "386" }
+      - { goos: darwin, goarch: arm }
+    binary: "{{ .ProjectName }}_v{{ .Version }}"
+    flags: [-trimpath]
+    ldflags: [-s -w]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+archives:
+  - formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+`,
+  "terraform-registry-manifest.json": '{"version":1,"metadata":{"protocol_versions":["6.0"]}}\n',
+};
+
 function version(): string {
   return `1.0.${Date.now()}`;
 }
@@ -65,7 +88,7 @@ async function completedRelease(ctx: Ctx, ver: string, buildType: ReleaseBuildTy
     assert(clientRun.conclusion === "success", `client release request concluded ${clientRun.conclusion} (${clientRun.html_url})`);
     const pipeline = await releasePipeline(ctx, merged.since, pr);
     return { pipeline, pr, sha: merged.sha, clientRun };
-  }, buildType === "goreleaser" ? { "dist/action.js": null } : {}));
+  }, buildType === "goreleaser" ? { "dist/action.js": null } : buildType === "terraform-provider" ? terraformFixture : {}));
 }
 
 function expectJob(result: ReleaseRun, name: string, conclusion: Conclusion): void {
@@ -82,6 +105,13 @@ async function expectLog(ctx: Ctx, result: ReleaseRun, name: string, pattern: Re
 }
 
 function expectedNames(type: ReleaseBuildType, ver: string): string[] {
+  if (type === "terraform-provider") {
+    const prefix = `terraform-provider-csm-ci-test_${ver}`;
+    return [
+      ...["darwin_amd64", "darwin_arm64", "freebsd_386", "freebsd_amd64", "freebsd_arm", "freebsd_arm64", "linux_386", "linux_amd64", "linux_arm", "linux_arm64", "windows_386", "windows_amd64", "windows_arm64"].map((target) => `${prefix}_${target}.zip`),
+      `${prefix}_manifest.json`, `${prefix}_SHA256SUMS`, `${prefix}_SHA256SUMS.sig`, "SHA256SUMS",
+    ].sort();
+  }
   if (type === "cargo-raw") return [
     ...CARGO_RAW_TARGETS.flatMap((target) => [`testing-csm-ci-client-${target}`, `testing-csm-ci-client-${target}.sha256`]),
     "SHA256SUMS",
@@ -109,8 +139,15 @@ async function publishedRelease(ctx: Ctx, ver: string, mergeSha: string, type: R
   return tag;
 }
 
-async function verifyAttestations(ctx: Ctx, tag: string, mergeSha: string): Promise<void> {
-  const run = await dispatch(ctx, SERVER, "csm-ci-release-verify.yml", { tag, merge_sha: mergeSha, client_repository: CLIENT, signer_workflow: SIGNER, predicate_type: PREDICATE });
+async function verifyAttestations(ctx: Ctx, tag: string, mergeSha: string, terraformRun?: number): Promise<void> {
+  const inputs: Record<string, string> = { tag, merge_sha: mergeSha, client_repository: CLIENT, signer_workflow: SIGNER, predicate_type: PREDICATE };
+  if (terraformRun) {
+    const { data: variable } = await ctx.gh.rest.actions.getEnvironmentVariable({ ...splitRepository(SERVER), environment_name: "csm-ci", name: "CSM_CI_TERRAFORM_PROVIDER_GPG_FINGERPRINT" });
+    assert(/^[A-F0-9]{40}$/.test(variable.value), "testing environment must have the separate RSA key's full primary fingerprint");
+    inputs.terraform_signer_run = String(terraformRun);
+    inputs.terraform_fingerprint = variable.value;
+  }
+  const run = await dispatch(ctx, SERVER, "csm-ci-release-verify.yml", inputs);
   assert(run.conclusion === "success", `hosted attestation verification concluded ${run.conclusion} (${run.html_url})`);
 }
 
@@ -152,6 +189,32 @@ export const release: Scenario[] = [
     name: `publishes an immutable ${type} release with verified asset attestations`, serial: true,
     run: async (ctx: Ctx) => { await success(ctx, type); },
   })),
+  {
+    name: "publishes and replays an immutable terraform-provider release with all seventeen verified assets",
+    serial: true,
+    run: async (ctx) => withServerConfig(ctx, configureRelease("terraform-provider"), async () => {
+      const ver = version();
+      const first = await completedRelease(ctx, ver, "terraform-provider");
+      expectJob(first.pipeline, "release-build", "success");
+      expectJob(first.pipeline, "release-publish", "success");
+      const tag = await publishedRelease(ctx, ver, first.sha, "terraform-provider");
+      await verifyAttestations(ctx, tag, first.sha, first.pipeline.run.id);
+      const { data: before } = await ctx.gh.rest.repos.getReleaseByTag({ ...splitRepository(CLIENT), tag });
+      const replay = await dispatch(ctx, CLIENT, "csm-ci-smoke.yml", { kind: "release", args: String(first.pr.number) });
+      assert(replay.conclusion === "success", `Terraform replay request concluded ${replay.conclusion}`);
+      const request = await jobs(ctx, CLIENT, replay.id);
+      const log = await jobLog(ctx, CLIENT, request.get("request")!.id);
+      const label = /created label (csm-ci-[^ ]+) \(/.exec(log)?.[1];
+      assert(label, "Terraform replay label missing");
+      const pipeline = await releasePipeline(ctx, new Date(new Date(replay.created_at).getTime() - 2_000), first.pr, label);
+      expectJob(pipeline, "release-build", "success");
+      expectJob(pipeline, "release-publish", "success");
+      const { data: after } = await ctx.gh.rest.repos.getReleaseByTag({ ...splitRepository(CLIENT), tag });
+      assert(before.id === after.id && after.immutable, "Terraform replay replaced the immutable release");
+      assert(JSON.stringify(before.assets.map(({ name, digest }) => [name, digest]).sort()) === JSON.stringify(after.assets.map(({ name, digest }) => [name, digest]).sort()), "Terraform replay changed an asset or deterministic GPG signature");
+      await verifyAttestations(ctx, tag, first.sha, pipeline.run.id);
+    }),
+  },
   {
     name: "replaying a completed none release preserves the immutable release and asset digests",
     serial: true,

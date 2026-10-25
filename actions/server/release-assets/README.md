@@ -9,12 +9,17 @@ See [release publishing](../../../docs/release.md) for asset validation and publ
 | Input | Required | Default | Value |
 |---|---:|---|---|
 | `directory` | No | `assets` | Directory containing the build outputs. |
-| `release-config` | No | Empty | Release configuration as JSON. Pass the validated plan's configuration to enforce `cargo-raw` filenames and generate individual checksum sidecars. |
+| `plan` | Yes | None | Validated release plan as JSON, including configuration and version. |
+| `source-date-epoch` | For Terraform | Empty | Merge commit timestamp for deterministic RSA signatures. |
+| `gpg-fingerprint` | For Terraform | Empty | Full uppercase primary RSA fingerprint. |
+| `gpg-private-key` | For Terraform | Empty | Armored private key from the server environment. |
+| `gpg-passphrase` | For Terraform | Empty | Passphrase from the server environment. |
 
 ## Outputs
 
 | Output | Value |
 |---|---|
+| `gpg-public-key` | Exported public key for final Terraform signature revalidation; empty for other build types. |
 | `subject-path` | Glob selecting validated asset files for `actions/attest`. |
 | `assets` | JSON array of `{ "name": "file.tar.gz", "sha256": "<64 lowercase hex digits>" }` objects. Includes the digest of `SHA256SUMS` itself. |
 
@@ -27,13 +32,15 @@ The directory must contain outputs from the matching release-build job. The work
   uses: civitaspo/csm-ci-actions/actions/server/release-assets@<reviewed-commit-sha>
   with:
     directory: assets
-    release-config: ${{ toJSON(fromJSON(needs.release-plan.outputs.plan).release) }}
+    plan: ${{ needs.release-plan.outputs.plan }}
 - uses: actions/attest@f057fd524d485ac48d9b534c235aad15b5bb303f # v3.0.0
   with:
     subject-path: ${{ steps.assets.outputs.subject-path }}
     predicate-type: https://github.com/civitaspo/csm-ci-actions/attestation/release/v1
     predicate-path: ${{ runner.temp }}/release-predicate.json
 ```
+
+For Terraform providers, use the server workflow's conditional credential inputs and pass the public key, fingerprint and source timestamp to final publication. Keep the private credentials in this trusted preparation step only.
 
 Use the full release-publish job in [server.yml](../../../.github/workflows/server.yml) for the required permissions and artifact handoff. Do not run this action against untrusted files in a general-purpose workflow.
 

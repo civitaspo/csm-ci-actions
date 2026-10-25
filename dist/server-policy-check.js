@@ -32639,6 +32639,10 @@ var ReleaseSchema = discriminatedUnion("build_type", [
   strictObject({ build_type: literal("js-action") }),
   strictObject({ build_type: literal("goreleaser") }),
   strictObject({
+    build_type: literal("terraform-provider"),
+    provider_name: string2().max(64).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*(?![\s\S])/u, "provider_name must be lowercase alphanumeric with single internal hyphens")
+  }),
+  strictObject({
     build_type: literal("cargo"),
     targets: array(_enum(CARGO_TARGETS)).min(1).refine((targets) => new Set(targets).size === targets.length, "duplicate cargo target")
   }),

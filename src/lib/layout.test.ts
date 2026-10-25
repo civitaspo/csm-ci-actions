@@ -55,8 +55,9 @@ describe("release build boundary", () => {
   });
 
   test("build implementations run only for their selected type and disable the tool cache", () => {
-    for (const step of buildSteps.slice(1)) expect(step.if).toMatch(/^inputs\.build-type == '(none|js-action|goreleaser|cargo|cargo-raw)'$/u);
+    for (const step of buildSteps.slice(1)) expect(step.if).toMatch(/^inputs\.build-type == '(none|js-action|goreleaser|cargo|cargo-raw|terraform-provider)'(?: \|\| inputs\.build-type == 'terraform-provider')?$/u);
     expect(buildSteps.find((step) => step.uses?.startsWith("oven-sh/setup-bun@"))?.with?.["no-cache"]).toBe(true);
+    expect(buildSteps.find((step) => step.uses?.startsWith("actions/setup-go@"))?.with?.cache).toBe(false);
   });
 
   test("the build job has no permissions, secrets or environment", () => {

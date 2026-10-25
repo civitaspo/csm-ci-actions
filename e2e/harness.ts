@@ -275,6 +275,7 @@ export function configureRelease(type: ReleaseBuildType): (text: string) => stri
     assert(repository?.release, `release config for ${CLIENT} is missing`);
     const release = type === "cargo" ? `release: { build_type: cargo, targets: [${CARGO_TARGETS.join(", ")}] }`
       : type === "cargo-raw" ? `release: { build_type: cargo-raw, binary: testing-csm-ci-client, targets: [${CARGO_RAW_TARGETS.join(", ")}] }`
+      : type === "terraform-provider" ? "release: { build_type: terraform-provider, provider_name: csm-ci-test }"
       : `release: { build_type: ${type} }`;
     const pattern = /release: \{ build_type: [^}]+\}/;
     assert(pattern.test(text), "could not locate release build configuration");
