@@ -57,6 +57,8 @@ async function expectReleasePr(ctx: Ctx, run: Run, runIds: Set<number>, version?
   assert(typeof packageJson === "object" && packageJson !== null && "version" in packageJson && packageJson.version === actual, "root package.json version was not bumped");
   assert((await read(ctx, "Cargo.toml", branch)).includes(`version = "${actual}"`), "root Cargo version was not bumped");
   assert((await read(ctx, "Cargo.lock", branch)).includes(`version = "${actual}"`), "root Cargo.lock version was not bumped");
+  assert(await read(ctx, "pyproject.toml", branch) === `[project]\nname = "release-fixture"\nversion = "${actual}"\n\n[tool.fixture]\nversion = "9.0.0"\n`, "root pyproject version was not bumped or other content changed");
+  assert(await read(ctx, "dbt_project.yml", branch) === `name: release_fixture\nversion: ${actual} # package version\nconfig-version: 2\nvars:\n  version: 9.0.0\n`, "root dbt version was not bumped or other content changed");
   ctx.urls.push(pr.html_url);
   return pr;
 }

@@ -2,6 +2,7 @@ import { execFile as callbackExecFile } from "node:child_process";
 import { lstat, readFile, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { join } from "node:path";
+import { isMap, isScalar, parseDocument } from "yaml";
 import { parseSemVer } from "../release/semver.ts";
 
 const execFile = promisify(callbackExecFile);
@@ -24,7 +25,7 @@ export async function prepareRelease(input: { workspace: string; version?: strin
 
   for (const path of [".release-version", "CHANGELOG.md"]) await assertWritableFile(input.workspace, path);
 
-  const paths = ["package.json", "Cargo.toml", "Cargo.lock", "pyproject.toml"];
+  const paths = ["package.json", "Cargo.toml", "Cargo.lock", "pyproject.toml", "dbt_project.yml"];
   const originals = new Map<string, string>();
   for (const path of paths) {
     const content = await readOptional(input.workspace, path);
@@ -45,6 +46,8 @@ export async function prepareRelease(input: { workspace: string; version?: strin
   if (lock !== undefined && cargoPackage !== undefined) changes.set("Cargo.lock", replaceCargoLockVersion(lock, cargoPackage.name, cargoPackage.version, version));
   const pyproject = originals.get("pyproject.toml");
   if (pyproject !== undefined) changes.set("pyproject.toml", replaceTomlVersion(pyproject, "project", version, "pyproject.toml").text);
+  const dbt = originals.get("dbt_project.yml");
+  if (dbt !== undefined) changes.set("dbt_project.yml", replaceDbtVersion(dbt, version));
 
   for (const [path, text] of changes) await writeFile(join(input.workspace, path), text);
   await writeFile(join(input.workspace, ".release-version"), `${version}\n`);
@@ -91,6 +94,23 @@ function replaceJsonVersion(text: string, version: string): string {
   if (candidate.value !== currentVersion) throw new Error("package.json must have one string root version");
   if (!parseSemVer(candidate.value)) throw new Error("package.json root version is not valid SemVer");
   return text.slice(0, candidate.valueStart) + version + text.slice(candidate.valueEnd);
+}
+
+function replaceDbtVersion(text: string, version: string): string {
+  const document = parseDocument(text);
+  if (document.errors.length > 0) throw new Error("dbt_project.yml must be valid YAML with unique keys");
+  const current = isMap(document.contents) ? document.get("version", true) : undefined;
+  if (!isScalar(current) || typeof current.value !== "string" || !current.range) {
+    throw new Error("dbt_project.yml must have one string root version");
+  }
+  if (!parseSemVer(current.value)) throw new Error("dbt_project.yml root version is not valid SemVer");
+  const start = text.lastIndexOf("\n", current.range[0] - 1) + 1;
+  const newline = text.indexOf("\n", current.range[0]);
+  const end = newline < 0 ? text.length : newline;
+  const line = text.slice(start, end);
+  const match = /^([ \t]*"?version"?[ \t]*:[ \t]*)(["']?)([^"' \t\r\n#]+)\2([ \t]*(?:#.*)?\r?)$/u.exec(line);
+  if (!match || match[3] !== current.value) throw new Error("dbt_project.yml root version must occupy its own supported version line");
+  return text.slice(0, start) + `${match[1]}${match[2]}${version}${match[2]}${match[4]}` + text.slice(end);
 }
 
 type JsonStringProperty = { keyStart: number; valueStart: number; valueEnd: number; value: string };
