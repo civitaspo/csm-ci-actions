@@ -28,7 +28,7 @@ mise exec -- jactionlint
 mise run actions-lock-verify
 ```
 
-When changing either shared release workflow or its composite dependencies, run `mise run actions-lock` and commit the generated lockfile with the change. The task covers only those two workflows; other workflows retain their existing checkout pattern.
+When changing a shared client workflow or its composite dependencies, run `mise run actions-lock` and commit the generated lockfile with the change. The task covers the five shared client workflows; server workflows retain their existing checkout pattern.
 
 ## Specification and documents
 
