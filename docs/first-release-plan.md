@@ -497,12 +497,12 @@ After Phase 0, phases 1, 2, 3, 4, 5a, and 6 can proceed independently in paralle
 ### Phase 6: repo-settings
 
 - **Trigger and permissions**
-  - `server-repo-settings.yml` starts on a schedule and on `workflow_dispatch(repository?)`.
+  - `server-repo-settings.yml` starts on a schedule and on `workflow_dispatch(repository?, mode?)`. The reusable workflow accepts `mode: reconcile | managed-files-only`, defaulting to `reconcile`. A schedule always uses `reconcile`; reject a scheduled request for `managed-files-only` and reject unknown modes before target writes.
   - The environment is `csm-ci`.
-  - Mint the Server App token per target repo with `administration: write` only. Mint a separate token for managed files.
+  - In `reconcile` mode, mint the Server App token per target repo with `administration: write` only. Mint a separate token for managed files.
   - Read the settings and rulesets with that administration token too. GitHub returns a ruleset's `bypass_actors` only to callers with write access to it (testing-csm-ci-server run 40155267064), so a read-only token cannot see the bypass. The activation preflight and the managed-file inspection use a target-scoped contents and pull-requests read token.
   - `repo_settings.settings` accepts only the merge booleans shown in the Configuration section, with the merge methods fixed to squash only to match `review-and-checks`. `managed_files` maps safe literal paths to text, with the securefix size limits.
-- **What gets synced** (all validated with zod)
+- **What gets synced in `reconcile` mode** (all validated with zod)
   - Repository settings
   - The 4 rulesets in S6. Upsert by name and `source_type == Repository`, and replace the whole ruleset. If more than one ruleset has the same name, raise an error.
   - Enabling immutable releases (we do not disable it)
@@ -520,12 +520,22 @@ After Phase 0, phases 1, 2, 3, 4, 5a, and 6 can proceed independently in paralle
 - **managed files**
   - Writes use the Server App's contents / workflows permissions. `workflows` is minted only when a managed path is a workflow, or when the branch is reset, because the reset may move it across workflow changes on default.
   - Apply the S4 server-owned branch rule to the branch `csm-ci/repo-settings`, write with `createCommitOnBranch`, and create a PR.
-  - A human merges it with `/merge`.
+  - Once the merge caller is installed and verified, a human merges it with `/merge`.
+- **Managed-files-only bootstrap**
+  - An explicit dispatch with `mode: managed-files-only` creates or updates only the managed-file pull request. It works before the target has a merge caller, policy checks or the approver App required by the activation preflight.
+  - Keep the normal configuration validation, configured-target discovery and selection, target-scoped tokens, S4 server-owned history proof, path and size limits, expected-head checks and refusal to overwrite untrusted state. The mode does not bypass branch ownership checks or merge the pull request.
+  - Do not read or write repository settings, rulesets or immutable-release state in this mode. Do not mint an administration token or an approver capability token, and do not run the controlled-merges activation preflight. Mint only discovery and managed-file inspection/write tokens, with workflows permission subject to the same path/reset condition as normal reconciliation.
+  - Reuse the same global literal `managed_files` map and `csm-ci/repo-settings` branch. Do not add server-specific workflow distribution or per-repository templating.
+  - Bootstrap order: the user installs Apps and provisions variables and secrets; dispatch managed-files-only; review and merge the generated PR using the repository's existing merge process; verify the caller workflows and required checks on default; then dispatch normal reconciliation to apply protections. Normal activation preflight and emergency-stop behavior remain unchanged.
 - **e2e**
   - Drift is repaired.
   - A managed PR is created.
   - The second run is a no-op.
   - The schedule does not re-enable a controlled-merges that was set to disabled.
+  - Managed-files-only creates a managed PR on a target without the merge caller and leaves repository settings, all rulesets and immutable-release state unchanged; a repeat preserves the existing PR and head.
+  - Managed-files-only uses no administration or approver capability token and still rejects untrusted managed-branch history and unsafe paths. Mutation-check each new rejection rule.
+  - Reject unknown modes and a scheduled managed-files-only request. Verify that normal activation still rejects a missing caller.
+  - Restore testing repository state in `finally` and verify restoration. Do not live-test changed-content resets of an existing managed branch; retain that explicit verification gap.
 - **Not in scope**: creating repos, distributing secrets.
 
 ### Phase 7: Production migration
