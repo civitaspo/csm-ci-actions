@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { CONFIG_YAML, config, fakeFetch } from "./testing.ts";
 import { parseConfig } from "./config.ts";
 import { github } from "./github.ts";
-import { applyRepoSettings, discoverRepoSettingsTargets, inspectRepoSettings, inspectRepoSettingsPreflight, repoSettingsRuleSets, type RepoSettingsTarget } from "./repo-settings.ts";
+import { applyRepoSettings, discoverRepoSettingsTargets, inspectRepoSettings, inspectRepoSettingsPreflight, repoSettingsRuleSets, verifyRepoSettingsApprover, type RepoSettingsTarget } from "./repo-settings.ts";
 
 describe("discoverRepoSettingsTargets", () => {
   const installed = [
@@ -159,10 +159,138 @@ describe("inspectRepoSettings", () => {
     await expect(inspectRepoSettings({ adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "schedule" })).rejects.toThrow();
   });
 
-  const dispatchRejects: [string, { event?: string; jobIf?: string; approverId?: number; queueCount?: number; bypass?: { actor_id: number; actor_type: string; bypass_mode: string }[] }, string][] = [
+  type Body = Record<string, unknown>;
+  const exactStateFetch = (options: { transform?: (body: Body) => Body; extraSummaries?: unknown[]; extraRoutes?: { method: string; path: string; body: unknown }[] } = {}) => {
+    const desired = repoSettingsRuleSets(config());
+    const summaries = desired.map((set, index) => ({ id: index + 1, name: set.name, source_type: "Repository" }));
+    const rules = summaries.map((summary, index) => ({
+      method: "GET",
+      path: `/repos/owner/client/rulesets/${summary.id}`,
+      body: (options.transform ?? ((body: Body) => body))({ ...desired[index], ...summary }),
+    }));
+    return fakeFetch([
+      { method: "GET", path: "/repos/owner/client", body: repository },
+      { method: "GET", path: "/repos/owner/client/rulesets", body: [...summaries, ...(options.extraSummaries ?? [])] },
+      ...rules,
+      ...(options.extraRoutes ?? []),
+      { method: "GET", path: "/repos/owner/client/immutable-releases", body: { enabled: true } },
+    ]);
+  };
+  const inspectSchedule = (fetch: ReturnType<typeof fakeFetch>) => inspectRepoSettings({ adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "schedule" });
+
+  test("rules, required checks and bypass actors in another order compare equal", async () => {
+    const reorder = (body: Body): Body => ({
+      ...body,
+      rules: [...(body.rules as { type: string; parameters?: Body }[])].reverse().map((rule) => rule.type === "required_status_checks" && rule.parameters
+        ? { ...rule, parameters: { ...rule.parameters, required_status_checks: [...(rule.parameters.required_status_checks as unknown[])].reverse() } }
+        : rule),
+      bypass_actors: [...(body.bypass_actors as unknown[])].reverse(),
+    });
+    const plan = await inspectSchedule(exactStateFetch({ transform: reorder }));
+    expect(plan.changes.rulesets).toEqual([]);
+  });
+
+  const drifts: [string, string, (body: Body) => Body][] = [
+    ["a missing rule", "integrity", (body) => ({ ...body, rules: (body.rules as unknown[]).slice(1) })],
+    ["a missing required check", "review-and-checks", (body) => ({
+      ...body,
+      rules: (body.rules as { type: string; parameters?: Body }[]).map((rule) => rule.type === "required_status_checks" && rule.parameters
+        ? { ...rule, parameters: { ...rule.parameters, required_status_checks: (rule.parameters.required_status_checks as unknown[]).slice(1) } }
+        : rule),
+    })],
+  ];
+  test.each(drifts)("%s is reported as drift of %s", async (_name, ruleset, transform) => {
+    const plan = await inspectSchedule(exactStateFetch({ transform: (body) => (body.name === ruleset ? transform(body) : body) }));
+    expect(plan.changes.rulesets).toEqual([ruleset]);
+  });
+
+  test("a deploy-key bypass actor with a null actor_id is read as drift, not rejected", async () => {
+    const withDeployKey = (body: Body): Body => (body.name === "integrity" ? { ...body, bypass_actors: [{ actor_id: null, actor_type: "DeployKey", bypass_mode: "always" }] } : body);
+    const plan = await inspectSchedule(exactStateFetch({ transform: withDeployKey }));
+    expect(plan.changes.rulesets).toEqual(["integrity"]);
+  });
+
+  test("a ruleset from another source with a managed name is ignored", async () => {
+    const organization = { ...disabledControlled, id: 90, source_type: "Organization", enforcement: "active" };
+    const fetch = fakeFetch([
+      { method: "GET", path: "/repos/owner/client", body: repository },
+      { method: "GET", path: "/repos/owner/client/rulesets", body: [
+        { id: 81, name: "controlled-merges", source_type: "Repository" },
+        { id: 90, name: "controlled-merges", source_type: "Organization" },
+      ] },
+      { method: "GET", path: "/repos/owner/client/rulesets/81", body: disabledControlled },
+      { method: "GET", path: "/repos/owner/client/rulesets/90", body: organization },
+      { method: "GET", path: "/repos/owner/client/immutable-releases", body: { enabled: true } },
+    ]);
+    const plan = await inspectRepoSettings({ adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "dispatch" });
+    expect(plan.rulesetIds["controlled-merges"]).toBe(81);
+    expect(plan.rulesetEnforcements["controlled-merges"]).toBe("disabled");
+    expect(fetch.calls).not.toContain("GET /repos/owner/client/rulesets/90");
+  });
+
+  test("an Organization ruleset never counts as the managed ruleset", async () => {
+    const desired = repoSettingsRuleSets(config()).find((set) => set.name === "integrity");
+    const organization = { ...desired, id: 90, source_type: "Organization" };
+    const fetch = fakeFetch([
+      { method: "GET", path: "/repos/owner/client", body: repository },
+      { method: "GET", path: "/repos/owner/client/rulesets", body: [{ id: 90, name: "integrity", source_type: "Organization" }] },
+      { method: "GET", path: "/repos/owner/client/rulesets/90", body: organization },
+      { method: "GET", path: "/repos/owner/client/immutable-releases", body: { enabled: true } },
+    ]);
+    const plan = await inspectSchedule(fetch);
+    expect(plan.rulesetIds.integrity).toBeUndefined();
+    expect(plan.changes.rulesets).toContain("integrity");
+  });
+
+  test.each([
+    ["disabled", "disabled"],
+    ["evaluate", "evaluate"],
+  ])("dispatch activation of a %s controlled-merges PUTs enforcement active", async (_name, enforcement) => {
+    const fetch = dispatchFetch({ enforcement });
+    const result = await applyRepoSettings({ readGH: github("read", fetch), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "dispatch", approverAppSlug: "approver" });
+    expect(result.rulesetsUpdated).toBe(1);
+    const put = fetch.requests.find((request) => request.method === "PUT" && request.path === "/repos/owner/client/rulesets/81");
+    expect(JSON.parse(put?.body ?? "{}")).toHaveProperty("enforcement", "active");
+  });
+
+  test("dispatch activation creates a missing controlled-merges ruleset with enforcement active", async () => {
+    const fetch = dispatchFetch({ absent: true });
+    await applyRepoSettings({ readGH: github("read", fetch), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "dispatch", approverAppSlug: "approver" });
+    const created = fetch.requests.filter((request) => request.method === "POST" && request.path === "/repos/owner/client/rulesets").map((request) => JSON.parse(request.body ?? "{}"));
+    expect(created.find((body) => body.name === "controlled-merges")).toHaveProperty("enforcement", "active");
+  });
+
+  test("dispatch accepts an approver login that differs only in case", async () => {
+    const fetch = dispatchFetch({ approverLogin: "Approver[BOT]" });
+    const result = await applyRepoSettings({ readGH: github("read", fetch), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "dispatch", approverAppSlug: "approver" });
+    expect(result.rulesetsUpdated).toBe(1);
+  });
+
+  test.each([
+    ["disabled", { enabled: false }, 1],
+    ["not found", undefined, 1],
+    ["enabled", { enabled: true }, 0],
+  ] as const)("immutable releases that are %s are enabled only when needed", async (_name, state, expected) => {
+    const fetch = fakeFetch([
+      { method: "GET", path: "/repos/owner/client", body: repository },
+      { method: "GET", path: "/repos/owner/client/rulesets", body: [] },
+      ...(state ? [{ method: "GET", path: "/repos/owner/client/immutable-releases", body: state }] : []),
+      { method: "PUT", path: "/repos/owner/client/immutable-releases", body: {} },
+      { method: "POST", path: "/repos/owner/client/rulesets", body: { id: 90 } },
+    ]);
+    const result = await applyRepoSettings({ readGH: github("read", fakeFetch([])), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "schedule" });
+    expect(result.immutableReleasesEnabled).toBe(expected);
+    expect(fetch.calls.filter((call) => call === "PUT /repos/owner/client/immutable-releases")).toHaveLength(expected);
+  });
+
+  const dispatchRejects: [string, DispatchOptions, string][] = [
     ["caller is not distributed", { event: "workflow_dispatch" }, "caller workflow has not been distributed"],
     ["caller job is conditional", { jobIf: "${{ github.event_name == 'push' }}" }, "caller workflow has not been distributed"],
+    ["caller job does not inherit secrets", { secretsLine: "" }, "caller workflow has not been distributed"],
+    ["caller job passes explicit secrets instead of inheriting", { secretsLine: "secrets:\n      token: x" }, "caller workflow has not been distributed"],
+    ["caller trigger types omit created", { types: "[edited]" }, "caller workflow has not been distributed"],
     ["approver identity differs from config", { approverId: 999 }, "approver bot does not have write permission"],
+    ["approver id matches but login differs", { approverLogin: "someone-else[bot]" }, "approver bot does not have write permission"],
     ["auto-merge queue is occupied", { queueCount: 1 }, "auto-merge queue is not empty"],
     ["controlled-merges has another bypass", { bypass: [{ actor_id: 99, actor_type: "Integration", bypass_mode: "pull_request" }] }, "controlled-merges bypass must contain only the Server App pull_request bypass"],
   ];
@@ -247,6 +375,70 @@ describe("repoSettingsRuleSets", () => {
   });
 });
 
+describe("verifyRepoSettingsApprover", () => {
+  test.each([
+    ["a space", "approver bot"],
+    ["a path separator", "approver/../x"],
+    ["a bot suffix", "approver[bot]"],
+    ["an empty slug", ""],
+    ["a trailing newline", "approver\n"],
+    ["an underscore", "approver_app"],
+  ])("rejects a slug with %s before any request", async (_name, slug) => {
+    const fetch = fakeFetch([]);
+    await expect(verifyRepoSettingsApprover({ readGH: github("read", fetch), config: config(), approverAppSlug: slug })).rejects.toThrow("approver App slug is invalid");
+    expect(fetch.calls).toEqual([]);
+  });
+
+  test.each([
+    ["matching id and login", 4000, "approver[bot]", true],
+    ["matching id and login in another case", 4000, "APPROVER[bot]", true],
+    ["matching id with another login", 4000, "other[bot]", false],
+    ["another id with matching login", 4001, "approver[bot]", false],
+  ])("compares id and login: %s", async (_name, id, login, expected) => {
+    const fetch = fakeFetch([{ method: "GET", path: "/users/approver-app%5Bbot%5D", body: { id, login } }]);
+    expect(await verifyRepoSettingsApprover({ readGH: github("read", fetch), config: config(), approverAppSlug: "approver-app" })).toBe(expected);
+  });
+});
+
+describe("auto-merge queue preflight", () => {
+  const client: RepoSettingsTarget = { name: "owner/client", isServer: false };
+  const auto = { autoMergeRequest: { enabledAt: "now" } };
+  const manual = { autoMergeRequest: null };
+  const page = (nodes: unknown[], hasNextPage: boolean, endCursor: string | null) => ({ repository: { pullRequests: { nodes, pageInfo: { hasNextPage, endCursor } } } });
+  const queueFetch = (pages: unknown[]) => {
+    const [first, ...rest] = pages;
+    return fakeFetch([
+      { method: "GET", path: "/repos/owner/client", body: { default_branch: "main" } },
+      { method: "POST", path: "/graphql", body: { data: first }, then: rest.map((data) => ({ data })) },
+    ]);
+  };
+
+  test("counts only pull requests with auto-merge enabled across pages and follows the cursor", async () => {
+    const fetch = queueFetch([page([auto, manual, auto], true, "c1"), page([manual, auto], true, "c2"), page([manual], false, null)]);
+    const result = await inspectRepoSettingsPreflight({ readGH: github("read", fetch), target: client });
+    expect(result.autoMergeQueueCount).toBe(3);
+    const cursors = fetch.requests.filter((request) => request.path === "/graphql").map((request) => JSON.parse(request.body ?? "{}").variables.cursor);
+    expect(cursors).toEqual([null, "c1", "c2"]);
+  });
+
+  const unavailable: [string, unknown][] = [
+    ["the repository is null", { repository: null }],
+    ["the pull request connection is null", { repository: { pullRequests: null } }],
+  ];
+  test.each(unavailable)("rejects when %s", async (_name, data) => {
+    await expect(inspectRepoSettingsPreflight({ readGH: github("read", queueFetch([data])), target: client }))
+      .rejects.toThrow("repository owner/client is unavailable for auto-merge preflight");
+  });
+
+  const cursorFailures: [string, unknown[], string][] = [
+    ["a next page without a cursor", [page([auto], true, null)], "GitHub returned a next page without a cursor"],
+    ["a repeated cursor", [page([manual], true, "c1"), page([manual], true, "c1"), page([manual], false, null)], "GitHub repeated an auto-merge queue cursor"],
+  ];
+  test.each(cursorFailures)("fails on %s instead of looping or undercounting", async (_name, pages, message) => {
+    await expect(inspectRepoSettingsPreflight({ readGH: github("read", queueFetch(pages)), target: client })).rejects.toThrow(message);
+  });
+});
+
 describe("inspectRepoSettingsPreflight", () => {
   test.each([
     ["owner and repository in another case", "Civitaspo/CSM-CI-Actions/.github/workflows/client-merge.yml@e2e", true],
@@ -273,8 +465,22 @@ function configWithoutServer() {
   return parseConfig(`${CONFIG_YAML.replace("name: owner/*", "name: owner/client")}\nrepo_settings: {}\n`);
 }
 
-function dispatchFetch(options: { event?: string; jobIf?: string; approverId?: number; queueCount?: number; enforcement?: string; absent?: boolean; bypass?: { actor_id: number; actor_type: string; bypass_mode: string }[] }) {
-  const workflow = `on:\n  ${options.event ?? "issue_comment"}:\n    types: [created]\njobs:\n  merge:\n    uses: civitaspo/csm-ci-actions/.github/workflows/client-merge.yml@e2e\n    secrets: inherit${options.jobIf ? `\n    if: ${options.jobIf}` : ""}\n`;
+type DispatchOptions = {
+  event?: string;
+  types?: string;
+  jobIf?: string;
+  secretsLine?: string;
+  approverId?: number;
+  approverLogin?: string;
+  queueCount?: number;
+  enforcement?: string;
+  absent?: boolean;
+  bypass?: { actor_id: number; actor_type: string; bypass_mode: string }[];
+};
+
+function dispatchFetch(options: DispatchOptions) {
+  const secretsLine = options.secretsLine ?? "secrets: inherit";
+  const workflow = `on:\n  ${options.event ?? "issue_comment"}:\n    types: ${options.types ?? "[created]"}\njobs:\n  merge:\n    uses: civitaspo/csm-ci-actions/.github/workflows/client-merge.yml@e2e${secretsLine ? `\n    ${secretsLine}` : ""}${options.jobIf ? `\n    if: ${options.jobIf}` : ""}\n`;
   const controlled = {
     id: 81,
     name: "controlled-merges",
@@ -294,7 +500,7 @@ function dispatchFetch(options: { event?: string; jobIf?: string; approverId?: n
     { method: "PUT", path: "/repos/owner/client/rulesets/81", body: controlled },
     { method: "POST", path: "/repos/owner/client/rulesets", body: { id: 90 } },
     { method: "GET", path: "/repos/owner/client/immutable-releases", body: { enabled: true } },
-    { method: "GET", path: "/users/approver%5Bbot%5D", body: { id: options.approverId ?? 4000, login: "approver[bot]" } },
+    { method: "GET", path: "/users/approver%5Bbot%5D", body: { id: options.approverId ?? 4000, login: options.approverLogin ?? "approver[bot]" } },
     {
       method: "POST",
       path: "/graphql",

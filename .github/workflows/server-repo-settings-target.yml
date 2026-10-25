@@ -101,6 +101,19 @@ jobs:
           owner: ${{ steps.target.outputs.target-owner }}
           repositories: ${{ steps.target.outputs.target-name }}
           permission-contents: write
+      - name: Apply repository settings
+        if: steps.inspect.outputs.has-changes == 'true'
+        uses: ./.csm-ci-actions/actions/repo-settings
+        with:
+          mode: apply
+          github-token: ${{ github.token }}
+          config-path: ${{ inputs.config-path }}
+          repository: ${{ inputs.repository }}
+          event-mode: ${{ inputs.event-mode }}
+          read-token: ${{ steps.read-token.outputs.token }}
+          admin-token: ${{ steps.admin-token.outputs.token }}
+          actions-repository: ${{ job.workflow_repository }}
+          approver-app-slug: ${{ steps.approver-token.outputs.app-slug }}
       - id: managed-inspect
         uses: ./.csm-ci-actions/actions/repo-settings
         with:
@@ -133,19 +146,6 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
           permission-workflows: write
-      - name: Apply repository settings
-        if: steps.inspect.outputs.has-changes == 'true'
-        uses: ./.csm-ci-actions/actions/repo-settings
-        with:
-          mode: apply
-          github-token: ${{ github.token }}
-          config-path: ${{ inputs.config-path }}
-          repository: ${{ inputs.repository }}
-          event-mode: ${{ inputs.event-mode }}
-          read-token: ${{ steps.read-token.outputs.token }}
-          admin-token: ${{ steps.admin-token.outputs.token }}
-          actions-repository: ${{ job.workflow_repository }}
-          approver-app-slug: ${{ steps.approver-token.outputs.app-slug }}
       - name: Apply managed files
         if: steps.managed-inspect.outputs.has-changes == 'true'
         uses: ./.csm-ci-actions/actions/repo-settings

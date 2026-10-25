@@ -37394,7 +37394,7 @@ var RuleSetSchema = object({
   target: string2(),
   conditions: record(string2(), unknown()),
   rules: array(object({ type: string2(), parameters: record(string2(), unknown()).optional() })),
-  bypass_actors: array(object({ actor_id: number2(), actor_type: string2(), bypass_mode: string2() }))
+  bypass_actors: array(object({ actor_id: number2().nullable(), actor_type: string2(), bypass_mode: string2() }))
 });
 function repoSettingsRuleSets(config) {
   const defaultBranch = { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } };
@@ -37402,7 +37402,7 @@ function repoSettingsRuleSets(config) {
   return [
     { name: "integrity", enforcement: "active", target: "branch", conditions: defaultBranch, rules: [{ type: "deletion" }, { type: "non_fast_forward" }, { type: "required_linear_history" }, { type: "required_signatures" }], bypass_actors: [] },
     { name: "review-and-checks", enforcement: "active", target: "branch", conditions: defaultBranch, rules: [
-      { type: "pull_request", parameters: { required_approving_review_count: 1, dismiss_stale_reviews_on_push: true, required_reviewers: [], require_code_owner_review: false, require_last_push_approval: false, required_review_thread_resolution: false, require_extra_approval_for_unattributed_changes: true, allowed_merge_methods: ["squash"] } },
+      { type: "pull_request", parameters: { required_approving_review_count: 1, dismiss_stale_reviews_on_push: true, required_reviewers: [], require_code_owner_review: false, require_last_push_approval: false, required_review_thread_resolution: false, require_extra_approval_for_unattributed_changes: false, allowed_merge_methods: ["squash"] } },
       { type: "required_status_checks", parameters: { strict_required_status_checks_policy: false, do_not_enforce_on_create: false, required_status_checks: [{ context: "csm-ci/policy", integration_id: config.apps.server_app_id }, ...config.merge.required_checks.map((check) => ({ context: check.name, integration_id: check.app_id }))] } }
     ], bypass_actors: [] },
     { name: "controlled-merges", enforcement: "active", target: "branch", conditions: defaultBranch, rules: [{ type: "update" }], bypass_actors: serverBypass },
@@ -37501,8 +37501,6 @@ async function applyRepoSettings(args) {
       throw new Error(`missing fixed ruleset definition: ${name}`);
     const id = inspection.rulesetIds[name];
     if (id === undefined) {
-      if (name === "controlled-merges" && args.mode === "schedule")
-        continue;
       await args.adminGH.request({ method: "POST", url: "/repos/{owner}/{repo}/rulesets", ...address, ...definition });
       rulesetsCreated++;
     } else {

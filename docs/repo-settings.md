@@ -23,7 +23,7 @@ repo_settings:
 
 Omitted repository settings remain unchanged. The merge-method settings accept only the values shown above. Managed files map literal relative paths to UTF-8 text. Paths cannot contain traversal, Git metadata, glob syntax, or conflicting parent and child file names. Files use the securefix size limits. Removing a path from configuration stops managing it; it does not delete the file. If `csm-ci/repo-settings` still holds a commit that changed the removed path, later runs reject the branch as changing an unmanaged path. Close its pull request and delete the branch, and the next run starts it again from the default branch.
 
-Configuration comes from the triggering server commit, `GITHUB_SHA`. Discovery intersects the repositories of the Server App installation on the server's owner with `owners` and the first matching `repositories` entry. Repositories under another owner are not discovered. The actions repository is excluded. An explicit repository selector limits the run to that repository. When the selected set includes the server, its job runs after the client jobs succeed.
+Configuration comes from the triggering server commit, `GITHUB_SHA`. Discovery intersects the repositories of the Server App installation on the server's owner with `owners` and the first matching `repositories` entry. Repositories under another owner are not discovered. The actions repository is excluded. An explicit repository selector limits the run to that repository. When the selected set includes the server, its job runs after the client jobs finish, even when one of them failed, so one broken repository cannot stall the server's own repair. Within a repository, settings, rulesets and immutable releases are applied before managed files, so a rejected `csm-ci/repo-settings` branch does not block them.
 
 ## Rulesets and emergency stop
 
@@ -40,7 +40,7 @@ The server matches rulesets by name and `source_type: Repository`. Duplicate nam
 
 A scheduled run does not create `controlled-merges` or activate a disabled ruleset. Every repair that does not activate it, scheduled or dispatched, omits its enforcement, so a stop set during the run is kept. Set its enforcement to `disabled` for an emergency stop. Manual dispatch activates it, creating it when absent, only after these checks pass:
 
-- The default branch contains an unconditional merge caller for newly created issue comments. The server also needs its label caller.
+- The default branch contains a merge caller for newly created issue comments, with `secrets: inherit` and no job-level `if:`. The server also needs its label caller under the same rules.
 - The configured approver App can obtain a repository-scoped contents-write token, and its bot identity matches configuration.
 - No open pull request has auto-merge queued.
 - An existing `controlled-merges` ruleset has only the Server App's `pull_request` bypass.
