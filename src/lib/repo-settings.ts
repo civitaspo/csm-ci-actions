@@ -15,11 +15,9 @@ export function discoverRepoSettingsTargets(args: {
   installedRepositories: unknown[];
   serverRepository: string;
   requestedRepository?: string;
-  actionsRepository?: string;
 }): RepoSettingsTargets {
   if (!args.config.repo_settings) throw new Rejection("repo_settings is not configured");
   const serverName = args.serverRepository.toLowerCase();
-  const actionsRepository = (args.actionsRepository ?? "civitaspo/csm-ci-actions").toLowerCase();
   if (args.config.server_repository !== serverName) throw new Rejection("server repository does not match the pinned configuration");
   const installed = args.installedRepositories.map((value) => {
     const repository = InstalledRepository.parse(value);
@@ -27,12 +25,12 @@ export function discoverRepoSettingsTargets(args: {
   });
   const installedNames = new Set(installed);
   if (!installedNames.has(serverName)) throw new Rejection(`server repository ${serverName} is not installed`);
-  const candidates = [...new Set([...installedNames].filter((name) => name !== actionsRepository && repositoryEntry(args.config, name) !== undefined))];
+  const candidates = [...new Set([...installedNames].filter((name) => repositoryEntry(args.config, name) !== undefined))];
   if (!candidates.includes(serverName)) throw new Rejection(`server repository ${serverName} is not configured`);
 
   if (args.requestedRepository !== undefined) {
     const requested = args.requestedRepository.toLowerCase();
-    if (requested === actionsRepository || !repositoryEntry(args.config, requested) || !installedNames.has(requested)) {
+    if (!repositoryEntry(args.config, requested) || !installedNames.has(requested)) {
       throw new Rejection(`requested repository ${requested} is not installed and configured`);
     }
     if (requested === serverName) return { clients: [], server: { name: serverName, isServer: true } };

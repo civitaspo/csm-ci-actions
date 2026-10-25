@@ -35,7 +35,7 @@ async function main(): Promise<void> {
     const discoveryGH = github(input("discovery-token", true));
     const installed = await discoveryGH.paginate("GET /installation/repositories", { per_page: 100 });
     const requested = input("requested-repository");
-    const targets = discoverRepoSettingsTargets({ config, installedRepositories: installed, serverRepository, actionsRepository, ...(requested ? { requestedRepository: requested } : {}) });
+    const targets = discoverRepoSettingsTargets({ config, installedRepositories: installed, serverRepository, ...(requested ? { requestedRepository: requested } : {}) });
     core.setOutput("clients", JSON.stringify(targets.clients));
     core.setOutput("client-count", String(targets.clients.length));
     core.setOutput("server", JSON.stringify(targets.server));

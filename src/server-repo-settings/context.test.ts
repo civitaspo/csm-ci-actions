@@ -18,12 +18,20 @@ describe("repo-settings execution context", () => {
     expect(() => validateRepoSettingsContext(base)).not.toThrow();
   });
 
+  test("accepts the actions repository as a configured client target", () => {
+    expect(() => validateRepoSettingsContext({
+      ...base,
+      config: { ...config, repositories: [...config.repositories, { name: "civitaspo/csm-ci-actions", ops: [] }] },
+      targetRepository: "civitaspo/csm-ci-actions",
+    })).not.toThrow();
+  });
+
   test.each([
     ["server identity from pinned config", { serverRepository: "civitaspo/other-server" }, /server repository does not match the pinned configuration/],
     ["default branch", { serverRef: "refs/heads/feature" }, /default branch/],
     ["repo settings config", { config: { ...config, repo_settings: undefined } }, /repo_settings is not configured/],
     ["actions repository as server", { config: { ...config, server_repository: "civitaspo/csm-ci-actions" }, serverRepository: "civitaspo/csm-ci-actions" }, /cannot be the server repository/],
-    ["actions repository as target", { targetRepository: "civitaspo/csm-ci-actions" }, /cannot be a repo-settings target/],
+    ["unconfigured actions repository", { targetRepository: "civitaspo/csm-ci-actions" }, /repository civitaspo\/csm-ci-actions is not configured/],
     ["unconfigured target", { targetRepository: "civitaspo/unknown" }, /is not configured/],
   ] as const)("rejects %s", (_name, overrides, message) => {
     expect(() => validateRepoSettingsContext({ ...base, ...overrides })).toThrow(message);
