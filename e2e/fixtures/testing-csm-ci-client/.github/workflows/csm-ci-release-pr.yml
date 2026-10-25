@@ -1,0 +1,26 @@
+name: csm-ci-release-pr
+run-name: "csm-ci-release-pr ${{ inputs.correlation || github.sha }}"
+on:
+  push:
+    branches: [main]
+    paths: [e2e/release-pr-trigger.txt]
+  workflow_dispatch:
+    inputs:
+      correlation:
+        description: E2E request correlation.
+        type: string
+        required: false
+      version:
+        description: Optional semantic version without a v prefix.
+        type: string
+        required: false
+permissions: {}
+jobs:
+  release-pr:
+    permissions:
+      contents: read
+    uses: civitaspo/csm-ci-actions/.github/workflows/client-release-pr.yml@e2e
+    with:
+      version: ${{ inputs.version || '' }}
+    secrets:
+      CSM_CI_CLIENT_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}

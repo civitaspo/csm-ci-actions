@@ -1,0 +1,12 @@
+[changelog]
+header = "# Changelog\n"
+body = """
+{% if version %}## {{ version }}{% endif %}
+{% for commit in commits %}
+- {{ commit.message }}
+{% endfor %}
+"""
+trim = true
+
+[git]
+filter_unconventional = false
