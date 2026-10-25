@@ -38,7 +38,7 @@ The rulesets have fixed meanings from the [security specification](first-release
 
 The server matches rulesets by name and `source_type: Repository`. Duplicate names fail the run. It replaces the complete managed ruleset, leaving unrelated rulesets alone. Immutable releases are enabled and never disabled.
 
-A scheduled run does not create `controlled-merges` or activate a disabled ruleset. It repairs an existing one without sending its enforcement, so a stop set during the run is kept. Set its enforcement to `disabled` for an emergency stop. Manual dispatch activates it, creating it when absent, only after these checks pass:
+A scheduled run does not create `controlled-merges` or activate a disabled ruleset. Every repair that does not activate it, scheduled or dispatched, omits its enforcement, so a stop set during the run is kept. Set its enforcement to `disabled` for an emergency stop. Manual dispatch activates it, creating it when absent, only after these checks pass:
 
 - The default branch contains an unconditional merge caller for newly created issue comments. The server also needs its label caller.
 - The configured approver App can obtain a repository-scoped contents-write token, and its bot identity matches configuration.

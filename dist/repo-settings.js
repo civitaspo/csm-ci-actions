@@ -37332,11 +37332,14 @@ async function hasDistributedCaller(gh, target, defaultBranch, actionsRepository
     if (!isRecord(workflow) || !isRecord(workflow.jobs))
       continue;
     for (const requirement of requirements) {
-      const expectedUses = `${actionsRepository}/.github/workflows/${requirement.workflow}@`;
+      const expectedPath = `/.github/workflows/${requirement.workflow}@`;
       if (!hasCreatedEvent(workflow.on, requirement.event))
         continue;
       for (const job of Object.values(workflow.jobs)) {
-        if (!isRecord(job) || typeof job.uses !== "string" || !job.uses.toLowerCase().startsWith(expectedUses) || job.uses.length === expectedUses.length || "if" in job)
+        if (!isRecord(job) || typeof job.uses !== "string" || "if" in job)
+          continue;
+        const uses = job.uses;
+        if (uses.slice(0, actionsRepository.length).toLowerCase() !== actionsRepository || !uses.slice(actionsRepository.length).startsWith(expectedPath) || uses.length === actionsRepository.length + expectedPath.length)
           continue;
         if (job.secrets === "inherit")
           distributed.add(requirement.workflow);
@@ -37504,7 +37507,7 @@ async function applyRepoSettings(args) {
       rulesetsCreated++;
     } else {
       const { enforcement: _enforcement, ...withoutEnforcement } = definition;
-      const body = name === "controlled-merges" && args.mode === "schedule" ? withoutEnforcement : definition;
+      const body = name === "controlled-merges" && !inspection.activation ? withoutEnforcement : definition;
       await args.adminGH.request({ method: "PUT", url: "/repos/{owner}/{repo}/rulesets/{ruleset_id}", ...address, ruleset_id: id, ...body });
       rulesetsUpdated++;
     }
@@ -37578,6 +37581,13 @@ function validateRepoSettingsContext(args) {
   if (!repositoryEntry(args.config, targetRepository))
     throw new Error(`repository ${targetRepository} is not configured`);
 }
+function repoSettingsEventMode(value, eventName) {
+  if (value !== "schedule" && value !== "dispatch")
+    throw new Error(`unknown event mode ${value}`);
+  if (value === "dispatch" && eventName === "schedule")
+    throw new Error("a scheduled run cannot use dispatch mode");
+  return value;
+}
 
 // src/repo-settings/main.ts
 function env(name) {
@@ -37623,7 +37633,7 @@ async function main() {
     return;
   }
   if (mode === "inspect") {
-    const result = await inspectRepoSettings({ adminGH: github(input("admin-token", true)), config, target, mode: eventMode(input("event-mode", true)) });
+    const result = await inspectRepoSettings({ adminGH: github(input("admin-token", true)), config, target, mode: repoSettingsEventMode(input("event-mode", true), env("GITHUB_EVENT_NAME")) });
     info(`drift for ${target.name}: ${JSON.stringify(result.changes)}; activation required: ${result.activation}`);
     setOutput("changes", JSON.stringify(result.changes));
     setOutput("activation-required", String(result.activation));
@@ -37644,7 +37654,7 @@ async function main() {
   }
   if (mode === "apply") {
     const approverAppSlug = input("approver-app-slug");
-    const result = await applyRepoSettings({ readGH, adminGH: github(input("admin-token", true)), config, target, mode: eventMode(input("event-mode", true)), ...approverAppSlug ? { approverAppSlug } : {}, actionsRepository });
+    const result = await applyRepoSettings({ readGH, adminGH: github(input("admin-token", true)), config, target, mode: repoSettingsEventMode(input("event-mode", true), env("GITHUB_EVENT_NAME")), ...approverAppSlug ? { approverAppSlug } : {}, actionsRepository });
     info(`applied to ${target.name}: ${JSON.stringify(result)}`);
     setOutput("result", JSON.stringify(result));
     return;
@@ -37665,10 +37675,5 @@ async function main() {
     return;
   }
   throw new Error(`unknown repo-settings mode ${mode}`);
-}
-function eventMode(value) {
-  if (value !== "schedule" && value !== "dispatch")
-    throw new Error(`unknown event mode ${value}`);
-  return value;
 }
 main().catch((error) => setFailed(error instanceof Error ? error.message : String(error)));

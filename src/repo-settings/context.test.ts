@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "bun:test";
 import { parseConfig } from "../lib/config.ts";
-import { validateRepoSettingsContext } from "./context.ts";
+import { repoSettingsEventMode, validateRepoSettingsContext } from "./context.ts";
 
 const config = parseConfig(readFileSync("e2e/fixtures/testing-csm-ci-server/csm-ci.yaml", "utf8"));
 const base = {
@@ -27,5 +27,22 @@ describe("repo-settings execution context", () => {
     ["unconfigured target", { targetRepository: "civitaspo/unknown" }, /is not configured/],
   ] as const)("rejects %s", (_name, overrides, message) => {
     expect(() => validateRepoSettingsContext({ ...base, ...overrides })).toThrow(message);
+  });
+});
+
+describe("repo-settings event mode", () => {
+  test.each([
+    ["schedule", "schedule"],
+    ["schedule", "workflow_dispatch"],
+    ["dispatch", "workflow_dispatch"],
+  ])("accepts %s mode from a %s event", (mode, event) => {
+    expect(repoSettingsEventMode(mode, event)).toBe(mode as "schedule" | "dispatch");
+  });
+
+  test.each([
+    ["an unknown mode", "apply", "workflow_dispatch", "unknown event mode apply"],
+    ["dispatch mode in a scheduled run", "dispatch", "schedule", "a scheduled run cannot use dispatch mode"],
+  ])("rejects %s", (_name, mode, event, message) => {
+    expect(() => repoSettingsEventMode(mode, event)).toThrow(message);
   });
 });

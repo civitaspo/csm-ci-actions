@@ -815,14 +815,37 @@ Final local smoke at the same commit passed 5/5 with no skips: [server check](ht
 
 ## 19. Repository settings reconciliation
 
-[PR 21](https://github.com/civitaspo/csm-ci-actions/pull/21) merged release-pr as `23fe9cbc0f99b402eed2813854f6719d43f9a43e` after [status-check](https://github.com/civitaspo/csm-ci-actions/actions/runs/40152425563) passed. Its post-merge [release-pr e2e](https://github.com/civitaspo/csm-ci-actions/actions/runs/40152507012) and [smoke e2e](https://github.com/civitaspo/csm-ci-actions/actions/runs/40152508687) both passed.
+[PR 21](https://github.com/civitaspo/csm-ci-actions/pull/21) merged release-pr as `23fe9cbc0f99b402eed2813854f6719d43f9a43e` after [status-check](https://github.com/civitaspo/csm-ci-actions/actions/runs/40152425563) passed. Its post-merge [release-pr e2e](https://github.com/civitaspo/csm-ci-actions/actions/runs/40152507012) and [smoke e2e](https://github.com/civitaspo/csm-ci-actions/actions/runs/40152508687) both passed. [PR 22](https://github.com/civitaspo/csm-ci-actions/pull/22) recorded the Phase 6 decisions below in the plan first.
 
-Phase 6 uses one global `repo_settings` block, fixed S6 rulesets, and a separate managed-file PR operation. A per-target reconciler owns observation and application, avoiding a general serialized plan/executor layer. The workflow issues tokens through the official action, with separate target-scoped read, administration-write, and file-write tokens. The server job explicitly depends on the client jobs.
+### Design
 
-The repository settings schema deliberately allows only merge-related booleans. Managed files are a map of safe literal paths to text, supplied by the trusted server configuration. A fixed template catalog was rejected because the specification describes managed files without prescribing such a catalog. Repository entries have no policy overrides.
+Phase 6 uses one global `repo_settings` block, the four fixed S6 rulesets, and a separate managed-file PR operation. A per-target reconciler owns observation and application, avoiding a general serialized plan/executor layer. The settings schema allows only merge-related booleans, with the merge methods fixed to squash only. Managed files are a map of safe literal paths to text, supplied by the trusted server configuration. A fixed template catalog was rejected because the specification does not prescribe one. Repository entries have no policy overrides.
 
-Needs the user: the testing approver App is installed only on the testing client. Enabling controlled merges on the testing server requires installing that App there with its existing contents-write permission. No App installation or permission was changed by this work. The same installation is required for the production server during the user-run cutover.
+Tokens come only from the official action. Discovery uses a metadata-only installation token for the server's owner. Each target gets a contents and pull-requests read token for the activation preflight and managed-file inspection, an `administration: write` token for reading and changing settings, rulesets and immutable releases, and a contents and pull-requests write token for managed files, with workflows write added only for workflow paths or the branch reset. The server job runs only after every client job succeeded or the client wave was empty.
 
-Needs the user: changed-content updates to an existing `csm-ci/repo-settings` branch require the S4 conditional reset. The implementation includes that reset, but live testing remains excluded by the authorization to force-push only the actions repository's `e2e` branch. Initial creation and exact-content repetition do not require rewriting existing history.
+The S4 history proof moved from securefix into `src/lib/server-owned-history.ts` and is shared by the securefix route and managed files. It now paginates the comparison, requires a merge base, and checks that the single-parent chain links the merge base to the branch head.
 
-Independent workflow review found that checking only the server label caller could enable controlled merges without a `/merge` caller for the server's own PRs. Server-target preflight now also requires the merge issue-comment caller. The server needs the same Client App repository variables and key as other clients for that caller; distributing those credentials remains a user step. Caller presence checks accept the referenced reusable workflow without enforcing its pin, consistent with S1 and the plan's explicit removal of client provenance checks. Setup examples still prescribe full SHA pins.
+### GitHub behavior verified
+
+- `GET /repos/{owner}/{repo}/rulesets/{id}` omits `bypass_actors` for a token without write access to the ruleset, as the REST documentation states. With the read-only token every bypass looked empty, and the repeated dispatch [40155267064](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40155267064) rejected the ruleset it had just created. Inspection now reads with the administration token, and a response without the field is rejected instead of being read as empty.
+- GitHub stores `{"type":"update","parameters":{"update_allows_fetch_and_merge":false}}` as `{"type":"update"}`. Sending the parameter made every run see drift ([40155746981](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40155746981)). The fixed definition now uses GitHub's stored form.
+- A ruleset PUT without `enforcement` keeps the current value. A probe on testing-csm-ci-client (ruleset 25806815, 2026-10-25) created a disabled ruleset on a non-existent branch, updated it without `enforcement`, read `disabled` back, and deleted it. Every repair that does not activate `controlled-merges` uses this, so a stop set during the run survives.
+- An installation token with `administration: write` sees the merge settings fields of `GET /repos/{owner}/{repo}`.
+
+### Verification
+
+- Local feature e2e at `fb16e062c699e7655f822215fbc23411f4fa3a99` passed 1/1: [initial dispatch](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40156121164) repaired four settings and three rulesets, activated `controlled-merges` after the preflight, and opened the managed PR; the [repeated dispatch](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40156169554) found no drift and skipped the approver token, both apply stages and both managed write tokens; the [schedule](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40156210585) kept a disabled `controlled-merges` disabled; the [server schedule](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40156244742) created three rulesets, enabled immutable releases and did not create `controlled-merges`. The scenario restored both repositories' settings, rulesets and immutable-release state and removed its branch and PR.
+- Mutation checks: 45 core configuration and context mutants (43 killed, two redundant clauses removed); 24 S4 history and managed-file mutants; and 28 more for the review fixes and new rejection rows. Every mutant failed a test, except the empty-page pagination guard, which hangs instead of failing and was detected by timeout. Three redundant clauses were removed: the comparison count check and the page-one duplicate check, both implied by the parent-chain proof, and an unreachable preflight branch.
+- An interrupted mutation run in the previous session had left `if (false)` in place of the pagination guard, and its next run treated that as the original. The guard was restored before any commit. Mutation scripts must time out each test run and restore from a copy taken before the first mutant.
+
+### Needs the user
+
+- The testing approver App is installed only on the testing client. Activating `controlled-merges` on the testing server requires installing it there with its existing contents-write permission. Production needs the same installation on `csm-ci-server`.
+- The server's own merge caller needs the Client App repository variables and key, as for other clients.
+
+### Not verified live
+
+- Changing the content of an existing `csm-ci/repo-settings` branch resets it with a Git lease. Only creation and exact repetition ran live, because force-pushes in the testing repositories are not authorized. Unit and local Git tests cover the reset.
+- Whether GitHub requires workflows write for that reset is unknown. The workflow mints it for every reset to fail safe.
+- The e2e fixture calls the per-target workflow with the schedule mode. The cron trigger and the outer workflow's discovery of every installed repository were not exercised.
+- Activating `controlled-merges` on the server, which depends on the approver installation above.

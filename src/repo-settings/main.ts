@@ -2,7 +2,7 @@ import * as core from "@actions/core";
 import { applyManagedFiles, inspectManagedFiles } from "../lib/managed-files.ts";
 import { applyRepoSettings, discoverRepoSettingsTargets, inspectRepoSettings, inspectRepoSettingsPreflight } from "../lib/repo-settings.ts";
 import { github, loadConfig, splitRepository } from "../lib/github.ts";
-import { validateRepoSettingsContext } from "./context.ts";
+import { repoSettingsEventMode, validateRepoSettingsContext } from "./context.ts";
 
 function env(name: string): string {
   const value = process.env[name];
@@ -47,7 +47,7 @@ async function main(): Promise<void> {
     return;
   }
   if (mode === "inspect") {
-    const result = await inspectRepoSettings({ adminGH: github(input("admin-token", true)), config, target, mode: eventMode(input("event-mode", true)) });
+    const result = await inspectRepoSettings({ adminGH: github(input("admin-token", true)), config, target, mode: repoSettingsEventMode(input("event-mode", true), env("GITHUB_EVENT_NAME")) });
     core.info(`drift for ${target.name}: ${JSON.stringify(result.changes)}; activation required: ${result.activation}`);
     core.setOutput("changes", JSON.stringify(result.changes));
     core.setOutput("activation-required", String(result.activation));
@@ -66,7 +66,7 @@ async function main(): Promise<void> {
   }
   if (mode === "apply") {
     const approverAppSlug = input("approver-app-slug");
-    const result = await applyRepoSettings({ readGH, adminGH: github(input("admin-token", true)), config, target, mode: eventMode(input("event-mode", true)), ...(approverAppSlug ? { approverAppSlug } : {}), actionsRepository });
+    const result = await applyRepoSettings({ readGH, adminGH: github(input("admin-token", true)), config, target, mode: repoSettingsEventMode(input("event-mode", true), env("GITHUB_EVENT_NAME")), ...(approverAppSlug ? { approverAppSlug } : {}), actionsRepository });
     core.info(`applied to ${target.name}: ${JSON.stringify(result)}`);
     core.setOutput("result", JSON.stringify(result));
     return;
@@ -89,9 +89,5 @@ async function main(): Promise<void> {
   throw new Error(`unknown repo-settings mode ${mode}`);
 }
 
-function eventMode(value: string): "schedule" | "dispatch" {
-  if (value !== "schedule" && value !== "dispatch") throw new Error(`unknown event mode ${value}`);
-  return value;
-}
 
 main().catch((error: unknown) => core.setFailed(error instanceof Error ? error.message : String(error)));

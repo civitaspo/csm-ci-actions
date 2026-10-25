@@ -254,6 +254,7 @@ async function assertRepositorySettings(ctx: Ctx, repository: string): Promise<v
   assert(data.allow_rebase_merge === false, "allow_rebase_merge was not reconciled");
 }
 
+// Stops controlled-merges and drifts its bypass, so the schedule must repair it without reactivating it.
 async function disableControlledMerges(ctx: Ctx): Promise<void> {
   const ruleset = (await listManagedRulesets(ctx.gh)).find((item) => item.name === "controlled-merges");
   assert(ruleset, "controlled-merges ruleset is missing after dispatch reconciliation");
@@ -265,13 +266,14 @@ async function disableControlledMerges(ctx: Ctx): Promise<void> {
     enforcement: "disabled",
     conditions: ruleset.conditions,
     rules: ruleset.rules,
-    bypass_actors: ruleset.bypass_actors,
+    bypass_actors: ruleset.bypass_actors.map((actor) => ({ ...actor, bypass_mode: "always" as const })),
   });
 }
 
 async function assertControlledMergesDisabled(ctx: Ctx): Promise<void> {
   const ruleset = (await listManagedRulesets(ctx.gh)).find((item) => item.name === "controlled-merges");
   assert(ruleset?.enforcement === "disabled", `schedule reconciliation changed controlled-merges to ${ruleset?.enforcement ?? "missing"}`);
+  assert(ruleset.bypass_actors.length === 1 && ruleset.bypass_actors[0]?.bypass_mode === "pull_request", "schedule reconciliation did not repair the controlled-merges bypass");
 }
 
 async function rulesetUpdateTimes(gh: GitHub, repository = CLIENT): Promise<Map<number, string | undefined>> {

@@ -101,10 +101,13 @@ async function hasDistributedCaller(gh: GitHub, target: RepoSettingsTarget, defa
     }
     if (!isRecord(workflow) || !isRecord(workflow.jobs)) continue;
     for (const requirement of requirements) {
-      const expectedUses = `${actionsRepository}/.github/workflows/${requirement.workflow}@`;
+      const expectedPath = `/.github/workflows/${requirement.workflow}@`;
       if (!hasCreatedEvent(workflow.on, requirement.event)) continue;
       for (const job of Object.values(workflow.jobs)) {
-        if (!isRecord(job) || typeof job.uses !== "string" || !job.uses.toLowerCase().startsWith(expectedUses) || job.uses.length === expectedUses.length || "if" in job) continue;
+        // Owner and repository names are case-insensitive; the workflow path is not.
+        if (!isRecord(job) || typeof job.uses !== "string" || "if" in job) continue;
+        const uses = job.uses;
+        if (uses.slice(0, actionsRepository.length).toLowerCase() !== actionsRepository || !uses.slice(actionsRepository.length).startsWith(expectedPath) || uses.length === actionsRepository.length + expectedPath.length) continue;
         if (job.secrets === "inherit") distributed.add(requirement.workflow);
       }
     }
@@ -295,9 +298,10 @@ export async function applyRepoSettings(args: {
       await args.adminGH.request({ method: "POST", url: "/repos/{owner}/{repo}/rulesets", ...address, ...definition });
       rulesetsCreated++;
     } else {
-      // A PUT without enforcement keeps the live value, so a stop set after inspection survives.
+      // A PUT without enforcement keeps the live value, so a stop set after inspection survives
+      // every repair that did not pass the activation preflight.
       const { enforcement: _enforcement, ...withoutEnforcement } = definition;
-      const body = name === "controlled-merges" && args.mode === "schedule" ? withoutEnforcement : definition;
+      const body = name === "controlled-merges" && !inspection.activation ? withoutEnforcement : definition;
       await args.adminGH.request({ method: "PUT", url: "/repos/{owner}/{repo}/rulesets/{ruleset_id}", ...address, ruleset_id: id, ...body });
       rulesetsUpdated++;
     }

@@ -26,3 +26,9 @@ export function validateRepoSettingsContext(args: {
   if (targetRepository === actionsRepository) throw new Error("the csm-ci-actions repository cannot be a repo-settings target");
   if (!repositoryEntry(args.config, targetRepository)) throw new Error(`repository ${targetRepository} is not configured`);
 }
+
+export function repoSettingsEventMode(value: string, eventName: string): "schedule" | "dispatch" {
+  if (value !== "schedule" && value !== "dispatch") throw new Error(`unknown event mode ${value}`);
+  if (value === "dispatch" && eventName === "schedule") throw new Error("a scheduled run cannot use dispatch mode");
+  return value;
+}

@@ -63,6 +63,9 @@ describe("repo-settings reusable workflows", () => {
     for (const id of ["preflight", "approver-token"]) {
       expect(steps.find((step) => step.id === id)?.if).toContain("steps.inspect.outputs.activation-required == 'true'");
     }
+    const inspect = record(steps.find((step) => step.id === "inspect")?.with);
+    expect(inspect["admin-token"]).toBe("${{ steps.admin-token.outputs.token }}");
+    expect(inspect).not.toHaveProperty("read-token");
     const apply = steps.find((step) => step.name === "Apply repository settings");
     expect(record(apply?.with)["approver-app-slug"]).toBe("${{ steps.approver-token.outputs.app-slug }}");
   });

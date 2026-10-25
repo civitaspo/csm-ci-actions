@@ -12,7 +12,7 @@ inputs:
   read-token:
     description: Target-scoped Server App token with contents and pull_requests read.
   admin-token:
-    description: Target-scoped Server App token with administration:write, minted after preflight. Inspection reads rulesets with it because GitHub hides bypass actors from read-only callers.
+    description: Target-scoped Server App token with administration:write. Inspection reads rulesets with it because GitHub hides bypass actors from read-only callers.
   contents-token:
     description: Target-scoped Server App token with contents:write and pull_requests:write.
   config-path:
@@ -42,8 +42,6 @@ outputs:
     description: JSON target for the server repository, always processed last.
   caller-distributed:
     description: Whether a valid reusable caller is present on the default branch.
-  approver-can-write:
-    description: Whether the approver App identity and contents:write capability were verified.
   auto-merge-queue-count:
     description: Count of open pull requests with auto-merge enabled.
   changes:
@@ -53,7 +51,7 @@ outputs:
   has-changes:
     description: Whether this target needs settings or managed-file changes.
   requires-workflows-write:
-    description: true when managed files include workflow paths that require workflows:write.
+    description: true when managed files include workflow paths or the managed branch is reset, which require workflows:write.
   changed-paths:
     description: JSON list of managed file paths that differ.
   target-owner:

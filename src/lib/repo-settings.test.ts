@@ -194,6 +194,8 @@ describe("inspectRepoSettings", () => {
     const result = await applyRepoSettings({ readGH: github("read", fetch), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "dispatch" });
     expect(result.rulesetsUpdated).toBe(1);
     expect(fetch.calls).not.toContain("POST /graphql");
+    const put = fetch.requests.find((request) => request.method === "PUT");
+    expect(JSON.parse(put?.body ?? "{}")).not.toHaveProperty("enforcement");
   });
 
   test("schedule repairs controlled-merges without sending enforcement", async () => {
@@ -246,8 +248,12 @@ describe("repoSettingsRuleSets", () => {
 });
 
 describe("inspectRepoSettingsPreflight", () => {
-  test("matches the caller's reusable workflow reference case-insensitively", async () => {
-    const workflow = "on:\n  issue_comment:\n    types: [created]\njobs:\n  merge:\n    uses: Civitaspo/CSM-CI-Actions/.github/workflows/client-merge.yml@e2e\n    secrets: inherit\n";
+  test.each([
+    ["owner and repository in another case", "Civitaspo/CSM-CI-Actions/.github/workflows/client-merge.yml@e2e", true],
+    ["a workflow path in another case", "civitaspo/csm-ci-actions/.github/workflows/CLIENT-MERGE.yml@e2e", false],
+    ["no ref", "civitaspo/csm-ci-actions/.github/workflows/client-merge.yml@", false],
+  ])("caller reference with %s counts as distributed: %s", async (_name, uses, expected) => {
+    const workflow = `on:\n  issue_comment:\n    types: [created]\njobs:\n  merge:\n    uses: ${uses}\n    secrets: inherit\n`;
     const fetch = fakeFetch([
       { method: "GET", path: "/repos/owner/client", body: { default_branch: "main" } },
       { method: "GET", path: "/repos/owner/client/contents/.github%2Fworkflows", body: [{ name: "merge.yml", type: "file" }] },
@@ -255,7 +261,7 @@ describe("inspectRepoSettingsPreflight", () => {
       { method: "POST", path: "/graphql", body: { data: { repository: { pullRequests: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } } },
     ]);
     const result = await inspectRepoSettingsPreflight({ readGH: github("read", fetch), target: { name: "owner/client", isServer: false } });
-    expect(result.callerDistributed).toBe(true);
+    expect(result.callerDistributed).toBe(expected);
   });
 });
 
