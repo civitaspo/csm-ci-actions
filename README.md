@@ -169,7 +169,7 @@ jobs:
 
 Review and merge the generated PR through the repository's current process. Verify the required callers and checks on default before dispatching `reconcile`. Reconciliation activates `controlled-merges` only after its preflight succeeds. The global managed-files map contains literal text; it does not template each repository or provision credentials.
 
-Scheduled runs use `reconcile`. They preserve a disabled `controlled-merges` emergency stop. A later manual reconciliation can activate it again. See [repository settings](docs/repo-settings.md) for prerequisites, drift repair, pending-run replacement, and managed-branch recovery. For migration from an existing installation, use the [cutover guide](docs/cutover.md).
+Scheduled runs use `reconcile`. They preserve a disabled `controlled-merges` emergency stop. A later manual reconciliation can activate it again. See [repository settings](docs/repo-settings.md) for prerequisites, drift repair, pending-run replacement, and managed-branch recovery.
 
 ## Development
 
