@@ -133,7 +133,8 @@ securefix:                                          # global only
         workflow: .github/workflows/csm-ci-release-pr.yml,
         paths: { CHANGELOG.md: any, .release-version: semver,
                  Cargo.toml: version-only, Cargo.lock: version-only,
-                 package.json: version-only, pyproject.toml: version-only } }
+                 package.json: version-only, pyproject.toml: version-only,
+                 dbt_project.yml: version-only } }
 repo_settings:                                      # global only (Phase 6)
   settings: { delete_branch_on_merge: true, allow_auto_merge: false,
               allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false }
@@ -481,6 +482,7 @@ After Phase 0, phases 1, 2, 3, 4, 5a, and 6 can proceed independently in paralle
   - git-cliff produces the version and the CHANGELOG.
   - It writes `.release-version`.
   - It bumps the root version.
+  - For a dbt package, it also updates the root `version` scalar in `dbt_project.yml` when that file exists, alongside any supported root manifest. Preserve all other file content, including nested version fields. Reject malformed YAML, duplicate or missing root versions, non-scalar or non-semver values, and version syntax that cannot satisfy the route's version-only rule before writing release files.
 - Writes go through the securefix route `release-pr` (the S4 version-only check applies).
 
 #### e2e
@@ -493,6 +495,7 @@ After Phase 0, phases 1, 2, 3, 4, 5a, and 6 can proceed independently in paralle
   - A tag or release created beforehand by someone else exists
   - The tag is created by someone other than the Server App (rejected by the ruleset)
 - When release-pr is pushed again, the PR is updated.
+- Release preparation keeps `dbt_project.yml`, `pyproject.toml` and `.release-version` at the same version. Invalid dbt metadata fails without partial file updates; table-driven tests assert each rejection message and mutation checks demonstrate coverage.
 
 ### Phase 6: repo-settings
 
