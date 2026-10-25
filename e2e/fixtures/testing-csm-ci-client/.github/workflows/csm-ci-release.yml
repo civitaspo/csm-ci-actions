@@ -1,6 +1,8 @@
 name: csm-ci-release
 run-name: "csm-ci release #${{ github.event.pull_request.number }}"
 
+# Each e2e request must complete so the harness can correlate it.
+# jactionlint ignore=concurrency-limits
 on:
   pull_request:
     types: [closed]
@@ -11,5 +13,7 @@ jobs:
   release:
     # The reusable workflow needs the Client App key from the client repository.
     # jactionlint ignore=secrets-inherit
-    uses: civitaspo/csm-ci-actions/.github/workflows/client-release.yml@e2e
+    # The harness moves this branch to the commit under test.
+    # jactionlint ignore=unpinned-uses
+    uses: civitaspo/csm-ci-actions/.github/workflows/client-release-publish.yml@e2e
     secrets: inherit

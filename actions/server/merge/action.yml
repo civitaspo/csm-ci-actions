@@ -1,0 +1,49 @@
+name: csm-ci merge
+description: Wait for a fresh, policy-compliant approval and squash-merge a pull request.
+inputs:
+  mode:
+    description: wait checks readiness; merge rechecks readiness and performs the merge; failure-receipt posts an accepted wait failure.
+    required: true
+  github-token:
+    description: Token with contents:read on the server repository to read csm-ci.yaml.
+    default: ${{ github.token }}
+  config-path:
+    description: Path of csm-ci.yaml in the server repository.
+    default: csm-ci.yaml
+  server-token:
+    description: Server App read token for the client repository.
+    required: true
+  notification-token:
+    description: Server App token with issues:write for reactions and request receipts.
+    required: true
+  write-token:
+    description: Server App token with contents:write and pull_requests:write, required only in merge mode.
+    required: false
+  repository:
+    description: owner/repo of the client repository.
+    required: true
+  args:
+    description: JSON request numbers from intake, pull_number and comment_id.
+    required: true
+  head:
+    description: Head SHA produced by wait mode, required only in merge mode.
+    required: false
+  failure-message:
+    description: Original wait failure to include in the failure receipt.
+    required: false
+outputs:
+  ready:
+    description: true when the request is ready to merge.
+  accepted:
+    description: true when the Server App accepted the command and reacted with a rocket.
+  error:
+    description: Wait failure message for a fresh-token failure receipt step.
+  head:
+    description: Pinned pull request head SHA.
+  result:
+    description: merged when the pull request was merged.
+  merge-commit:
+    description: Squash merge commit SHA.
+runs:
+  using: node24
+  main: ../../../dist/server-merge.js

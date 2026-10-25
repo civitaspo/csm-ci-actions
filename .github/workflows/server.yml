@@ -38,7 +38,7 @@ jobs:
           path: .csm-ci-actions
           persist-credentials: false
       - id: intake
-        uses: ./.csm-ci-actions/actions/intake
+        uses: ./.csm-ci-actions/actions/server/intake
         with:
           config-path: ${{ inputs.config-path }}
 
@@ -95,7 +95,7 @@ jobs:
           repositories: ${{ needs.intake.outputs.name }}
           permission-pull-requests: write
       - if: needs.intake.outputs.kind == 'approve'
-        uses: ./.csm-ci-actions/actions/approve
+        uses: ./.csm-ci-actions/actions/server/approve
         with:
           config-path: ${{ inputs.config-path }}
           server-token: ${{ steps.server-token.outputs.token }}
@@ -190,7 +190,7 @@ jobs:
       - id: merge-ready
         if: needs.intake.outputs.kind == 'merge'
         continue-on-error: true
-        uses: ./.csm-ci-actions/actions/merge
+        uses: ./.csm-ci-actions/actions/server/merge
         with:
           mode: wait
           config-path: ${{ inputs.config-path }}
@@ -210,7 +210,7 @@ jobs:
           permission-pull-requests: write
       - if: needs.intake.outputs.kind == 'merge' && steps.merge-ready.outcome == 'failure' && steps.merge-ready.outputs.accepted == 'true'
         continue-on-error: true
-        uses: ./.csm-ci-actions/actions/merge
+        uses: ./.csm-ci-actions/actions/server/merge
         with:
           mode: failure-receipt
           config-path: ${{ inputs.config-path }}
@@ -258,7 +258,7 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
       - if: needs.intake.outputs.kind == 'merge'
-        uses: ./.csm-ci-actions/actions/merge
+        uses: ./.csm-ci-actions/actions/server/merge
         with:
           mode: merge
           config-path: ${{ inputs.config-path }}
@@ -269,7 +269,7 @@ jobs:
           args: ${{ needs.intake.outputs.args }}
           head: ${{ steps.merge-ready.outputs.head }}
       - if: needs.intake.outputs.kind == 'policy-check'
-        uses: ./.csm-ci-actions/actions/policy-check
+        uses: ./.csm-ci-actions/actions/server/policy-check
         with:
           config-path: ${{ inputs.config-path }}
           server-token: ${{ steps.server-token.outputs.token }}
@@ -335,7 +335,7 @@ jobs:
           permission-contents: read
           permission-pull-requests: read
       - id: plan
-        uses: ./.csm-ci-actions/actions/release-plan
+        uses: ./.csm-ci-actions/actions/server/release-plan
         with:
           github-token: ${{ steps.read-token.outputs.token }}
           repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
@@ -351,7 +351,7 @@ jobs:
           owner: ${{ needs.intake.outputs.owner }}
           repositories: ${{ needs.intake.outputs.name }}
           permission-contents: write
-      - uses: ./.csm-ci-actions/actions/release-tag
+      - uses: ./.csm-ci-actions/actions/server/release-tag
         if: steps.plan.outputs.tag-exists != 'true'
         with:
           github-token: ${{ steps.tag-token.outputs.token }}
@@ -423,19 +423,9 @@ jobs:
             git -C client -c commit.gpgsign=false commit --quiet -m "release source"
           git -C client tag "$RELEASE_TAG"
           mkdir -p assets
-      - if: needs.release-plan.outputs.build-type == 'none'
-        uses: ./.csm-ci-actions/actions/release-build/none
-      - if: needs.release-plan.outputs.build-type == 'js-action'
-        uses: ./.csm-ci-actions/actions/release-build/js-action
+      - uses: ./.csm-ci-actions/actions/server/release-build
         with:
-          client-path: client
-      - if: needs.release-plan.outputs.build-type == 'goreleaser'
-        uses: ./.csm-ci-actions/actions/release-build/goreleaser
-        with:
-          client-path: client
-      - if: needs.release-plan.outputs.build-type == 'cargo'
-        uses: ./.csm-ci-actions/actions/release-build/cargo
-        with:
+          build-type: ${{ needs.release-plan.outputs.build-type }}
           client-path: client
           repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
           version: ${{ needs.release-plan.outputs.version }}
@@ -475,7 +465,7 @@ jobs:
           path: assets
           merge-multiple: true
       - id: assets
-        uses: ./.csm-ci-actions/actions/release-assets
+        uses: ./.csm-ci-actions/actions/server/release-assets
         with:
           directory: assets
       - id: predicate
@@ -497,7 +487,7 @@ jobs:
           owner: ${{ needs.intake.outputs.owner }}
           repositories: ${{ needs.intake.outputs.name }}
           permission-contents: write
-      - uses: ./.csm-ci-actions/actions/release-publish
+      - uses: ./.csm-ci-actions/actions/server/release-publish
         with:
           github-token: ${{ steps.server-token.outputs.token }}
           plan: ${{ needs.release-plan.outputs.plan }}

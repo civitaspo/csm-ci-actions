@@ -1,0 +1,43 @@
+name: csm-ci merge client request
+description: Send a merge request to the csm-ci server after filtering the event.
+inputs:
+  client-id:
+    description: Client ID of the Client App.
+    required: true
+  private-key:
+    description: Private key of the Client App.
+    required: true
+  server-repository:
+    description: owner/repo of the server repository.
+    required: true
+outputs:
+  label:
+    description: Name of the created request label.
+    value: ${{ steps.request.outputs.label }}
+runs:
+  using: composite
+  steps:
+    - id: prepare
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/../../../dist/client-merge.js"
+      env:
+        CSM_CI_CLIENT_STAGE: prepare
+        INPUT_SERVER_REPOSITORY: ${{ inputs.server-repository }}
+    - id: token
+      if: steps.prepare.outputs.should-send == 'true'
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      with:
+        client-id: ${{ inputs.client-id }}
+        private-key: ${{ inputs.private-key }}
+        owner: ${{ steps.prepare.outputs.server-owner }}
+        repositories: ${{ steps.prepare.outputs.server-name }}
+        permission-issues: write
+    - id: request
+      if: steps.prepare.outputs.should-send == 'true'
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/../../../dist/client-merge.js"
+      env:
+        CSM_CI_CLIENT_STAGE: request
+        INPUT_SERVER_REPOSITORY: ${{ inputs.server-repository }}
+        INPUT_REQUEST_ARGS: ${{ steps.prepare.outputs.request-args }}
+        INPUT_TOKEN: ${{ steps.token.outputs.token }}

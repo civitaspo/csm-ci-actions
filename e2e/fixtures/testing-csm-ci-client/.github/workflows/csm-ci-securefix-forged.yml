@@ -1,4 +1,6 @@
 name: csm-ci-securefix-forged
+# Each e2e request must complete so the harness can correlate it.
+# jactionlint ignore=concurrency-limits
 on:
   pull_request:
     paths:
@@ -7,6 +9,7 @@ permissions: {}
 jobs:
   package:
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     permissions: {}
     steps:
       - name: Create a forged securefix artifact
@@ -41,9 +44,14 @@ jobs:
           private-key: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}
           repositories: ${{ vars.CSM_CI_SERVER_REPOSITORY }}
           permission-issues: write
-      - uses: civitaspo/csm-ci-actions/actions/request@e2e
-        with:
-          github-token: ${{ steps.token.outputs.token }}
-          server-repository: ${{ vars.CSM_CI_SERVER_REPOSITORY }}
-          kind: securefix
-          args: ${{ github.run_id }}
+      - name: Create test request label
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          SERVER: ${{ vars.CSM_CI_SERVER_REPOSITORY }}
+          KIND: securefix
+          ARGS: ${{ github.run_id }}
+        run: |
+          label="csm-ci-${KIND}-$(openssl rand -hex 8)"
+          description="${GITHUB_REPOSITORY,,}/$ARGS"
+          gh api --method POST "repos/$SERVER/labels" -f name="$label" -f description="$description" -f color=ededed >/dev/null
+          echo "created label $label ($description) in $SERVER"

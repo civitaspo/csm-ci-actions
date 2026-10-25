@@ -1,6 +1,6 @@
 # Release publishing
 
-The client calls `client-release.yml` when a pull request from `release/next` is merged. The client workflow sends only the repository and pull request number. The server re-reads the pull request, merge commit and `.release-version` from GitHub before acting.
+The client calls `client-release-publish.yml` when a pull request from `release/next` is merged. The client workflow sends only the repository and pull request number. The server re-reads the pull request, merge commit and `.release-version` from GitHub before acting.
 
 The matching repository entry must enable `release` and choose one strict build configuration:
 

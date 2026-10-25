@@ -47,7 +47,7 @@ jobs:
           owner: ${{ github.repository_owner }}
           permission-metadata: read
       - id: discover
-        uses: ./.csm-ci-actions/actions/repo-settings
+        uses: ./.csm-ci-actions/actions/server/repo-settings
         with:
           mode: discover
           github-token: ${{ github.token }}

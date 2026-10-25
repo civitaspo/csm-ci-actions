@@ -1,0 +1,9 @@
+name: csm-ci check-config
+description: Validate csm-ci.yaml against the schema of this csm-ci-actions version.
+inputs:
+  path:
+    description: Path of csm-ci.yaml in the checked-out server repository.
+    default: csm-ci.yaml
+runs:
+  using: node24
+  main: ../../../dist/server-check-config.js

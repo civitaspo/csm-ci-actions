@@ -1,0 +1,128 @@
+name: csm-ci release build
+description: Build release assets using the configured build type without publishing or signing.
+inputs:
+  build-type:
+    description: One of none, js-action, goreleaser or cargo.
+    required: true
+  client-path:
+    description: Path to the isolated source snapshot.
+    required: true
+  repository:
+    description: Client owner/repo name, required for cargo.
+    required: false
+  version:
+    description: Planned semver version, required for cargo.
+    required: false
+  target:
+    description: Allowed Cargo target triple, required for cargo.
+    required: false
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        BUILD_TYPE: ${{ inputs.build-type }}
+      run: |
+        case "$BUILD_TYPE" in
+          none|js-action|goreleaser|cargo) ;;
+          *) echo "unsupported release build type: $BUILD_TYPE" >&2; exit 1 ;;
+        esac
+    - if: inputs.build-type == 'none'
+      shell: bash
+      run: mkdir -p assets
+    - if: inputs.build-type == 'js-action'
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+      with:
+        bun-version: 1.4.3
+        no-cache: true
+    - if: inputs.build-type == 'js-action'
+      shell: bash
+      env:
+        CLIENT_PATH: ${{ inputs.client-path }}
+      run: |
+        cd "$CLIENT_PATH"
+        if [ -z "$(git ls-files dist/)" ]; then
+          echo "dist/ has no committed files at the release commit" >&2
+          exit 1
+        fi
+        bun install --frozen-lockfile --ignore-scripts
+        bun run build
+        git add -f -- dist/
+        if ! git diff --cached --quiet HEAD -- dist/; then
+          git diff --cached --stat HEAD -- dist/
+          echo "dist/ differs from the build output at the release commit" >&2
+          exit 1
+        fi
+        mkdir -p ../assets
+    - if: inputs.build-type == 'goreleaser'
+      uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a
+      with:
+        version: v2.19.0
+        distribution: goreleaser
+        workdir: ${{ inputs.client-path }}
+        args: release --skip=publish,sign,announce --clean
+    - if: inputs.build-type == 'goreleaser'
+      shell: bash
+      env:
+        CLIENT_PATH: ${{ inputs.client-path }}
+      run: |
+        mkdir -p assets
+        manifest="$CLIENT_PATH/dist/artifacts.json"
+        if [ ! -f "$manifest" ] || [ -L "$manifest" ]; then
+          echo "GoReleaser did not produce a regular artifacts.json manifest" >&2
+          exit 1
+        fi
+        count=0
+        while IFS= read -r -d '' relative; do
+          case "$relative" in
+            dist/*) ;;
+            *) echo "GoReleaser archive path is outside dist/: $relative" >&2; exit 1 ;;
+          esac
+          file="$CLIENT_PATH/$relative"
+          if [ ! -f "$file" ] || [ -L "$file" ]; then
+            echo "GoReleaser archive is not a regular file: $relative" >&2
+            exit 1
+          fi
+          name="${file##*/}"
+          if [ -e "assets/$name" ]; then
+            echo "duplicate GoReleaser asset name: $name" >&2
+            exit 1
+          fi
+          cp -- "$file" "assets/$name"
+          count=$((count + 1))
+        done < <(jq -j '.[] | select(.type == "Archive") | .path | strings | ., "\u0000"' "$manifest")
+        if [ "$count" -eq 0 ]; then
+          echo "GoReleaser produced no release assets" >&2
+          exit 1
+        fi
+    - if: inputs.build-type == 'cargo'
+      shell: bash
+      env:
+        CLIENT_PATH: ${{ inputs.client-path }}
+        TARGET: ${{ inputs.target }}
+        REPOSITORY: ${{ inputs.repository }}
+        VERSION: ${{ inputs.version }}
+      run: |
+        cd "$CLIENT_PATH"
+        rustup target add "$TARGET"
+        cargo build --locked --release --bins --target "$TARGET"
+        mkdir -p ../assets/staging
+        if [[ "$TARGET" == *windows* ]]; then
+          while IFS= read -r -d '' file; do cp -- "$file" ../assets/staging/; done < <(find "target/$TARGET/release" -maxdepth 1 -type f -name '*.exe' -print0)
+        else
+          for file in "target/$TARGET/release"/*; do
+            if [ -f "$file" ] && [ -x "$file" ]; then cp -- "$file" ../assets/staging/; fi
+          done
+        fi
+        if [ -z "$(find ../assets/staging -type f -print -quit)" ]; then
+          echo "Cargo produced no executable binaries for $TARGET" >&2
+          exit 1
+        fi
+        name="${REPOSITORY##*/}-${VERSION}-${TARGET}.tar.gz"
+        if command -v python3 >/dev/null 2>&1; then
+          python=python3
+        else
+          python=python
+        fi
+        "$python" "$GITHUB_ACTION_PATH/package.py" ../assets/staging "../assets/$name"
+        rm -rf ../assets/staging

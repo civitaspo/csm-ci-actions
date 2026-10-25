@@ -484,7 +484,7 @@ describe("securefix workspace head", () => {
     const workspace = await mkdtemp(join(tmpdir(), "securefix-head-test-"));
     try {
       execFileSync("git", ["init", "-q"], { cwd: workspace });
-      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "one"], { cwd: workspace });
+      execFileSync("git", ["-c", "commit.gpgsign=false", "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "one"], { cwd: workspace });
       const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: workspace }).toString("utf8").trim();
       expect(() => assertWorkspaceAtHead(workspace, head)).not.toThrow();
       expect(() => assertWorkspaceAtHead(workspace, sha)).toThrow(`securefix workspace is at ${head}, not the run head ${sha}; check out the head commit`);
