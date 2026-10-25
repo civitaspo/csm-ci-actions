@@ -1026,3 +1026,24 @@ GitHub verified signed head `baa97c03490ad9f5b79aa01ce40ef1a534978139`. All affe
 | smoke | 5/5 | [client](https://github.com/civitaspo/testing-csm-ci-client/actions/runs/40191332219), [server](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40191341087), [configuration check](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40191332593) |
 
 The repo-settings scenario verified client repair and idempotency, preservation of a disabled controlled-merges stop, server schedule-mode reconciliation, managed-files-only bootstrap with a missing caller, stable PR reuse, skipped administration and approver stages, unchanged administrative state, and normal-mode rejection before applying settings. Both testing repositories passed snapshot restoration checks. The scheduled path was dispatched with schedule mode; actual cron triggering remains unverified. The normal-mode rejection run is an expected failure tested by the passing scenario.
+
+### Post-merge CI e2e
+
+PR 32 was squash-merged as `3a5e26bbbc5f2957a42be86d81862d567ca944d0`. Each affected suite and smoke ran from `main`, one at a time, against that merged revision. All passed without skips.
+
+| Feature | Passed | CI run |
+| --- | ---: | --- |
+| repo-settings | 1/1 | [40191607802](https://github.com/civitaspo/csm-ci-actions/actions/runs/40191607802) |
+| securefix | 14/14 | [40191970499](https://github.com/civitaspo/csm-ci-actions/actions/runs/40191970499) |
+| release-pr | 4/4 | [40192550330](https://github.com/civitaspo/csm-ci-actions/actions/runs/40192550330) |
+| smoke | 5/5 | [40192854354](https://github.com/civitaspo/csm-ci-actions/actions/runs/40192854354) |
+
+## 25. Operator and action documentation
+
+The root README now explains the credential problem, the capabilities, and the client and server entry points. It explicitly acknowledges the strong influence of the Client-Server Model and securefix-action. Each of the six client actions and twelve server actions has a reference beside its metadata, with inputs, outputs, conditional requirements, prerequisites, and direct examples. Internal progress and verification history remain outside those operator-facing introductions.
+
+Tool installation, frozen dependencies, typecheck, all 915 tests, build with clean bundles, and jactionlint passed. A documentation check verified coverage of all declared input and output names, action input names and required fields in the examples, all 23 action-reference YAML examples, and local links. The release-plan JSON example passed its runtime schema. The four root README workflow examples also parsed. Independent review identified and corrected the schedule example, conditional input requirements, token references, cross-repository artifact download fields, and JSON output shapes. No executable files or rejection rules changed.
+
+GitHub verified signed head `189a113f1d418d433f4fd47aabe427270c85e0e2`. Smoke passed all five scenarios without skips: [client request](https://github.com/civitaspo/testing-csm-ci-client/actions/runs/40193650489), [server request](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40193661108), and [configuration check](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40193650799). The later handoff-only evidence commit changes no executable files.
+
+The README requires human review before merge. Phase 7 and the final report remain pending that review. No production cutover was executed.
