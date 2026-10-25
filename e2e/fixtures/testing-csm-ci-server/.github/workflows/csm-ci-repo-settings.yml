@@ -1,0 +1,48 @@
+name: csm-ci repo-settings e2e
+run-name: csm-ci-repo-settings ${{ inputs.correlation }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: Configured testing repository to reconcile.
+        required: true
+        type: string
+      event-mode:
+        description: Exercise the schedule or dispatch reconciliation branch.
+        required: true
+        type: choice
+        options:
+          - schedule
+          - dispatch
+      correlation:
+        description: Unique e2e run identifier.
+        required: false
+        type: string
+      config-path:
+        description: Optional csm-ci.yaml path for controlled fixture scenarios.
+        required: false
+        type: string
+
+permissions: {}
+
+jobs:
+  dispatch:
+    if: inputs.event-mode == 'dispatch'
+    uses: civitaspo/csm-ci-actions/.github/workflows/server-repo-settings.yml@e2e
+    with:
+      repository: ${{ inputs.repository }}
+      config-path: ${{ inputs.config-path || 'csm-ci.yaml' }}
+    secrets: inherit
+    permissions:
+      contents: read
+  schedule:
+    if: inputs.event-mode == 'schedule'
+    uses: civitaspo/csm-ci-actions/.github/workflows/server-repo-settings-target.yml@e2e
+    with:
+      repository: ${{ inputs.repository }}
+      event-mode: ${{ inputs.event-mode }}
+      config-path: ${{ inputs.config-path || 'csm-ci.yaml' }}
+    secrets: inherit
+    permissions:
+      contents: read

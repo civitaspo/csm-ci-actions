@@ -15,8 +15,9 @@ import { smoke } from "./smoke.ts";
 import { securefix } from "./securefix.ts";
 import { release } from "./release.ts";
 import { releasePr } from "./release-pr.ts";
+import { repoSettings } from "./repo-settings.ts";
 
-const FEATURES: Record<string, Scenario[]> = { smoke, approve, merge, "policy-check": policyCheck, securefix, release, "release-pr": releasePr };
+const FEATURES: Record<string, Scenario[]> = { smoke, approve, merge, "policy-check": policyCheck, securefix, release, "release-pr": releasePr, "repo-settings": repoSettings };
 
 const LOCK = "e2e-lock";
 const LOCK_TTL_MS = 60 * 60_000;

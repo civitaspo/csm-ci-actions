@@ -176,9 +176,7 @@ async function inspectNewRouteFile(path: string, options: RouteOptions = {}) {
         get: async () => ({ data: { id: 1, default_branch: "main" } }),
         getCommit: async ({ ref }: { ref: string }) => ({ data: ref === runSha
           ? { commit: { tree: { sha: parentTreeSha } } }
-          : ref === (options.targetSha ?? runSha)
-            ? { parents: [], commit: { tree: { sha: parentTreeSha } } }
-            : {
+          : {
                 parents: options.historyCommit?.parents ?? [{ sha: runSha }],
                 files: options.historyFilesUndefined ? undefined : options.historyCommit?.files ?? [],
                 author: { id: options.trustedHistoryCommit === false ? 999 : 3000 },
@@ -194,7 +192,7 @@ async function inspectNewRouteFile(path: string, options: RouteOptions = {}) {
           if (options.contentObject) return { data: options.contentObject };
           throw missing;
         },
-        compareCommitsWithBasehead: async () => ({ data: options.comparison ?? { ahead_by: 0, commits: [] } }),
+        compareCommitsWithBasehead: async () => ({ data: { merge_base_commit: { sha: runSha }, ...(options.comparison ?? { ahead_by: 0, commits: [] }) } }),
       },
       git: {
         getTree: async () => ({ data: { truncated: false, tree: [] } }),
@@ -378,29 +376,29 @@ describe("securefix retry inspection", () => {
     {
       name: "commit not made by server",
       expected: "securefix route target branch contains a commit not made by the server",
-      options: { targetSha: appliedSha, comparison: { ahead_by: 1, commits: [{ sha: "1".repeat(40) }] }, trustedHistoryCommit: false },
+      options: { targetSha: appliedSha, comparison: { ahead_by: 1, commits: [{ sha: appliedSha }] }, trustedHistoryCommit: false },
     },
     {
       name: "incomplete changed-file list",
       expected: "securefix route target branch change list is incomplete",
-      options: { targetSha: appliedSha, comparison: { ahead_by: 1, commits: [{ sha: "1".repeat(40) }] }, historyCommit: { parents: [{ sha: runSha }] }, historyFilesUndefined: true },
+      options: { targetSha: appliedSha, comparison: { ahead_by: 1, commits: [{ sha: appliedSha }] }, historyCommit: { parents: [{ sha: runSha }] }, historyFilesUndefined: true },
     },
     {
       name: "change-file list at API limit",
       expected: "securefix route target branch change list is incomplete",
-      options: { targetSha: appliedSha, comparison: { ahead_by: 1, commits: [{ sha: "1".repeat(40) }] }, historyCommit: { parents: [{ sha: runSha }], files: Array.from({ length: 300 }, (_, i) => ({ filename: `file-${i}.txt`, status: "modified", additions: 0, deletions: 0, changes: 0 })) } },
+      options: { targetSha: appliedSha, comparison: { ahead_by: 1, commits: [{ sha: appliedSha }] }, historyCommit: { parents: [{ sha: runSha }], files: Array.from({ length: 300 }, (_, i) => ({ filename: `file-${i}.txt`, status: "modified", additions: 0, deletions: 0, changes: 0 })) } },
     },
     {
       name: "merge commit in history",
       expected: "securefix route target branch contains a merge or root commit",
-      options: { targetSha: appliedSha, comparison: { ahead_by: 1, commits: [{ sha: "1".repeat(40) }] }, historyCommit: { parents: [{ sha: runSha }, { sha: appliedSha }], files: [] } },
+      options: { targetSha: appliedSha, comparison: { ahead_by: 1, commits: [{ sha: appliedSha }] }, historyCommit: { parents: [{ sha: runSha }, { sha: appliedSha }], files: [] } },
     },
     {
       name: "commit changes a path outside the route allowlist",
       expected: 'securefix route does not allow path "secret.txt"',
       options: {
         targetSha: appliedSha,
-        comparison: { ahead_by: 1, commits: [{ sha: "1".repeat(40) }] },
+        comparison: { ahead_by: 1, commits: [{ sha: appliedSha }] },
         historyCommit: { parents: [{ sha: runSha }], files: [{ filename: "secret.txt", status: "added", additions: 1, deletions: 0, changes: 1 }] },
         historyFile: { filename: "secret.txt", content: Buffer.from("secret\n") },
       },

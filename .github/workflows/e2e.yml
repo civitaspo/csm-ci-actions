@@ -10,7 +10,16 @@ on:
       feature:
         description: Feature whose scenarios run.
         default: smoke
-        type: string
+        type: choice
+        options:
+          - smoke
+          - approve
+          - merge
+          - policy-check
+          - securefix
+          - release
+          - release-pr
+          - repo-settings
 
 permissions: {}
 

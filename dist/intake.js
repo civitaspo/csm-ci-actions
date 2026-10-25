@@ -36620,6 +36620,43 @@ var SecurefixSchema = strictObject({
   allow_workflow_changes: boolean2(),
   routes: array(SecurefixRoute).refine((routes) => new Set(routes.map((route) => route.name)).size === routes.length, "duplicate route name")
 });
+var RepoSettings = strictObject({
+  settings: strictObject({
+    delete_branch_on_merge: boolean2().optional(),
+    allow_auto_merge: boolean2().optional(),
+    allow_squash_merge: literal(true).optional(),
+    allow_merge_commit: literal(false).optional(),
+    allow_rebase_merge: literal(false).optional()
+  }).optional(),
+  managed_files: record(string2(), string2()).default({})
+}).superRefine((value, ctx) => {
+  const paths = Object.keys(value.managed_files);
+  if (paths.length > 512)
+    ctx.addIssue({ code: "custom", path: ["managed_files"], message: "must contain at most 512 files" });
+  let totalBytes = 0;
+  for (const path of paths) {
+    const content = value.managed_files[path] ?? "";
+    const bytes = new TextEncoder().encode(content).byteLength;
+    totalBytes += bytes;
+    if (!isSafeManagedFilePath(path)) {
+      ctx.addIssue({ code: "custom", path: ["managed_files", path], message: "must be a safe literal relative file path" });
+    }
+    if (bytes > 8 * 1024 * 1024) {
+      ctx.addIssue({ code: "custom", path: ["managed_files", path], message: "file must be at most 8 MiB" });
+    }
+  }
+  if (totalBytes > 10 * 1024 * 1024) {
+    ctx.addIssue({ code: "custom", path: ["managed_files"], message: "total file content must be at most 10 MiB" });
+  }
+  for (const path of paths) {
+    if (paths.some((other) => other !== path && other.startsWith(`${path}/`))) {
+      ctx.addIssue({ code: "custom", path: ["managed_files", path], message: "file paths must not contain a file as a directory prefix" });
+    }
+  }
+});
+function isSafeManagedFilePath(path) {
+  return !/^[A-Za-z]:/u.test(path) && !path.includes("\\") && !/[\u0000-\u001f\u007f]/u.test(path) && !/[?*\[\]{}!()]/u.test(path) && path.split("/").every((segment) => segment !== "" && segment !== "." && segment !== ".." && segment.toLowerCase() !== ".git");
+}
 var RepositoryEntry = strictObject({
   name: string2().min(1).transform((s) => s.toLowerCase()),
   ops: array(_enum(OPS)).refine((ops) => new Set(ops).size === ops.length, "duplicate op"),
@@ -36641,6 +36678,7 @@ var ConfigSchema = strictObject({
   }),
   policies: array(PolicySchema),
   securefix: SecurefixSchema.optional(),
+  repo_settings: RepoSettings.optional(),
   repositories: array(RepositoryEntry).min(1)
 }).superRefine((c, ctx) => {
   for (const list of ["committers", "approvers", "mergers", "bot_mergers"]) {

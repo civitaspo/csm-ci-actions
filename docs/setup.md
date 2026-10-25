@@ -249,3 +249,37 @@ jobs:
 ```
 
 Pushes infer the version through git-cliff. Manual dispatches may supply an exact version. Generation packages the changelog and root version edits; the server applies them to `release/next` through securefix and maintains its PR. No client App credential is passed to the generation job.
+
+## 6. Add repository settings reconciliation
+
+Install the approver App on the server as well as the clients before enabling controlled merges there. Add the client approval, policy-check, and merge callers to the server too, using the same Client App variables and key as other clients. Its label caller handles incoming requests, while its client callers submit requests for its own pull requests. Add the global [`repo_settings` configuration](repo-settings.md) and ensure the server is included in `repositories`.
+
+Add `.github/workflows/csm-ci-repo-settings.yml` to the server's default branch:
+
+```yaml
+name: csm-ci-repo-settings
+on:
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: Optional configured owner/repo target.
+        type: string
+        required: false
+permissions: {}
+jobs:
+  settings:
+    permissions:
+      contents: read
+    uses: civitaspo/csm-ci-actions/.github/workflows/server-repo-settings.yml@<sha>
+    with:
+      repository: ${{ inputs.repository || '' }}
+    # Environment secrets reach the reusable workflow only through inherit.
+    # jactionlint ignore=secrets-inherit
+    secrets: inherit
+```
+
+Pin `<sha>` to the reviewed actions commit. The schedule repairs drift without creating or re-enabling `controlled-merges`. To activate it, first distribute the merge caller and clear the auto-merge queue, then dispatch for that repository. The server verifies these prerequisites before changing settings.
+
+Review managed-file pull requests from `csm-ci/repo-settings` and request `/merge` through the normal approval process. To stop controlled merging, set the ruleset's enforcement to `disabled`; the schedule preserves that state.
