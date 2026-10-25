@@ -8,6 +8,7 @@ type ReleasePr = Awaited<ReturnType<typeof openReleasePr>>;
 type ReleaseRun = { run: Run; jobRows: { name: string; id: number; conclusion: string | null }[]; label: string };
 
 const terraformFixture = {
+  "dist/action.js": null,
   ".goreleaser.yaml": `version: 2
 project_name: terraform-provider-csm-ci-test
 builds:
