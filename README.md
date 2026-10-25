@@ -1,6 +1,6 @@
 # csm-ci-actions
 
-Approve, check, merge, fix, and release changes without giving client CI jobs credentials that can write to their own repositories. Client workflows submit requests to a separate server repository. The server holds the write credentials, checks each request against GitHub and its configuration, and applies the permitted change.
+This repository provides GitHub Actions for CI tasks such as approvals, checks, merges, fixes, and releases without granting broad permissions to client repositories. Client workflows submit requests to a separate server repository. The server holds the write credentials, checks each request against GitHub and its configuration, and applies the permitted change.
 
 This project is **strongly inspired by the [Client-Server Model](https://github.com/csm-actions/docs) and [securefix-action](https://github.com/csm-actions/securefix-action)**. They address the same problem: allowing CI to make useful repository changes without placing powerful write credentials in the workflows that run client code. Their separation of client requests from server-side validation is the foundation of this project's design.
 
