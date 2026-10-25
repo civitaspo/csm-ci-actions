@@ -2,6 +2,8 @@
 
 Generate release changes for a client repository, package them as a securefix request, and ask the server to update the `release/next` branch and pull request. The action generates `.release-version` and `CHANGELOG.md`, then updates supported root manifest versions.
 
+Supported manifests include `package.json`, `Cargo.toml` with its root `Cargo.lock` entry, `pyproject.toml`, and the root version in `dbt_project.yml`. Existing manifests are validated before writes; their unrelated content is preserved. Include every generated manifest in the server's version-only release route.
+
 Call it through the reusable [client-release-prepare workflow](../../../.github/workflows/client-release-prepare.yml), which runs on pushes and manual dispatches from the default branch. Its `version` workflow input is optional. See [release PR behavior](../../../docs/release-pr.md), [securefix behavior](../../../docs/securefix.md), and [setup](../../../docs/setup.md).
 
 ## Inputs

@@ -6,9 +6,11 @@ The generation job checks out the triggering commit with full history and a read
 
 ## Generated files
 
-The preparation action writes `.release-version` and `CHANGELOG.md`. It updates existing root version fields in `package.json`, `Cargo.toml` (`[package]`), and `pyproject.toml` (`[project]`). When Cargo has a lockfile, it updates only the root package's version in `Cargo.lock`. A repository without these manifests still gets the release version and changelog.
+The preparation action writes `.release-version` and `CHANGELOG.md`. It updates existing root version fields in `package.json`, `Cargo.toml` (`[package]`), `pyproject.toml` (`[project]`), and `dbt_project.yml` (root `version`). When Cargo has a lockfile, it updates only the root package's version in `Cargo.lock`. A repository without these manifests still gets the release version and changelog.
 
 Version edits preserve the other file contents. Existing manifests must have an unambiguous supported root version field. Dependency versions, lockfile dependencies, and nested workspace packages are not bumped. TOML manifests containing triple-quoted strings are rejected because their contents can resemble table headers or version fields. Unsupported or ambiguous files fail generation before a request is sent. The server independently enforces the route's line-level `version-only` rule, so JSON version fields must occupy their own line.
+
+For dbt, the YAML must have unique keys and one string root version containing valid SemVer. The version must occupy a single block-mapping line using `version` or `"version"` as the key and a plain, single-quoted or double-quoted value. Flow mappings, aliases, anchors, tags and escaped version text are unsupported. Validation finishes before any manifest, release version or changelog is written. Comments, quoting, line endings and nested version fields are preserved.
 
 ## Server route
 
@@ -29,6 +31,7 @@ securefix:
         Cargo.lock: version-only
         package.json: version-only
         pyproject.toml: version-only
+        dbt_project.yml: version-only
 ```
 
 The caller's workflow path must match this route. The server re-fetches its run and requires the run's head to equal the current default-branch head. A concurrent push can therefore make an older request fail; the newer push generates the current release PR.
