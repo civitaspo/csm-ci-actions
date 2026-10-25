@@ -7,3 +7,6 @@ body = """
 {% endfor %}
 """
 trim = true
+
+[git]
+filter_unconventional = false
