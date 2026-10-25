@@ -106,7 +106,7 @@ const compositeActionSchema = z.object({
   outputs: z.record(z.string(), z.object({ value: z.string().optional() })),
   runs: z.object({ using: z.string(), steps: z.array(z.object({
     id: z.string().optional(), if: z.string().optional(), uses: z.string().optional(),
-    run: z.string().optional(), with: z.record(z.string(), z.string()).optional(),
+    run: z.string().optional(), with: z.record(z.string(), z.unknown()).optional(),
   })) }),
 });
 
@@ -131,4 +131,24 @@ describe("client composites", () => {
     expect(request?.run).toContain(`dist/client-${operation}.js`);
     expect(action.outputs.label?.value).toBe("${{ steps.request.outputs.label }}");
   });
+});
+
+
+test.each(["securefix", "release-prepare"])("%s owns packaging and the scoped request token", (operation) => {
+  const action = compositeActionSchema.parse(parse(readFileSync(`actions/client/${operation}/action.yml`, "utf8")));
+  for (const input of ["client-id", "private-key", "server-repository"]) expect(action.inputs[input]?.required).toBe(true);
+  const steps = action.runs.steps;
+  const packageIndex = steps.findIndex((step) => step.id === "package");
+  const tokenIndex = steps.findIndex((step) => step.id === "token");
+  expect(packageIndex).toBeGreaterThanOrEqual(0);
+  expect(tokenIndex).toBeGreaterThan(packageIndex);
+  const token = steps[tokenIndex];
+  expect(token?.uses?.startsWith("actions/create-github-app-token@")).toBe(true);
+  expect(token?.with?.owner).toBe("${{ steps.package.outputs.server-owner }}");
+  expect(token?.with?.repositories).toBe("${{ steps.package.outputs.server-name }}");
+  expect(Object.keys(token?.with ?? {}).filter((input) => input.startsWith("permission-"))).toEqual(["permission-issues"]);
+  expect(token?.with?.["permission-issues"]).toBe("write");
+  for (const step of steps.slice(packageIndex + 1)) expect(step.if).toBe("steps.package.outputs.has-changes == 'true'");
+  expect(steps.at(-1)?.id).toBe("request");
+  expect(action.outputs.label?.value).toBe("${{ steps.request.outputs.label }}");
 });

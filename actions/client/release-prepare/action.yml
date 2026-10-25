@@ -1,6 +1,15 @@
 name: csm-ci release PR preparation
-description: Generate a release changelog and update version files.
+description: Generate release changes and request their application through securefix.
 inputs:
+  client-id:
+    description: Client ID of the Client App, from the CSM_CI_CLIENT_APP_CLIENT_ID variable.
+    required: true
+  private-key:
+    description: Private key of the Client App, from the CSM_CI_CLIENT_APP_PRIVATE_KEY secret.
+    required: true
+  server-repository:
+    description: owner/repo of the server repository, from the CSM_CI_SERVER_REPOSITORY variable.
+    required: true
   workspace:
     description: Client repository root.
     required: true
@@ -8,6 +17,9 @@ inputs:
     description: Explicit unprefixed SemVer. When omitted, git-cliff selects the next version.
     required: false
 outputs:
+  label:
+    description: Name of the securefix request label.
+    value: ${{ steps.request.outputs.label }}
   version:
     description: Prepared release version without a v prefix.
     value: ${{ steps.prepare.outputs.version }}
@@ -24,3 +36,36 @@ runs:
       env:
         INPUT_WORKSPACE: ${{ inputs.workspace }}
         INPUT_VERSION: ${{ inputs.version }}
+    - id: package
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/../../../dist/client-securefix.js"
+      env:
+        CSM_CI_SECUREFIX_STEP: package
+        INPUT_WORKSPACE: ${{ inputs.workspace }}
+        INPUT_MESSAGE: "chore(release): v${{ steps.prepare.outputs.version }}"
+        INPUT_SERVER_REPOSITORY: ${{ inputs.server-repository }}
+    - if: steps.package.outputs.has-changes == 'true'
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: securefix
+        path: ${{ steps.package.outputs.artifact-path }}
+        if-no-files-found: error
+        retention-days: 1
+    # The private key goes only to the official action; csm-ci code receives the token.
+    - id: token
+      if: steps.package.outputs.has-changes == 'true'
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      with:
+        client-id: ${{ inputs.client-id }}
+        private-key: ${{ inputs.private-key }}
+        owner: ${{ steps.package.outputs.server-owner }}
+        repositories: ${{ steps.package.outputs.server-name }}
+        permission-issues: write
+    - id: request
+      if: steps.package.outputs.has-changes == 'true'
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/../../../dist/client-securefix.js"
+      env:
+        CSM_CI_SECUREFIX_STEP: request
+        INPUT_TOKEN: ${{ steps.token.outputs.token }}
+        INPUT_SERVER_REPOSITORY: ${{ inputs.server-repository }}

@@ -248,7 +248,7 @@ jobs:
       CSM_CI_CLIENT_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}
 ```
 
-Pushes infer the version through git-cliff. Manual dispatches may supply an exact version. Generation packages the changelog and root version edits; the server applies them to `release/next` through securefix and maintains its PR. The generation job receives the Client App key through the securefix action; its token has only issues write access on the server repository.
+Pushes infer the version through git-cliff. Manual dispatches may supply an exact version. Generation packages the changelog and root version edits; the server applies them to `release/next` through securefix and maintains its PR. The generation job receives the Client App key through the release-prepare action; its token has only issues write access on the server repository.
 
 ## 6. Add repository settings reconciliation
 
