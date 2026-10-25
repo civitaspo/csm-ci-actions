@@ -1013,3 +1013,16 @@ Tool and frozen dependency installation, typecheck, all 915 tests, build and jac
 Both original bug reproductions now pass: the first untrusted history page is rejected after one comparison call, and an ancestor managed branch requires a lease-protected rebuild even when its files match. A local Git repository establishes the ancestor/default-drift shape. These are local proofs, not a claim that a live changed-content reset was performed.
 
 Review also exposed inconsistent handling of an explicitly empty mode: the action normalized it to `reconcile`, while workflow conditions used the raw input. Workflows now consume the validated mode output for target calls and administrative-stage gates. This does not weaken the rejection of managed-files-only execution on a schedule or another non-dispatch event.
+
+### Signed-head live verification
+
+GitHub verified signed head `baa97c03490ad9f5b79aa01ce40ef1a534978139`. All affected suites and smoke passed sequentially without skips. The later handoff evidence update changes no executable files.
+
+| Feature | Passed | Representative runs |
+| --- | ---: | --- |
+| repo-settings | 1/1 | [initial repair](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40190158626), [bootstrap](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40190367454), [bootstrap repeat](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40190408871), [expected normal-mode rejection](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40190449100) |
+| securefix | 14/14 | [PR update](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40190527394), [route retry](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40190858236), [default-branch rejection](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40190996611) |
+| release-pr | 4/4 | [explicit version](https://github.com/civitaspo/testing-csm-ci-client/actions/runs/40191049390), [repeat](https://github.com/civitaspo/testing-csm-ci-client/actions/runs/40191114132), [inferred version](https://github.com/civitaspo/testing-csm-ci-client/actions/runs/40191195191) |
+| smoke | 5/5 | [client](https://github.com/civitaspo/testing-csm-ci-client/actions/runs/40191332219), [server](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40191341087), [configuration check](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40191332593) |
+
+The repo-settings scenario verified client repair and idempotency, preservation of a disabled controlled-merges stop, server schedule-mode reconciliation, managed-files-only bootstrap with a missing caller, stable PR reuse, skipped administration and approver stages, unchanged administrative state, and normal-mode rejection before applying settings. Both testing repositories passed snapshot restoration checks. The scheduled path was dispatched with schedule mode; actual cron triggering remains unverified. The normal-mode rejection run is an expected failure tested by the passing scenario.
