@@ -13,15 +13,21 @@ describe("discoverRepoSettingsTargets", () => {
   ];
 
   test("selects configured installed repositories and keeps the server last", () => {
-    expect(discoverRepoSettingsTargets({ config: configWithSettings(), installedRepositories: installed, serverRepository: "owner/server", actionsRepository: "owner/csm-ci-actions" })).toEqual({
-      clients: [{ name: "owner/client", isServer: false }, { name: "owner/unconfigured", isServer: false }],
+    expect(discoverRepoSettingsTargets({ config: configWithSettings(), installedRepositories: installed, serverRepository: "owner/server" })).toEqual({
+      clients: [{ name: "owner/client", isServer: false }, { name: "owner/csm-ci-actions", isServer: false }, { name: "owner/unconfigured", isServer: false }],
       server: { name: "owner/server", isServer: true },
     });
   });
 
   test("a requested client does not implicitly select the server", () => {
-    expect(discoverRepoSettingsTargets({ config: configWithSettings(), installedRepositories: installed, serverRepository: "owner/server", actionsRepository: "owner/csm-ci-actions", requestedRepository: "OWNER/client" })).toEqual({
+    expect(discoverRepoSettingsTargets({ config: configWithSettings(), installedRepositories: installed, serverRepository: "owner/server", requestedRepository: "OWNER/client" })).toEqual({
       clients: [{ name: "owner/client", isServer: false }], server: null,
+    });
+  });
+
+  test("selects an explicitly requested configured actions repository as a client", () => {
+    expect(discoverRepoSettingsTargets({ config: configWithSettings(), installedRepositories: installed, serverRepository: "owner/server", requestedRepository: "OWNER/csm-ci-actions" })).toEqual({
+      clients: [{ name: "owner/csm-ci-actions", isServer: false }], server: null,
     });
   });
 
@@ -30,7 +36,8 @@ describe("discoverRepoSettingsTargets", () => {
     ["server not installed", { config: configWithSettings(), installedRepositories: installed.slice(1), serverRepository: "owner/server" }, "server repository owner/server is not installed"],
     ["server not configured", { config: configWithoutServer(), installedRepositories: installed, serverRepository: "owner/server" }, "server repository owner/server is not configured"],
     ["requested repository missing", { config: configWithSettings(), installedRepositories: installed, serverRepository: "owner/server", requestedRepository: "owner/missing" }, "requested repository owner/missing is not installed and configured"],
-    ["actions repository excluded", { config: configWithSettings(), installedRepositories: installed, serverRepository: "owner/server", actionsRepository: "owner/csm-ci-actions", requestedRepository: "owner/csm-ci-actions" }, "requested repository owner/csm-ci-actions is not installed and configured"],
+    ["requested actions repository not installed", { config: configWithSettings(), installedRepositories: installed.filter((repository) => repository.name !== "csm-ci-actions"), serverRepository: "owner/server", requestedRepository: "owner/csm-ci-actions" }, "requested repository owner/csm-ci-actions is not installed and configured"],
+    ["requested actions repository not configured", { config: { ...configWithSettings(), repositories: [{ name: "owner/server", ops: [] }] }, installedRepositories: installed, serverRepository: "owner/server", requestedRepository: "owner/csm-ci-actions" }, "requested repository owner/csm-ci-actions is not installed and configured"],
   ];
   test.each(rejects)("rejects %s", (_, args, message) => {
     expect(() => discoverRepoSettingsTargets(args)).toThrow(message);

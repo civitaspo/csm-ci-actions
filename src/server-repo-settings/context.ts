@@ -23,7 +23,6 @@ export function validateRepoSettingsContext(args: {
 
   const targetRepository = args.targetRepository.toLowerCase();
   splitRepository(targetRepository);
-  if (targetRepository === actionsRepository) throw new Error("the csm-ci-actions repository cannot be a repo-settings target");
   if (!repositoryEntry(args.config, targetRepository)) throw new Error(`repository ${targetRepository} is not configured`);
 }
 
