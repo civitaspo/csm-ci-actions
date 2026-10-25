@@ -45,3 +45,4 @@
 ### ⚙️ Miscellaneous Tasks
 
 - *(ci)* Bootstrap managed client callers (#36)
+- *(release)* V0.1.0
