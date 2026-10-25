@@ -124,8 +124,11 @@ export const releasePr: Scenario[] = [
         });
         const run = await waitRun(ctx, CLIENT, started.id);
         assert(run.conclusion === "skipped", "non-default dispatch did not skip");
-        const byName = await jobs(ctx, CLIENT, run.id);
-        assert(byName.size > 0 && [...byName.values()].every((job) => job.conclusion === "skipped"), "non-default dispatch ran a release-pr job");
+        const byName = await until("completed non-default release-pr jobs", async () => {
+          const found = await jobs(ctx, CLIENT, run.id);
+          return found.has("generate") && found.has("request") && [...found.values()].every((job) => job.conclusion !== null) ? found : undefined;
+        });
+        assert([...byName.values()].every((job) => job.conclusion === "skipped"), "non-default dispatch ran a release-pr job");
         const artifacts = await ctx.gh.paginate(ctx.gh.rest.actions.listWorkflowRunArtifacts, { ...repo, run_id: run.id, per_page: 100 });
         assert(artifacts.length === 0, "non-default dispatch uploaded an artifact");
       } finally {
