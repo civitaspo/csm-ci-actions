@@ -116,6 +116,11 @@ export async function verifyLiveLabel(gh: GitHub, serverRepository: string, name
 import { setTimeout as delay } from "node:timers/promises";
 
 // Creates the request label in the server repository with a Client App token.
+// e2e correlates client runs with server runs by this exact line.
+export function requestLogLine(label: { name: string; description: string }, server: string): string {
+  return `created label ${label.name} (${label.description}) in ${server}`;
+}
+
 export async function createRequestLabel(gh: GitHub, server: string, kind: string, repository: string, numbers: readonly (string | number)[]): Promise<{ name: string; description: string }> {
   const label = buildLabel(kind, repository, numbers);
   await gh.rest.issues.createLabel({ ...splitRepository(server), ...label, color: "1f6feb" });

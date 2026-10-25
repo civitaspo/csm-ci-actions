@@ -35120,6 +35120,9 @@ function splitRepository(fullName) {
     throw new Error(`${fullName} is not owner/repo`);
   return { owner, repo };
 }
+function requestLogLine(label, server) {
+  return `created label ${label.name} (${label.description}) in ${server}`;
+}
 async function createRequestLabel(gh, server, kind, repository, numbers) {
   const label = buildLabel(kind, repository, numbers);
   await gh.rest.issues.createLabel({ ...splitRepository(server), ...label, color: "1f6feb" });
@@ -35135,6 +35138,6 @@ async function main() {
   const gh = github(getInput("github-token", { required: true }));
   const label = await createRequestLabel(gh, server, getInput("kind", { required: true }), repository, getInput("args", { required: true }).split("/"));
   setOutput("label", label.name);
-  info(`created label ${label.name} (${label.description}) in ${server}`);
+  info(requestLogLine(label, server));
 }
 main().catch((e) => setFailed(e instanceof Error ? e.message : String(e)));

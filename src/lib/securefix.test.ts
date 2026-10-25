@@ -6,7 +6,7 @@ import { renameSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, spyOn, test } from "bun:test";
-import { assertWorkspaceAtHead, bindSecurefixPullRequest, buildSecurefixArtifact, securefixClientContext, findSecurefixRoute, parseSecurefixManifest, readSecurefixArtifact, validateEntries, validateRouteChanges, validateSecurefixPath, validateSecurefixRun, validateSecurefixRouteCommitFile, validateSecurefixRouteHead, type SecurefixManifest, type SecurefixRun } from "./securefix.ts";
+import { assertWorkspaceAtHead, bindSecurefixPullRequest, packageSecurefixChanges, buildSecurefixArtifact, securefixClientContext, findSecurefixRoute, parseSecurefixManifest, readSecurefixArtifact, validateEntries, validateRouteChanges, validateSecurefixPath, validateSecurefixRun, validateSecurefixRouteCommitFile, validateSecurefixRouteHead, type SecurefixManifest, type SecurefixRun } from "./securefix.ts";
 import type { SecurefixRoute } from "./config.ts";
 
 const sha = "a".repeat(40);
@@ -488,6 +488,10 @@ describe("securefix workspace head", () => {
       const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: workspace }).toString("utf8").trim();
       expect(() => assertWorkspaceAtHead(workspace, head)).not.toThrow();
       expect(() => assertWorkspaceAtHead(workspace, sha)).toThrow(`securefix workspace is at ${head}, not the run head ${sha}; check out the head commit`);
+      await writeFile(join(workspace, "changed.txt"), "changed\n");
+      await expect(packageSecurefixChanges({ workspace, repository: "owner/client", runId: 42, headSha: sha, message: "update" }))
+        .rejects.toThrow(`securefix workspace is at ${head}, not the run head ${sha}; check out the head commit`);
+      expect((await packageSecurefixChanges({ workspace, repository: "owner/client", runId: 42, headSha: head, message: "update" })).hasChanges).toBe(true);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

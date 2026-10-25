@@ -35126,6 +35126,9 @@ function splitRepository(fullName) {
     throw new Error(`${fullName} is not owner/repo`);
   return { owner, repo };
 }
+function requestLogLine(label, server) {
+  return `created label ${label.name} (${label.description}) in ${server}`;
+}
 async function createRequestLabel(gh, server, kind, repository, numbers) {
   const label = buildLabel(kind, repository, numbers);
   await gh.rest.issues.createLabel({ ...splitRepository(server), ...label, color: "1f6feb" });
@@ -35180,6 +35183,10 @@ function assertWorkspaceAtHead(workspace, headSha) {
   const actual = execFileSync("git", ["rev-parse", "HEAD"], { cwd: workspace }).toString("utf8").trim();
   if (actual !== headSha)
     throw new Rejection(`securefix workspace is at ${actual}, not the run head ${headSha}; check out the head commit`);
+}
+async function packageSecurefixChanges(input) {
+  assertWorkspaceAtHead(input.workspace, input.headSha);
+  return buildSecurefixArtifact(input);
 }
 async function buildSecurefixArtifact(input) {
   const status = execFileSync("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"], { cwd: input.workspace });
@@ -35330,9 +35337,8 @@ async function packageChanges() {
     return;
   }
   const workspace = getInput("workspace") || env("GITHUB_WORKSPACE");
-  assertWorkspaceAtHead(workspace, context.headSha);
   const id = runId();
-  const result = await buildSecurefixArtifact({
+  const result = await packageSecurefixChanges({
     workspace,
     repository: env("GITHUB_REPOSITORY"),
     runId: id,
@@ -35350,7 +35356,7 @@ async function sendRequest() {
   const server = getInput("server_repository", { required: true });
   const label = await createRequestLabel(github(getInput("token", { required: true })), server, "securefix", env("GITHUB_REPOSITORY"), [runId()]);
   setOutput("label", label.name);
-  info(`created label ${label.name} (${label.description}) in ${server}`);
+  info(requestLogLine(label, server));
 }
 var step = process.env.CSM_CI_SECUREFIX_STEP;
 (step === "package" ? packageChanges() : step === "request" ? sendRequest() : Promise.reject(new Error(`unknown securefix client step ${step}`))).catch((error) => setFailed(error instanceof Error ? error.message : String(error)));

@@ -66,6 +66,12 @@ export function assertWorkspaceAtHead(workspace: string, headSha: string): void 
   if (actual !== headSha) throw new Rejection(`securefix workspace is at ${actual}, not the run head ${headSha}; check out the head commit`);
 }
 
+// The client packaging entry: the workspace must be at the run head before anything is packaged.
+export async function packageSecurefixChanges(input: { workspace: string; repository: string; runId: number; headSha: string; message: string }): Promise<{ path: string; hasChanges: boolean }> {
+  assertWorkspaceAtHead(input.workspace, input.headSha);
+  return buildSecurefixArtifact(input);
+}
+
 export async function buildSecurefixArtifact(input: { workspace: string; repository: string; runId: number; headSha: string; message: string }): Promise<{ path: string; hasChanges: boolean }> {
   const status = execFileSync("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"], { cwd: input.workspace });
   const records = status.toString("utf8").split("\0").filter(Boolean);

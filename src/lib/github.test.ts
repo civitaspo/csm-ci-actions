@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { type GitHub, createRequestLabel, github, loadConfig, loadCurrentServerConfig, splitRepository, verifyLiveLabel } from "./github.ts";
+import { type GitHub, createRequestLabel, github, requestLogLine, loadConfig, loadCurrentServerConfig, splitRepository, verifyLiveLabel } from "./github.ts";
 import { hasServerMarker, marker } from "./notify.ts";
 import { CONFIG_YAML, fakeFetch, SERVER_BOT_ID } from "./testing.ts";
 import { fetchCommitFacts } from "./trust.ts";
@@ -270,6 +270,14 @@ describe("hasServerMarker", () => {
   ];
   test.each(cases)("%s", (_, comments, expected) => {
     expect(hasServerMarker(comments, m, SERVER_BOT_ID)).toBe(expected);
+  });
+});
+
+describe("requestLogLine", () => {
+  test("keeps the exact line the e2e harness parses", () => {
+    const line = requestLogLine({ name: "csm-ci-securefix-0123456789abcdef", description: "owner/client/42" }, "owner/server");
+    expect(line).toBe("created label csm-ci-securefix-0123456789abcdef (owner/client/42) in owner/server");
+    expect(/created label (csm-ci-[^ ]+) \(/.exec(line)?.[1]).toBe("csm-ci-securefix-0123456789abcdef");
   });
 });
 

@@ -35,7 +35,7 @@ The action reads the client repository worktree (`workspace`, default the job wo
 
 The server writes whole files onto the run head, so the action fails unless the workspace is checked out at that commit: the pull request head on `pull_request`, otherwise `GITHUB_SHA`.
 
-The Client App key is present in the job that runs your fix tools, as with securefix-action. Its token has only `issues: write` on the server repository: it can create, edit or delete labels and issues there, but the server re-reads every request label and every fact it acts on (plan S1, S2 and S7), so a stolen key gains nothing a forged label would not. Deleting pending request labels can delay requests.
+The Client App key is present in the job that runs your fix tools, as with securefix-action. Its token has only `issues: write` on the server repository: it can create, edit and delete labels and create, edit and close issues there, but the server re-reads every request label and every fact it acts on (plan S1, S2 and S7), so a stolen key gains nothing a forged label would not. Deleting pending request labels can delay requests.
 
 The action accepts `pull_request` from the same repository, `push` and `workflow_dispatch`. It skips a fork pull request with a notice, because forks get no secrets and securefix never writes to them, and fails on any other event. Server-side binding remains authoritative. PR mode requires exactly one open, ready PR from the same repository to the default branch. Route mode requires a configured workflow path and source branch.
 
