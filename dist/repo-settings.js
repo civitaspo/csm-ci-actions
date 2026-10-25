@@ -37391,7 +37391,7 @@ var RuleSetSchema = object({
   target: string2(),
   conditions: record(string2(), unknown()),
   rules: array(object({ type: string2(), parameters: record(string2(), unknown()).optional() })),
-  bypass_actors: array(object({ actor_id: number2(), actor_type: string2(), bypass_mode: string2() })).default([])
+  bypass_actors: array(object({ actor_id: number2(), actor_type: string2(), bypass_mode: string2() }))
 });
 function repoSettingsRuleSets(config) {
   const defaultBranch = { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } };
@@ -37422,14 +37422,16 @@ async function inspectRepoSettings(args) {
     dispatchPreflight = { ...basic, approverCanWrite };
   }
   const [repositoryResponse, ruleSets, immutableEnabled] = await Promise.all([
-    args.readGH.rest.repos.get(address),
-    args.readGH.paginate("GET /repos/{owner}/{repo}/rulesets", { ...address, per_page: 100 }),
-    isImmutableReleasesEnabled(args.readGH, address)
+    args.adminGH.rest.repos.get(address),
+    args.adminGH.paginate("GET /repos/{owner}/{repo}/rulesets", { ...address, per_page: 100 }),
+    isImmutableReleasesEnabled(args.adminGH, address)
   ]);
   const definitions = repoSettingsRuleSets(args.config);
   const summaries = array(object({ id: number2().int().positive(), name: string2(), source_type: string2().optional() })).parse(ruleSets);
   const managed = await Promise.all(summaries.filter((set) => set.source_type === "Repository" && definitions.some((definition) => definition.name === set.name)).map(async (set) => {
-    const response = await args.readGH.request("GET /repos/{owner}/{repo}/rulesets/{ruleset_id}", { ...address, ruleset_id: set.id });
+    const response = await args.adminGH.request("GET /repos/{owner}/{repo}/rulesets/{ruleset_id}", { ...address, ruleset_id: set.id });
+    if (!("bypass_actors" in response.data))
+      throw new Rejection(`ruleset ${set.name} hides its bypass actors; inspection requires administration write access`);
     return RuleSetSchema.parse(response.data);
   }));
   const byName = new Map;
@@ -37466,7 +37468,7 @@ async function inspectRepoSettings(args) {
   };
 }
 async function applyRepoSettings(args) {
-  const inspection = await inspectRepoSettings({ readGH: args.readGH, config: args.config, target: args.target, mode: args.mode, ...args.approverAppSlug ? { approverAppSlug: args.approverAppSlug } : {}, ...args.actionsRepository ? { actionsRepository: args.actionsRepository } : {} });
+  const inspection = await inspectRepoSettings({ readGH: args.readGH, adminGH: args.adminGH, config: args.config, target: args.target, mode: args.mode, ...args.approverAppSlug ? { approverAppSlug: args.approverAppSlug } : {}, ...args.actionsRepository ? { actionsRepository: args.actionsRepository } : {} });
   const repoSettings = args.config.repo_settings;
   if (!repoSettings)
     throw new Rejection("repo_settings is not configured");
@@ -37634,7 +37636,7 @@ async function main() {
   if (mode === "inspect" || mode === "apply") {
     const approverAppSlug = input("approver-app-slug");
     if (mode === "inspect") {
-      const result = await inspectRepoSettings({ readGH, config, target, mode: eventMode(input("event-mode", true)), ...approverAppSlug ? { approverAppSlug } : {}, actionsRepository });
+      const result = await inspectRepoSettings({ readGH, adminGH: github(input("admin-token", true)), config, target, mode: eventMode(input("event-mode", true)), ...approverAppSlug ? { approverAppSlug } : {}, actionsRepository });
       setOutput("changes", JSON.stringify(result.changes));
       setOutput("has-changes", String(result.changes.settings || result.changes.immutableReleases || result.changes.rulesets.length > 0));
       return;

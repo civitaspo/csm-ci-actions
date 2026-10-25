@@ -10,9 +10,9 @@ inputs:
   discovery-token:
     description: Server App token used only to list repositories in its installation.
   read-token:
-    description: Target-scoped Server App token with contents, pull_requests, and administration read.
+    description: Target-scoped Server App token with contents and pull_requests read.
   admin-token:
-    description: Target-scoped Server App token with administration:write, minted after preflight.
+    description: Target-scoped Server App token with administration:write, minted after preflight. Inspection reads rulesets with it because GitHub hides bypass actors from read-only callers.
   contents-token:
     description: Target-scoped Server App token with contents:write and pull_requests:write.
   config-path:

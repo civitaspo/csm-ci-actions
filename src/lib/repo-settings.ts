@@ -154,7 +154,7 @@ const RuleSetSchema = z.object({
   target: z.string(),
   conditions: z.record(z.string(), z.unknown()),
   rules: z.array(z.object({ type: z.string(), parameters: z.record(z.string(), z.unknown()).optional() })),
-  bypass_actors: z.array(z.object({ actor_id: z.number(), actor_type: z.string(), bypass_mode: z.string() })).default([]),
+  bypass_actors: z.array(z.object({ actor_id: z.number(), actor_type: z.string(), bypass_mode: z.string() })),
 });
 type RuleSet = z.infer<typeof RuleSetSchema>;
 
@@ -190,8 +190,11 @@ export type RepoSettingsInspection = {
 
 export type RepoSettingsApplyResult = { settingsUpdated: number; immutableReleasesEnabled: number; rulesetsUpdated: number; rulesetsCreated: number };
 
+// GitHub returns ruleset bypass_actors only to callers with write access to the ruleset, so
+// repository state is read with the administration token; readGH serves only the dispatch preflight.
 export async function inspectRepoSettings(args: {
   readGH: GitHub;
+  adminGH: GitHub;
   config: Config;
   target: RepoSettingsTarget;
   mode: RepoSettingsMode;
@@ -210,14 +213,15 @@ export async function inspectRepoSettings(args: {
     dispatchPreflight = { ...basic, approverCanWrite };
   }
   const [repositoryResponse, ruleSets, immutableEnabled] = await Promise.all([
-    args.readGH.rest.repos.get(address),
-    args.readGH.paginate("GET /repos/{owner}/{repo}/rulesets", { ...address, per_page: 100 }),
-    isImmutableReleasesEnabled(args.readGH, address),
+    args.adminGH.rest.repos.get(address),
+    args.adminGH.paginate("GET /repos/{owner}/{repo}/rulesets", { ...address, per_page: 100 }),
+    isImmutableReleasesEnabled(args.adminGH, address),
   ]);
   const definitions = repoSettingsRuleSets(args.config);
   const summaries = z.array(z.object({ id: z.number().int().positive(), name: z.string(), source_type: z.string().optional() })).parse(ruleSets);
   const managed = await Promise.all(summaries.filter((set) => set.source_type === "Repository" && definitions.some((definition) => definition.name === set.name)).map(async (set) => {
-    const response = await args.readGH.request("GET /repos/{owner}/{repo}/rulesets/{ruleset_id}", { ...address, ruleset_id: set.id });
+    const response = await args.adminGH.request("GET /repos/{owner}/{repo}/rulesets/{ruleset_id}", { ...address, ruleset_id: set.id });
+    if (!("bypass_actors" in response.data)) throw new Rejection(`ruleset ${set.name} hides its bypass actors; inspection requires administration write access`);
     return RuleSetSchema.parse(response.data);
   }));
   const byName = new Map<string, RuleSet[]>();
@@ -258,7 +262,7 @@ export async function applyRepoSettings(args: {
   approverAppSlug?: string;
   actionsRepository?: string;
 }): Promise<RepoSettingsApplyResult> {
-  const inspection = await inspectRepoSettings({ readGH: args.readGH, config: args.config, target: args.target, mode: args.mode, ...(args.approverAppSlug ? { approverAppSlug: args.approverAppSlug } : {}), ...(args.actionsRepository ? { actionsRepository: args.actionsRepository } : {}) });
+  const inspection = await inspectRepoSettings({ readGH: args.readGH, adminGH: args.adminGH, config: args.config, target: args.target, mode: args.mode, ...(args.approverAppSlug ? { approverAppSlug: args.approverAppSlug } : {}), ...(args.actionsRepository ? { actionsRepository: args.actionsRepository } : {}) });
   const repoSettings = args.config.repo_settings;
   if (!repoSettings) throw new Rejection("repo_settings is not configured");
   const address = { ...splitRepository(args.target.name) };

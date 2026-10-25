@@ -67,7 +67,7 @@ describe("inspectRepoSettings", () => {
       { method: "GET", path: "/repos/owner/client/rulesets/81", body: disabledControlled },
       { method: "GET", path: "/repos/owner/client/immutable-releases", body: { enabled: true } },
     ]);
-    const plan = await inspectRepoSettings({ readGH: github("read", fetch), config: configWithSettings(), target, mode: "schedule" });
+    const plan = await inspectRepoSettings({ readGH: github("read", fetch), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "schedule" });
     expect(plan.changes.rulesets).not.toContain("controlled-merges");
     expect(plan.rulesetEnforcements["controlled-merges"]).toBe("disabled");
   });
@@ -78,7 +78,7 @@ describe("inspectRepoSettings", () => {
       { method: "GET", path: "/repos/owner/client/rulesets", body: [] },
       { method: "GET", path: "/repos/owner/client/immutable-releases", body: { enabled: true } },
     ]);
-    const plan = await inspectRepoSettings({ readGH: github("read", fetch), config: configWithSettings(), target, mode: "schedule" });
+    const plan = await inspectRepoSettings({ readGH: github("read", fetch), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "schedule" });
     expect(plan.changes.rulesets).not.toContain("controlled-merges");
   });
 
@@ -96,8 +96,22 @@ describe("inspectRepoSettings", () => {
       ...rules,
       { method: "GET", path: "/repos/owner/client/immutable-releases", body: { enabled: true } },
     ]);
-    const plan = await inspectRepoSettings({ readGH: github("read", fetch), config: configWithSettings(), target, mode: "schedule" });
+    const readFetch = fakeFetch([]);
+    const plan = await inspectRepoSettings({ readGH: github("read", readFetch), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "schedule" });
     expect(plan.changes).toEqual({ settings: false, immutableReleases: false, rulesets: [] });
+    expect(readFetch.calls).toEqual([]);
+  });
+
+  test("rejects a ruleset whose bypass actors are hidden from the token", async () => {
+    const { bypass_actors: _hidden, ...hidden } = disabledControlled;
+    const fetch = fakeFetch([
+      { method: "GET", path: "/repos/owner/client", body: repository },
+      { method: "GET", path: "/repos/owner/client/rulesets", body: [{ id: 81, name: "controlled-merges", source_type: "Repository" }] },
+      { method: "GET", path: "/repos/owner/client/rulesets/81", body: hidden },
+      { method: "GET", path: "/repos/owner/client/immutable-releases", body: { enabled: true } },
+    ]);
+    await expect(inspectRepoSettings({ readGH: github("read", fakeFetch([])), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "schedule" }))
+      .rejects.toThrow("ruleset controlled-merges hides its bypass actors; inspection requires administration write access");
   });
 
   test("rejects duplicate managed Repository rulesets with the same name", async () => {
@@ -113,7 +127,7 @@ describe("inspectRepoSettings", () => {
       { method: "GET", path: "/repos/owner/client/rulesets/82", body: second },
       { method: "GET", path: "/repos/owner/client/immutable-releases", body: { enabled: true } },
     ]);
-    await expect(inspectRepoSettings({ readGH: github("read", fetch), config: configWithSettings(), target, mode: "schedule" }))
+    await expect(inspectRepoSettings({ readGH: github("read", fetch), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "schedule" }))
       .rejects.toThrow("multiple Repository rulesets named controlled-merges");
   });
 
@@ -123,7 +137,7 @@ describe("inspectRepoSettings", () => {
       { method: "GET", path: "/repos/owner/client/rulesets", body: [] },
       { method: "GET", path: "/repos/owner/client/immutable-releases", status: 500, body: { message: "failure" } },
     ]);
-    await expect(inspectRepoSettings({ readGH: github("read", fetch), config: configWithSettings(), target, mode: "schedule" })).rejects.toThrow();
+    await expect(inspectRepoSettings({ readGH: github("read", fetch), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "schedule" })).rejects.toThrow();
   });
 
   const dispatchRejects: [string, { event?: string; jobIf?: string; approverId?: number; queueCount?: number; bypass?: { actor_id: number; actor_type: string; bypass_mode: string }[] }, string][] = [
@@ -135,12 +149,12 @@ describe("inspectRepoSettings", () => {
   ];
   test.each(dispatchRejects)("dispatch rejects %s", async (_, options, message) => {
     const fetch = dispatchFetch(options);
-    await expect(inspectRepoSettings({ readGH: github("read", fetch), config: configWithSettings(), target, mode: "dispatch", approverAppSlug: "approver" })).rejects.toThrow(message);
+    await expect(inspectRepoSettings({ readGH: github("read", fetch), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "dispatch", approverAppSlug: "approver" })).rejects.toThrow(message);
   });
 
   test("dispatch requires the minted approver app slug", async () => {
     const fetch = fakeFetch([]);
-    await expect(inspectRepoSettings({ readGH: github("read", fetch), config: configWithSettings(), target, mode: "dispatch" })).rejects.toThrow("approver App slug is required for dispatch preflight");
+    await expect(inspectRepoSettings({ readGH: github("read", fetch), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "dispatch" })).rejects.toThrow("approver App slug is required for dispatch preflight");
     expect(fetch.calls).toEqual([]);
   });
 

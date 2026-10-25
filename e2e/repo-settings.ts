@@ -297,7 +297,7 @@ export const repoSettings: Scenario[] = [
         assert(repeatedPulls.length === 1 && repeatedPulls[0]?.number === managedPull.number && repeatedPulls[0]?.headSha === managedPull.headSha, "the repeated run did not preserve the existing managed-files pull request head");
         const afterRepeat = await rulesetUpdateTimes(ctx.gh);
         assert(JSON.stringify([...afterRepeat].sort(([a], [b]) => a - b)) === JSON.stringify([...beforeRepeat].sort(([a], [b]) => a - b)), "the repeated run updated a ruleset");
-        for (const name of ["Mint administration write token", "Mint managed contents token", "Mint managed workflows token"]) {
+        for (const name of ["Apply repository settings", "Apply managed files", "Mint managed contents token", "Mint managed workflows token"]) {
           assert(repeat.stepConclusions.get(name) === "skipped", `the repeated run did not skip ${name} (${repeat.url})`);
         }
 

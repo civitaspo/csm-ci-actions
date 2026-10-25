@@ -53,7 +53,6 @@ jobs:
           repositories: ${{ steps.target.outputs.target-name }}
           permission-contents: read
           permission-pull-requests: read
-          permission-administration: read
       - id: preflight
         if: inputs.event-mode == 'dispatch'
         uses: ./.csm-ci-actions/actions/repo-settings
@@ -79,6 +78,17 @@ jobs:
           owner: ${{ steps.target.outputs.target-owner }}
           repositories: ${{ steps.target.outputs.target-name }}
           permission-contents: write
+      # GitHub returns ruleset bypass actors only to callers with write access
+      # to the ruleset, so inspection already needs this token.
+      - id: admin-token
+        name: Mint administration write token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ steps.target.outputs.target-owner }}
+          repositories: ${{ steps.target.outputs.target-name }}
+          permission-administration: write
       - id: inspect
         uses: ./.csm-ci-actions/actions/repo-settings
         with:
@@ -88,6 +98,7 @@ jobs:
           repository: ${{ inputs.repository }}
           event-mode: ${{ inputs.event-mode }}
           read-token: ${{ steps.read-token.outputs.token }}
+          admin-token: ${{ steps.admin-token.outputs.token }}
           actions-repository: ${{ job.workflow_repository }}
           approver-app-slug: ${{ steps.approver-token.outputs.app-slug }}
       - id: managed-inspect
@@ -99,16 +110,6 @@ jobs:
           repository: ${{ inputs.repository }}
           actions-repository: ${{ job.workflow_repository }}
           read-token: ${{ steps.read-token.outputs.token }}
-      - id: admin-token
-        name: Mint administration write token
-        if: steps.inspect.outputs.has-changes == 'true'
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        with:
-          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
-          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
-          owner: ${{ steps.target.outputs.target-owner }}
-          repositories: ${{ steps.target.outputs.target-name }}
-          permission-administration: write
       - id: contents-token
         name: Mint managed contents token
         if: steps.managed-inspect.outputs.has-changes == 'true' && steps.managed-inspect.outputs.requires-workflows-write != 'true'
@@ -132,7 +133,8 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
           permission-workflows: write
-      - if: steps.inspect.outputs.has-changes == 'true'
+      - name: Apply repository settings
+        if: steps.inspect.outputs.has-changes == 'true'
         uses: ./.csm-ci-actions/actions/repo-settings
         with:
           mode: apply
@@ -144,7 +146,8 @@ jobs:
           admin-token: ${{ steps.admin-token.outputs.token }}
           actions-repository: ${{ job.workflow_repository }}
           approver-app-slug: ${{ steps.approver-token.outputs.app-slug }}
-      - if: steps.managed-inspect.outputs.has-changes == 'true'
+      - name: Apply managed files
+        if: steps.managed-inspect.outputs.has-changes == 'true'
         uses: ./.csm-ci-actions/actions/repo-settings
         with:
           mode: managed-apply

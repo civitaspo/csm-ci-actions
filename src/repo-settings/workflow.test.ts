@@ -56,8 +56,10 @@ describe("repo-settings reusable workflows", () => {
 
     const names = steps.map((step) => step.id);
     expect(names.indexOf("preflight")).toBeLessThan(names.indexOf("approver-token"));
-    expect(names.indexOf("approver-token")).toBeLessThan(names.indexOf("inspect"));
-    expect(names.indexOf("inspect")).toBeLessThan(names.indexOf("admin-token"));
+    expect(names.indexOf("approver-token")).toBeLessThan(names.indexOf("admin-token"));
+    expect(names.indexOf("admin-token")).toBeLessThan(names.indexOf("inspect"));
+    const read = steps.find((step) => step.id === "read-token");
+    expect(record(read?.with)).not.toHaveProperty("permission-administration");
     const inspect = steps.find((step) => step.id === "inspect");
     expect(record(inspect?.with)["approver-app-slug"]).toBe("${{ steps.approver-token.outputs.app-slug }}");
   });

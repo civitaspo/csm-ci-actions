@@ -59,7 +59,7 @@ async function main(): Promise<void> {
   if (mode === "inspect" || mode === "apply") {
     const approverAppSlug = input("approver-app-slug");
     if (mode === "inspect") {
-      const result = await inspectRepoSettings({ readGH, config, target, mode: eventMode(input("event-mode", true)), ...(approverAppSlug ? { approverAppSlug } : {}), actionsRepository });
+      const result = await inspectRepoSettings({ readGH, adminGH: github(input("admin-token", true)), config, target, mode: eventMode(input("event-mode", true)), ...(approverAppSlug ? { approverAppSlug } : {}), actionsRepository });
       core.setOutput("changes", JSON.stringify(result.changes));
       core.setOutput("has-changes", String(result.changes.settings || result.changes.immutableReleases || result.changes.rulesets.length > 0));
       return;
