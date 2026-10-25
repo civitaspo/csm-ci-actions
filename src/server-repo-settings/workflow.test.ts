@@ -17,6 +17,7 @@ describe("repo-settings reusable workflows", () => {
     const workflowCall = record(triggers.workflow_call);
     const inputs = record(workflowCall.inputs);
     expect(inputs.repository).toBeDefined();
+    expect(record(inputs.mode)).toHaveProperty("default", "reconcile");
     expect(inputs).not.toHaveProperty("event-mode");
   });
 
@@ -34,10 +35,23 @@ describe("repo-settings reusable workflows", () => {
     expect(server.if).toContain("needs.discover.outputs.has-server == 'true'");
   });
 
+  test("propagates the validated mode rather than a possibly empty raw input", () => {
+    const jobs = record(outer.jobs);
+    const discover = record(jobs.discover);
+    expect(record(discover.outputs)["operation-mode"]).toBe("${{ steps.validate-mode.outputs.operation-mode }}");
+    for (const name of ["clients", "server"]) {
+      expect(record(record(jobs[name]).with).mode).toBe("${{ needs.discover.outputs.operation-mode }}");
+    }
+  });
+
   test("discovery token is metadata-only and mutations use separate least-privilege target tokens", () => {
     const discover = record(record(outer.jobs).discover);
     const discoverSteps = discover.steps as Record<string, unknown>[];
+    const validateMode = discoverSteps.find((step) => step.id === "validate-mode");
     const discoveryToken = discoverSteps.find((step) => step.id === "discovery-token");
+    expect(validateMode).toBeDefined();
+    expect(discoverSteps.indexOf(validateMode!)).toBeLessThan(discoverSteps.indexOf(discoveryToken!));
+    expect(record(validateMode?.with)).toHaveProperty("operation-mode", "${{ inputs.mode }}");
     expect(discoveryToken).toBeDefined();
     const discoveryInputs = record(discoveryToken?.with);
     expect(discoveryInputs["permission-metadata"]).toBe("read");
@@ -50,6 +64,15 @@ describe("repo-settings reusable workflows", () => {
     const content = steps.find((step) => step.id === "contents-token");
     const workflow = steps.find((step) => step.id === "workflow-token");
     expect(record(admin?.with)).toEqual(expect.objectContaining({ "permission-administration": "write" }));
+    const guardedAdministrativeSteps = [
+      ["admin-token", "steps.target.outputs.operation-mode == 'reconcile'"],
+      ["inspect", "steps.target.outputs.operation-mode == 'reconcile'"],
+      ["preflight", "steps.target.outputs.operation-mode == 'reconcile'"],
+      ["approver-token", "steps.target.outputs.operation-mode == 'reconcile'"],
+    ] as const;
+    for (const [id, guard] of guardedAdministrativeSteps) {
+      expect(steps.find((step) => step.id === id)?.if).toContain(guard);
+    }
     expect(record(admin?.with)).not.toHaveProperty("permission-contents");
     expect(record(content?.with)).toEqual(expect.objectContaining({ "permission-contents": "write", "permission-pull-requests": "write" }));
     expect(record(content?.with)).not.toHaveProperty("permission-workflows");
@@ -71,6 +94,7 @@ describe("repo-settings reusable workflows", () => {
     // Settings apply before managed files, so a rejected managed branch cannot block them.
     expect(steps.findIndex((step) => step.name === "Apply repository settings")).toBeLessThan(names.indexOf("managed-inspect"));
     const apply = steps.find((step) => step.name === "Apply repository settings");
+    expect(apply?.if).toContain("steps.target.outputs.operation-mode == 'reconcile'");
     expect(record(apply?.with)["approver-app-slug"]).toBe("${{ steps.approver-token.outputs.app-slug }}");
   });
 
@@ -85,6 +109,7 @@ describe("repo-settings reusable workflows", () => {
       const inputs = record(step.with);
       expect(inputs["github-token"]).toBe("${{ github.token }}");
       expect(inputs["actions-repository"]).toBe("${{ job.workflow_repository }}");
+      expect(inputs["operation-mode"]).toBeDefined();
     }
   });
 
@@ -93,5 +118,6 @@ describe("repo-settings reusable workflows", () => {
     expect(Object.keys(triggers)).toEqual(["workflow_call"]);
     const inputs = record(record(triggers.workflow_call).inputs);
     expect(inputs["event-mode"]).toBeDefined();
+    expect(record(inputs.mode)).toHaveProperty("default", "reconcile");
   });
 });

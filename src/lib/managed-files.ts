@@ -112,29 +112,31 @@ export async function inspectManagedFiles(gh: GitHub, input: ManagedFilesInput):
     pullRequest: null,
   };
   const targetSha = await branchHead(gh, owner, repo);
+  let targetHistoryLength: number | undefined;
   if (targetSha) {
-    await loadServerOwnedHistory(gh, {
+    const history = await loadServerOwnedHistory(gh, {
       owner,
       repo,
       baseSha: defaultSha,
       headSha: targetSha,
       serverBotId: input.serverBotId,
       messages: DEFAULT_BRANCH_MESSAGES,
-    }).then((history) => {
-      const allowed = new Set(files.map(({ path }) => path));
-      for (const commit of history) {
-        for (const change of commit.files) {
-          if (!allowed.has(change.filename)) throw new Rejection(`managed files branch changed unmanaged path ${JSON.stringify(change.filename)}`);
-          if (change.previous_filename && !allowed.has(change.previous_filename)) {
-            throw new Rejection(`managed files branch changed unmanaged path ${JSON.stringify(change.previous_filename)}`);
-          }
+    });
+    targetHistoryLength = history.length;
+    const allowed = new Set(files.map(({ path }) => path));
+    for (const commit of history) {
+      for (const change of commit.files) {
+        if (!allowed.has(change.filename)) throw new Rejection(`managed files branch changed unmanaged path ${JSON.stringify(change.filename)}`);
+        if (change.previous_filename && !allowed.has(change.previous_filename)) {
+          throw new Rejection(`managed files branch changed unmanaged path ${JSON.stringify(change.previous_filename)}`);
         }
       }
-    });
+    }
   }
   const targetValues = targetSha ? await readFiles(gh, owner, repo, targetSha, files) : new Map<string, FileValue>();
   const targetMatches = files.every(({ path, content }) => targetValues.get(path)?.content === content);
-  const branchNeedsWrite = !targetMatches;
+  const targetIsAncestorOfDefault = targetSha !== null && targetSha !== defaultSha && targetHistoryLength === 0;
+  const branchNeedsWrite = !targetMatches || targetIsAncestorOfDefault;
   const pullRequest = await findPullRequest(gh, input.repository, input.defaultBranch, targetSha);
   const requiresPullRequestUpdate = !pullRequest || pullRequest.title !== PULL_TITLE || pullRequest.body !== PULL_BODY;
   const status = branchNeedsWrite || requiresPullRequestUpdate ? "ready" : "already-applied";

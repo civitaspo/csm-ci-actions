@@ -11,6 +11,10 @@ on:
         description: schedule or dispatch, derived by the trusted server workflow.
         type: string
         required: true
+      mode:
+        description: reconcile or managed-files-only.
+        type: string
+        default: reconcile
       config-path:
         description: Path of csm-ci.yaml in the server repository.
         type: string
@@ -40,6 +44,8 @@ jobs:
         uses: ./.csm-ci-actions/actions/server/repo-settings
         with:
           mode: validate-target
+          operation-mode: ${{ inputs.mode }}
+          event-mode: ${{ inputs.event-mode }}
           github-token: ${{ github.token }}
           config-path: ${{ inputs.config-path }}
           repository: ${{ inputs.repository }}
@@ -58,6 +64,7 @@ jobs:
       # the apply stage, which reruns the activation preflight first.
       - id: admin-token
         name: Mint administration write token
+        if: steps.target.outputs.operation-mode == 'reconcile'
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
@@ -66,9 +73,11 @@ jobs:
           repositories: ${{ steps.target.outputs.target-name }}
           permission-administration: write
       - id: inspect
+        if: steps.target.outputs.operation-mode == 'reconcile'
         uses: ./.csm-ci-actions/actions/server/repo-settings
         with:
           mode: inspect
+          operation-mode: ${{ steps.target.outputs.operation-mode }}
           github-token: ${{ github.token }}
           config-path: ${{ inputs.config-path }}
           repository: ${{ inputs.repository }}
@@ -76,10 +85,11 @@ jobs:
           admin-token: ${{ steps.admin-token.outputs.token }}
           actions-repository: ${{ job.workflow_repository }}
       - id: preflight
-        if: inputs.event-mode == 'dispatch' && steps.inspect.outputs.activation-required == 'true'
+        if: steps.target.outputs.operation-mode == 'reconcile' && inputs.event-mode == 'dispatch' && steps.inspect.outputs.activation-required == 'true'
         uses: ./.csm-ci-actions/actions/server/repo-settings
         with:
           mode: preflight
+          operation-mode: ${{ steps.target.outputs.operation-mode }}
           github-token: ${{ github.token }}
           config-path: ${{ inputs.config-path }}
           repository: ${{ inputs.repository }}
@@ -90,6 +100,7 @@ jobs:
       - id: approver-token
         name: Mint approver contents token
         if: >-
+          steps.target.outputs.operation-mode == 'reconcile' &&
           inputs.event-mode == 'dispatch' &&
           steps.inspect.outputs.activation-required == 'true' &&
           steps.preflight.outputs.caller-distributed == 'true' &&
@@ -102,10 +113,11 @@ jobs:
           repositories: ${{ steps.target.outputs.target-name }}
           permission-contents: write
       - name: Apply repository settings
-        if: steps.inspect.outputs.has-changes == 'true'
+        if: steps.target.outputs.operation-mode == 'reconcile' && steps.inspect.outputs.has-changes == 'true'
         uses: ./.csm-ci-actions/actions/server/repo-settings
         with:
           mode: apply
+          operation-mode: ${{ steps.target.outputs.operation-mode }}
           github-token: ${{ github.token }}
           config-path: ${{ inputs.config-path }}
           repository: ${{ inputs.repository }}
@@ -118,6 +130,7 @@ jobs:
         uses: ./.csm-ci-actions/actions/server/repo-settings
         with:
           mode: managed-inspect
+          operation-mode: ${{ steps.target.outputs.operation-mode }}
           github-token: ${{ github.token }}
           config-path: ${{ inputs.config-path }}
           repository: ${{ inputs.repository }}
@@ -151,6 +164,7 @@ jobs:
         uses: ./.csm-ci-actions/actions/server/repo-settings
         with:
           mode: managed-apply
+          operation-mode: ${{ steps.target.outputs.operation-mode }}
           github-token: ${{ github.token }}
           config-path: ${{ inputs.config-path }}
           repository: ${{ inputs.repository }}

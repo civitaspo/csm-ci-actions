@@ -2,7 +2,7 @@ name: csm-ci repository settings
 description: Discover configured repositories and reconcile settings, rulesets, and managed files.
 inputs:
   mode:
-    description: validate-target, discover, preflight, inspect, apply, managed-inspect, or managed-apply.
+    description: validate-mode, validate-target, discover, preflight, inspect, apply, managed-inspect, or managed-apply.
     required: true
   github-token:
     description: GITHUB_TOKEN with contents:read on the server repository to read the pinned config.
@@ -24,12 +24,17 @@ inputs:
     description: Optional owner/repo selection for discovery.
   event-mode:
     description: schedule or dispatch, derived by the trusted caller workflow.
+  operation-mode:
+    description: reconcile or managed-files-only, selected by the server workflow.
+    default: reconcile
   actions-repository:
     description: owner/repo where the reusable caller workflows are distributed.
     required: true
   approver-app-slug:
     description: App slug returned by the official create-github-app-token action.
 outputs:
+  operation-mode:
+    description: Validated operation mode, with an omitted or empty value normalized to reconcile.
   clients:
     description: JSON array of selected client repository targets.
   client-count:

@@ -36948,33 +36948,36 @@ async function loadServerOwnedHistory(gh, input) {
     per_page: 100
   };
   const comparison = await gh.rest.repos.compareCommitsWithBasehead(comparisonInput);
-  const comparedCommits = [...comparison.data.commits];
-  const seen = new Set(comparedCommits.map(({ sha }) => sha));
-  for (let page = 2;comparedCommits.length < comparison.data.ahead_by; page++) {
-    const next = await gh.rest.repos.compareCommitsWithBasehead({ ...comparisonInput, page });
-    if (next.data.commits.length === 0 || next.data.commits.some(({ sha }) => seen.has(sha)))
-      throw new Rejection(input.messages.incomplete);
-    for (const commit of next.data.commits) {
-      seen.add(commit.sha);
-      comparedCommits.push(commit);
-    }
-  }
   const result = [];
   const mergeBaseSha = comparison.data.merge_base_commit?.sha;
   if (!mergeBaseSha)
     throw new Rejection(input.messages.incomplete);
   let expectedParent = mergeBaseSha;
-  for (const compared of comparedCommits) {
-    if (!await isServerMadeCommit(gh, { owner: input.owner, repo: input.repo, sha: compared.sha, serverBotId: input.serverBotId })) {
-      throw new Rejection(input.messages.untrusted);
+  const seen = new Set;
+  let commits = comparison.data.commits;
+  let collected = 0;
+  for (let page = 1;; page++) {
+    if (page > 1 && (commits.length === 0 || commits.some(({ sha }) => seen.has(sha)))) {
+      throw new Rejection(input.messages.incomplete);
     }
-    const { data: commit } = await gh.rest.repos.getCommit({ owner: input.owner, repo: input.repo, ref: compared.sha });
-    if (commit.parents.length !== 1 || commit.parents[0]?.sha !== expectedParent)
-      throw new Rejection(input.messages.nonLinear);
-    if (commit.files === undefined || commit.files.length >= 300)
-      throw new Rejection(input.messages.changesIncomplete);
-    result.push({ sha: compared.sha, parentSha: expectedParent, files: commit.files });
-    expectedParent = compared.sha;
+    for (const compared of commits) {
+      seen.add(compared.sha);
+      collected++;
+      if (!await isServerMadeCommit(gh, { owner: input.owner, repo: input.repo, sha: compared.sha, serverBotId: input.serverBotId })) {
+        throw new Rejection(input.messages.untrusted);
+      }
+      const { data: commit } = await gh.rest.repos.getCommit({ owner: input.owner, repo: input.repo, ref: compared.sha });
+      if (commit.parents.length !== 1 || commit.parents[0]?.sha !== expectedParent)
+        throw new Rejection(input.messages.nonLinear);
+      if (commit.files === undefined || commit.files.length >= 300)
+        throw new Rejection(input.messages.changesIncomplete);
+      result.push({ sha: compared.sha, parentSha: expectedParent, files: commit.files });
+      expectedParent = compared.sha;
+    }
+    if (collected >= comparison.data.ahead_by)
+      break;
+    const next = await gh.rest.repos.compareCommitsWithBasehead({ ...comparisonInput, page: page + 1 });
+    commits = next.data.commits;
   }
   if (expectedParent !== input.headSha)
     throw new Rejection(input.messages.incomplete);
@@ -37076,30 +37079,32 @@ async function inspectManagedFiles(gh, input) {
       pullRequest: null
     };
   const targetSha = await branchHead(gh, owner, repo);
+  let targetHistoryLength;
   if (targetSha) {
-    await loadServerOwnedHistory(gh, {
+    const history = await loadServerOwnedHistory(gh, {
       owner,
       repo,
       baseSha: defaultSha,
       headSha: targetSha,
       serverBotId: input.serverBotId,
       messages: DEFAULT_BRANCH_MESSAGES
-    }).then((history) => {
-      const allowed = new Set(files.map(({ path }) => path));
-      for (const commit of history) {
-        for (const change of commit.files) {
-          if (!allowed.has(change.filename))
-            throw new Rejection(`managed files branch changed unmanaged path ${JSON.stringify(change.filename)}`);
-          if (change.previous_filename && !allowed.has(change.previous_filename)) {
-            throw new Rejection(`managed files branch changed unmanaged path ${JSON.stringify(change.previous_filename)}`);
-          }
+    });
+    targetHistoryLength = history.length;
+    const allowed = new Set(files.map(({ path }) => path));
+    for (const commit of history) {
+      for (const change of commit.files) {
+        if (!allowed.has(change.filename))
+          throw new Rejection(`managed files branch changed unmanaged path ${JSON.stringify(change.filename)}`);
+        if (change.previous_filename && !allowed.has(change.previous_filename)) {
+          throw new Rejection(`managed files branch changed unmanaged path ${JSON.stringify(change.previous_filename)}`);
         }
       }
-    });
+    }
   }
   const targetValues = targetSha ? await readFiles(gh, owner, repo, targetSha, files) : new Map;
   const targetMatches = files.every(({ path, content }) => targetValues.get(path)?.content === content);
-  const branchNeedsWrite = !targetMatches;
+  const targetIsAncestorOfDefault = targetSha !== null && targetSha !== defaultSha && targetHistoryLength === 0;
+  const branchNeedsWrite = !targetMatches || targetIsAncestorOfDefault;
   const pullRequest = await findPullRequest(gh, input.repository, input.defaultBranch, targetSha);
   const requiresPullRequestUpdate = !pullRequest || pullRequest.title !== PULL_TITLE || pullRequest.body !== PULL_BODY;
   const status = branchNeedsWrite || requiresPullRequestUpdate ? "ready" : "already-applied";
@@ -37410,6 +37415,7 @@ function repoSettingsRuleSets(config) {
     { name: "release-tags", enforcement: "active", target: "tag", conditions: { ref_name: { include: ["refs/tags/v*"], exclude: [] } }, rules: [{ type: "creation" }, { type: "update" }, { type: "deletion" }], bypass_actors: [{ actor_id: config.apps.server_app_id, actor_type: "Integration", bypass_mode: "always" }] }
   ];
 }
+var CreatedRuleSet = object({ id: number2().int().positive(), name: string2() });
 async function inspectRepoSettings(args) {
   const repoSettings = args.config.repo_settings;
   if (!repoSettings)
@@ -37502,7 +37508,12 @@ async function applyRepoSettings(args) {
       throw new Error(`missing fixed ruleset definition: ${name}`);
     const id = inspection.rulesetIds[name];
     if (id === undefined) {
-      await args.adminGH.request({ method: "POST", url: "/repos/{owner}/{repo}/rulesets", ...address, ...definition });
+      const response = await args.adminGH.request({ method: "POST", url: "/repos/{owner}/{repo}/rulesets", ...address, ...definition });
+      const created = CreatedRuleSet.safeParse(response.data);
+      if (!created.success || created.data.name !== definition.name) {
+        throw new Rejection(`created ruleset response for ${definition.name} did not include a valid id and matching name`);
+      }
+      args.onRulesetCreated?.(created.data);
       rulesetsCreated++;
     } else {
       const { enforcement: _enforcement, ...withoutEnforcement } = definition;
@@ -37587,6 +37598,24 @@ function repoSettingsEventMode(value, eventName) {
     throw new Error("a scheduled run cannot use dispatch mode");
   return value;
 }
+function repoSettingsOperationMode(value, eventName, eventMode) {
+  const operationMode = value || "reconcile";
+  if (operationMode !== "reconcile" && operationMode !== "managed-files-only") {
+    throw new Error(`unknown repo-settings operation mode ${operationMode}`);
+  }
+  if (operationMode === "managed-files-only" && (eventName === "schedule" || eventMode === "schedule")) {
+    throw new Error("a scheduled run cannot use managed-files-only mode");
+  }
+  if (operationMode === "managed-files-only" && eventName !== "workflow_dispatch") {
+    throw new Error("managed-files-only mode requires a workflow_dispatch event");
+  }
+  return operationMode;
+}
+function validateRepoSettingsStage(stage, operationMode) {
+  if (operationMode === "managed-files-only" && ["inspect", "preflight", "apply"].includes(stage)) {
+    throw new Error(`repo-settings stage ${stage} is unavailable in managed-files-only mode`);
+  }
+}
 
 // src/server-repo-settings/main.ts
 function env(name) {
@@ -37599,13 +37628,19 @@ function input(name, required = false) {
   return getInput(name, { required });
 }
 async function main() {
+  const mode = input("mode", true);
+  const operationMode = repoSettingsOperationMode(input("operation-mode"), env("GITHUB_EVENT_NAME"), input("event-mode") || undefined);
+  validateRepoSettingsStage(mode, operationMode);
+  setOutput("operation-mode", operationMode);
+  if (mode === "validate-mode") {
+    return;
+  }
   const serverRepository = env("GITHUB_REPOSITORY");
   const configPath = input("config-path") || "csm-ci.yaml";
   const actionsRepository = input("actions-repository", true);
   const configGH = github(input("github-token") || env("GITHUB_TOKEN"));
   const config = await loadConfig(configGH, serverRepository, env("GITHUB_SHA"), configPath);
   const { data: server } = await configGH.rest.repos.get(splitRepository(serverRepository));
-  const mode = input("mode", true);
   const repository = input("repository");
   const target = repository ? { name: repository.toLowerCase(), isServer: repository.toLowerCase() === serverRepository.toLowerCase() } : undefined;
   validateRepoSettingsContext({ config, serverRepository, serverRef: env("GITHUB_REF"), serverDefaultBranch: server.default_branch, actionsRepository, ...target ? { targetRepository: target.name } : {} });
@@ -37653,7 +37688,16 @@ async function main() {
   }
   if (mode === "apply") {
     const approverAppSlug = input("approver-app-slug");
-    const result = await applyRepoSettings({ readGH, adminGH: github(input("admin-token", true)), config, target, mode: repoSettingsEventMode(input("event-mode", true), env("GITHUB_EVENT_NAME")), ...approverAppSlug ? { approverAppSlug } : {}, actionsRepository });
+    const result = await applyRepoSettings({
+      readGH,
+      adminGH: github(input("admin-token", true)),
+      config,
+      target,
+      mode: repoSettingsEventMode(input("event-mode", true), env("GITHUB_EVENT_NAME")),
+      ...approverAppSlug ? { approverAppSlug } : {},
+      actionsRepository,
+      onRulesetCreated: ({ id, name }) => info(`created-repo-settings-ruleset ${JSON.stringify({ repository: target.name, id, name })}`)
+    });
     info(`applied to ${target.name}: ${JSON.stringify(result)}`);
     setOutput("result", JSON.stringify(result));
     return;

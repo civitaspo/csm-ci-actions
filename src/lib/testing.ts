@@ -44,7 +44,11 @@ export function fakeFetch(routes: Route[]): typeof globalThis.fetch & { calls: s
     const route = routes.find((r) => r.method === method && r.path === url.pathname);
     if (!route) return new Response(JSON.stringify({ message: "Not Found" }), { status: 404, headers: { "content-type": "application/json" } });
     const seen = calls.filter((c) => c === `${method} ${url.pathname}`).length - 1;
-    const answer = seen === 0 || !route.then?.length ? route.body : route.then[Math.min(seen, route.then.length) - 1];
+    let answer = seen === 0 || !route.then?.length ? route.body : route.then[Math.min(seen, route.then.length) - 1];
+    if (method === "POST" && url.pathname.endsWith("/rulesets") && typeof answer === "object" && answer !== null && !("name" in answer)) {
+      const requestBody = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as { name?: unknown };
+      answer = { ...answer, ...(requestBody.name ? { name: requestBody.name } : {}) };
+    }
     const body = typeof answer === "string" ? answer : JSON.stringify(answer);
     const type = typeof answer === "string" ? "text/plain" : "application/json";
     return new Response(body, { status: route.status ?? 200, headers: { "content-type": type } });

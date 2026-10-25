@@ -260,6 +260,41 @@ describe("inspectRepoSettings", () => {
     expect(created.find((body) => body.name === "controlled-merges")).toHaveProperty("enforcement", "active");
   });
 
+  test.each([
+    ["missing id", { name: "integrity" }],
+    ["invalid id", { id: 0, name: "integrity" }],
+    ["fractional id", { id: 1.5, name: "integrity" }],
+    ["unsafe id", { id: Number.MAX_SAFE_INTEGER + 1, name: "integrity" }],
+    ["string id", { id: "90", name: "integrity" }],
+    ["invalid name", { id: 90, name: null }],
+    ["wrong name", { id: 90, name: "wrong" }],
+  ])("rejects a created ruleset response with %s", async (_name, createdResponse) => {
+    const fetch = dispatchFetch({ absent: true, createdRulesetResponse: createdResponse });
+    await expect(applyRepoSettings({
+      readGH: github("read", fetch),
+      adminGH: github("admin", fetch),
+      config: configWithSettings(),
+      target,
+      mode: "dispatch",
+      approverAppSlug: "approver",
+    })).rejects.toThrow("created ruleset response for integrity did not include a valid id and matching name");
+  });
+
+  test("reports an earlier created ruleset before a later creation response fails validation", async () => {
+    const fetch = dispatchFetch({ absent: true, createdRulesetResponse: { id: 90 }, laterCreatedRulesetResponses: [{ id: "invalid" }] });
+    const created: { id: number; name: string }[] = [];
+    await expect(applyRepoSettings({
+      readGH: github("read", fetch),
+      adminGH: github("admin", fetch),
+      config: configWithSettings(),
+      target,
+      mode: "dispatch",
+      approverAppSlug: "approver",
+      onRulesetCreated: (ruleset) => created.push(ruleset),
+    })).rejects.toThrow("created ruleset response for review-and-checks did not include a valid id and matching name");
+    expect(created).toEqual([{ id: 90, name: "integrity" }]);
+  });
+
   test("dispatch accepts an approver login that differs only in case", async () => {
     const fetch = dispatchFetch({ approverLogin: "Approver[BOT]" });
     const result = await applyRepoSettings({ readGH: github("read", fetch), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "dispatch", approverAppSlug: "approver" });
@@ -476,6 +511,8 @@ type DispatchOptions = {
   enforcement?: string;
   absent?: boolean;
   bypass?: { actor_id: number; actor_type: string; bypass_mode: string }[];
+  createdRulesetResponse?: unknown;
+  laterCreatedRulesetResponses?: unknown[];
 };
 
 function dispatchFetch(options: DispatchOptions) {
@@ -498,7 +535,7 @@ function dispatchFetch(options: DispatchOptions) {
     { method: "GET", path: "/repos/owner/client/rulesets", body: options.absent ? [] : [{ id: 81, name: "controlled-merges", source_type: "Repository" }] },
     { method: "GET", path: "/repos/owner/client/rulesets/81", body: controlled },
     { method: "PUT", path: "/repos/owner/client/rulesets/81", body: controlled },
-    { method: "POST", path: "/repos/owner/client/rulesets", body: { id: 90 } },
+    { method: "POST", path: "/repos/owner/client/rulesets", body: options.createdRulesetResponse ?? { id: 90 }, ...(options.laterCreatedRulesetResponses ? { then: options.laterCreatedRulesetResponses } : {}) },
     { method: "GET", path: "/repos/owner/client/immutable-releases", body: { enabled: true } },
     { method: "GET", path: "/users/approver%5Bbot%5D", body: { id: options.approverId ?? 4000, login: options.approverLogin ?? "approver[bot]" } },
     {

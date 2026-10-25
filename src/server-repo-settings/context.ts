@@ -32,3 +32,25 @@ export function repoSettingsEventMode(value: string, eventName: string): "schedu
   if (value === "dispatch" && eventName === "schedule") throw new Error("a scheduled run cannot use dispatch mode");
   return value;
 }
+
+export type RepoSettingsOperationMode = "reconcile" | "managed-files-only";
+
+export function repoSettingsOperationMode(value: string | undefined, eventName: string, eventMode?: string): RepoSettingsOperationMode {
+  const operationMode = value || "reconcile";
+  if (operationMode !== "reconcile" && operationMode !== "managed-files-only") {
+    throw new Error(`unknown repo-settings operation mode ${operationMode}`);
+  }
+  if (operationMode === "managed-files-only" && (eventName === "schedule" || eventMode === "schedule")) {
+    throw new Error("a scheduled run cannot use managed-files-only mode");
+  }
+  if (operationMode === "managed-files-only" && eventName !== "workflow_dispatch") {
+    throw new Error("managed-files-only mode requires a workflow_dispatch event");
+  }
+  return operationMode;
+}
+
+export function validateRepoSettingsStage(stage: string, operationMode: RepoSettingsOperationMode): void {
+  if (operationMode === "managed-files-only" && ["inspect", "preflight", "apply"].includes(stage)) {
+    throw new Error(`repo-settings stage ${stage} is unavailable in managed-files-only mode`);
+  }
+}

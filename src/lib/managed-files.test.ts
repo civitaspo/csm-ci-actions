@@ -51,6 +51,7 @@ function githubFixture(options: {
   incompleteHistory?: boolean;
   duplicateHistoryPage?: boolean;
   missingMergeBase?: boolean;
+  comparisonCalls?: { count: number };
   pulls?: Array<{ number: number; title: string; body: string | null; base: { ref: string }; head: { sha: string } }>;
   history?: Array<{ sha: string; parent: string; filename: string; previousFilename?: string }>;
 } = {}): GitHub {
@@ -88,11 +89,15 @@ function githubFixture(options: {
       },
       repos: {
         getCommit: async ({ ref }: { ref: string }) => ({ data: commitFor(ref) }),
-        compareCommitsWithBasehead: async ({ page }: { page?: number }) => ({ data: {
-          ahead_by: options.incompleteHistory ? history.length + 1 : history.length,
-          ...(options.missingMergeBase ? {} : { merge_base_commit: { sha: defaultSha } }),
-          commits: page === 2 && options.duplicateHistoryPage ? history.map(({ sha }) => ({ sha })) : page ? [] : history.map(({ sha }) => ({ sha })),
-        } }),
+        compareCommitsWithBasehead: async ({ page }: { page?: number }) => {
+          if (options.comparisonCalls) options.comparisonCalls.count++;
+          if (page !== undefined && page > 2) throw new Error(`unexpected comparison page ${page}`);
+          return { data: {
+            ahead_by: options.incompleteHistory ? history.length + 1 : history.length,
+            ...(options.missingMergeBase ? {} : { merge_base_commit: { sha: history.length === 0 ? targetSha : defaultSha } }),
+            commits: page === 2 && options.duplicateHistoryPage ? history.map(({ sha }) => ({ sha })) : page ? [] : history.map(({ sha }) => ({ sha })),
+          } };
+        },
       },
       pulls: { list: listPulls },
     },
@@ -110,6 +115,13 @@ describe("inspectManagedFiles", () => {
     expect(result.status).toBe("already-applied");
     expect(result.changedPaths).toEqual(["managed.yml"]);
     expect(result.targetSha).toBe(targetSha);
+  });
+
+  test("rebuilds a managed branch that is an ancestor of default even when its files match", async () => {
+    const result = await inspectManagedFiles(githubFixture({ history: [], targetContent: "wanted\n" }), input);
+    expect(result.status).toBe("ready");
+    expect(result.branchNeedsWrite).toBe(true);
+    expect(result.requiresWorkflowsWrite).toBe(true);
   });
 
   test("rejects a branch change outside the configured managed paths", async () => {
@@ -135,6 +147,13 @@ describe("inspectManagedFiles", () => {
   test("rejects an incomplete paginated commit history", async () => {
     await expect(inspectManagedFiles(githubFixture({ incompleteHistory: true }), input))
       .rejects.toThrow("managed files branch commit list is incomplete");
+  });
+
+  test("rejects an untrusted first-page commit before requesting later pages", async () => {
+    const comparisonCalls = { count: 0 };
+    await expect(inspectManagedFiles(githubFixture({ incompleteHistory: true, signatureValid: false, comparisonCalls }), input))
+      .rejects.toThrow("managed files branch contains a commit not made by the server");
+    expect(comparisonCalls.count).toBe(1);
   });
 
   test("rejects a repeated commit page instead of treating history as complete", async () => {
@@ -257,6 +276,26 @@ describe("inspectManagedFiles", () => {
     try {
       await expect(applyManagedFiles(read, { ...input, writeToken: "unused", writeClient }))
         .rejects.toThrow("managed files branch or default branch moved before the conditional reset");
+    } finally {
+      reset.mockRestore();
+    }
+  });
+
+  test("lease-resets an ancestor branch whose managed content already matches", async () => {
+    const read = githubFixture({ history: [], targetContent: "wanted\n" });
+    const writeClient = {
+      rest: {
+        git: { getRef: async ({ ref }: { ref: string }) => ({ data: { object: { sha: ref === "heads/main" ? defaultSha : targetSha } } }) },
+        pulls: { list: async () => ({ data: [] }), create: async () => ({ data: { number: 73 } }) },
+      },
+      paginate: async () => [],
+      graphql: async () => ({ createCommitOnBranch: { commit: { oid: targetSha } } }),
+    } as unknown as GitHub;
+    const reset = spyOn(gitRef, "resetBranchWithLease").mockImplementation(async () => undefined);
+    try {
+      const result = await applyManagedFiles(read, { ...input, writeToken: "unused", writeClient });
+      expect(result).toEqual({ status: "applied", commit: targetSha, pullRequest: 73 });
+      expect(reset).toHaveBeenCalledWith(expect.objectContaining({ sourceSha: defaultSha, expectedTargetSha: targetSha }));
     } finally {
       reset.mockRestore();
     }

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "bun:test";
 import { parseConfig } from "../lib/config.ts";
-import { repoSettingsEventMode, validateRepoSettingsContext } from "./context.ts";
+import { repoSettingsEventMode, repoSettingsOperationMode, validateRepoSettingsContext, validateRepoSettingsStage } from "./context.ts";
 
 const config = parseConfig(readFileSync("e2e/fixtures/testing-csm-ci-server/csm-ci.yaml", "utf8"));
 const base = {
@@ -44,5 +44,36 @@ describe("repo-settings event mode", () => {
     ["dispatch mode in a scheduled run", "dispatch", "schedule", "a scheduled run cannot use dispatch mode"],
   ])("rejects %s", (_name, mode, event, message) => {
     expect(() => repoSettingsEventMode(mode, event)).toThrow(message);
+  });
+});
+
+describe("repo-settings operation mode", () => {
+  test.each([
+    ["omitted mode defaults to reconciliation", undefined, "workflow_dispatch", undefined, "reconcile"],
+    ["empty mode defaults to reconciliation", "", "workflow_dispatch", "dispatch", "reconcile"],
+    ["reconciliation mode", "reconcile", "schedule", "schedule", "reconcile"],
+    ["managed-files-only dispatch", "managed-files-only", "workflow_dispatch", "dispatch", "managed-files-only"],
+  ] as const)("accepts %s", (_name, value, eventName, eventMode, expected) => {
+    expect(repoSettingsOperationMode(value, eventName, eventMode)).toBe(expected);
+  });
+
+  test.each([
+    ["unknown mode", "apply", "workflow_dispatch", "dispatch", "unknown repo-settings operation mode apply"],
+    ["scheduled event", "managed-files-only", "schedule", undefined, "a scheduled run cannot use managed-files-only mode"],
+    ["scheduled operation mode", "managed-files-only", "workflow_dispatch", "schedule", "a scheduled run cannot use managed-files-only mode"],
+    ["non-dispatch event", "managed-files-only", "push", undefined, "managed-files-only mode requires a workflow_dispatch event"],
+  ] as const)("rejects %s with the exact reason", (_name, value, eventName, eventMode, message) => {
+    expect(() => repoSettingsOperationMode(value, eventName, eventMode)).toThrow(message);
+  });
+});
+
+describe("repo-settings operation stages", () => {
+  test.each(["inspect", "preflight", "apply"])("rejects %s in managed-files-only mode", (stage) => {
+    expect(() => validateRepoSettingsStage(stage, "managed-files-only"))
+      .toThrow(`repo-settings stage ${stage} is unavailable in managed-files-only mode`);
+  });
+
+  test.each(["validate-target", "discover", "managed-inspect", "managed-apply"])("allows %s in managed-files-only mode", (stage) => {
+    expect(() => validateRepoSettingsStage(stage, "managed-files-only")).not.toThrow();
   });
 });
