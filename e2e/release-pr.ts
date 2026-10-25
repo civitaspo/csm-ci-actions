@@ -123,7 +123,7 @@ export const releasePr: Scenario[] = [
           return data.workflow_runs.find((run) => run.display_title === `csm-ci-release-pr ${correlation}`);
         });
         const run = await waitRun(ctx, CLIENT, started.id);
-        assert(run.conclusion === "success", "non-default dispatch failed instead of skipping");
+        assert(run.conclusion === "skipped", "non-default dispatch did not skip");
         const byName = await jobs(ctx, CLIENT, run.id);
         assert(byName.size > 0 && [...byName.values()].every((job) => job.conclusion === "skipped"), "non-default dispatch ran a release-pr job");
         const artifacts = await ctx.gh.paginate(ctx.gh.rest.actions.listWorkflowRunArtifacts, { ...repo, run_id: run.id, per_page: 100 });
