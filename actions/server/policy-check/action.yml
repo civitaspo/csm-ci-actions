@@ -1,0 +1,24 @@
+name: csm-ci policy check
+description: Evaluate configured policies and publish the csm-ci/policy check run.
+inputs:
+  github-token:
+    description: Token with contents:read on the server repository, to read csm-ci.yaml.
+    default: ${{ github.token }}
+  config-path:
+    description: Path of csm-ci.yaml in the server repository.
+    default: csm-ci.yaml
+  server-token:
+    description: Server App token with checks:write on the pull request repository.
+    required: true
+  repository:
+    description: owner/repo of the client repository.
+    required: true
+  pull-number:
+    description: Pull request number to evaluate.
+    required: true
+outputs:
+  result:
+    description: success or failure.
+runs:
+  using: node24
+  main: ../../../dist/server-policy-check.js

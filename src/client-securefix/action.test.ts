@@ -51,10 +51,10 @@ describe("securefix client action", () => {
 });
 
 describe("release-pr reusable workflow", () => {
-  test("generates and requests in one job through the securefix client action", () => {
-    const workflow = parse(readFileSync(".github/workflows/client-release-pr.yml", "utf8")) as { jobs: Record<string, { steps?: Step[] }> };
+  test("generates and requests in one job through the release-prepare client action", () => {
+    const workflow = parse(readFileSync(".github/workflows/client-release-prepare.yml", "utf8")) as { jobs: Record<string, { steps?: Step[] }> };
     expect(Object.keys(workflow.jobs)).toEqual(["generate"]);
-    const client = workflow.jobs.generate?.steps?.find((step) => step.uses === "./.csm-ci-actions/actions/client/securefix");
+    const client = workflow.jobs.generate?.steps?.find((step) => step.uses === "./.csm-ci-actions/actions/client/release-prepare");
     expect(client?.with?.["private-key"]).toBe("${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}");
   });
 });

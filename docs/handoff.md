@@ -922,3 +922,28 @@ The user decided that the securefix client should match the shape of `csm-action
 The action fails unless the workspace is at the run head, because on `pull_request` a checkout without a ref is the merge commit and the server writes whole files onto the head. It skips fork pull requests with a notice instead of failing their checks. The Client App key is now present in the job that runs fix tools, which the plan accepts under S7 and S1.
 
 The first live run showed that e2e correlation depends on the exact client log line `created label <name> (<description>) in <server>`; dropping the description broke four scenarios (client runs [40170768402](https://github.com/civitaspo/testing-csm-ci-client/actions/runs/40170768402), [40170857604](https://github.com/civitaspo/testing-csm-ci-client/actions/runs/40170857604), [40171093927](https://github.com/civitaspo/testing-csm-ci-client/actions/runs/40171093927) and [40171489809](https://github.com/civitaspo/testing-csm-ci-client/actions/runs/40171489809)). `requestLogLine` now builds the line and a unit test pins it. One of those runs still created its label, so the server applied the route retry after the scenario's cleanup and left `e2e-securefix-route` with an open PR, which made the next run's precondition fail. Both were e2e-owned (verified Server App commit) and were removed before the rerun.
+
+## 22. Action layout and client interfaces
+
+The implementation now follows the Layout introduced by PR 28. Public actions live one level below `actions/client` or `actions/server`; JavaScript entry points and bundles use side-prefixed names. The generic request action is removed. Approve, merge, policy-check and release-publish filter their own events, mint a Client App token scoped to the server repository, and create a fixed-kind request label. The exact request log line and reusable-workflow job names remain stable for e2e correlation.
+
+Release preparation installs the pinned git-cliff version, generates changes and submits them through the shared securefix implementation within one client action. Its wrapper supplies checkout and inputs. The composite repeats the securefix upload/token steps because nested local action references resolve in the caller workspace, not beside the outer action. Validation, packaging and request code remain shared. The release-build action selects the existing build implementation through `build-type`; builds retain their separate job without permissions, secrets or an environment.
+
+### Verification
+
+Local checks passed: tool installation, frozen dependency installation, typecheck, 868 tests, build, clean committed bundles and jactionlint. Mutation checks covered the new client event/argument rules, release-build selection and release-prepare change gates. An independent review found a stale release workflow test, which was updated and passed in the complete suite.
+
+The initial signed head was `63a08a53e4cbfe348b839cbd7a1d5f7abcbca7bf`. The release-prepare completion correction is signed head `9eddb0a6ea5a11d75bdd5957de8c126dd366c608`. GitHub verified both signatures. All eight feature suites completed at the initial head. Release-pr and smoke were then repeated at the correction head; the other operations were unchanged by that correction. Post-merge CI evidence will be recorded in the final report.
+
+| Feature | Passed | CI-only skips | Representative live runs |
+| --- | ---: | ---: | --- |
+| approve | 7 | 4 | [40178692806](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40178692806), [40178827087](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40178827087) |
+| merge | 7 | 2 | [40178907081](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40178907081), [40179321656](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40179321656) |
+| policy-check | 3 | 4 | [40179469046](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40179469046), [40179520035](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40179520035) |
+| securefix | 14 | 0 | [40179590413](https://github.com/civitaspo/testing-csm-ci-client/actions/runs/40179590413), [40180082229](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40180082229) |
+| release | 12 | 0 | [40180138159](https://github.com/civitaspo/testing-csm-ci-client/actions/runs/40180138159), [40182651732](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40182651732) |
+| release-pr | 4 | 0 | [40183300851](https://github.com/civitaspo/testing-csm-ci-client/actions/runs/40183300851), [40183560295](https://github.com/civitaspo/testing-csm-ci-client/actions/runs/40183560295) |
+| repo-settings | 1 | 0 | [40182965065](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40182965065), [40183125187](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40183125187) |
+| smoke | 5 | 0 | [40183587908](https://github.com/civitaspo/testing-csm-ci-client/actions/runs/40183587908), [40183598173](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40183598173) |
+
+Release verification covered all four build types, asset attestations, immutable-release replay, stale bundles, tag collisions, foreign releases, invalid versions and owner-merge rejection. Repo-settings verification restored both testing repositories after the scenarios. The ten local skips require CI identity or credentials and remain explicitly pending until the post-merge CI suites run. No production cutover was executed.

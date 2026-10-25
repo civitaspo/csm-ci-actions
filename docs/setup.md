@@ -217,7 +217,7 @@ jobs:
   release:
     # The reusable workflow needs the Client App key from the client repository.
     # jactionlint ignore=secrets-inherit
-    uses: civitaspo/csm-ci-actions/.github/workflows/client-release.yml@<sha>
+    uses: civitaspo/csm-ci-actions/.github/workflows/client-release-publish.yml@<sha>
     secrets: inherit
 ```
 
@@ -241,14 +241,14 @@ jobs:
   release-pr:
     permissions:
       contents: read
-    uses: civitaspo/csm-ci-actions/.github/workflows/client-release-pr.yml@<sha>
+    uses: civitaspo/csm-ci-actions/.github/workflows/client-release-prepare.yml@<sha>
     with:
       version: ${{ inputs.version || '' }}
     secrets:
       CSM_CI_CLIENT_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}
 ```
 
-Pushes infer the version through git-cliff. Manual dispatches may supply an exact version. Generation packages the changelog and root version edits; the server applies them to `release/next` through securefix and maintains its PR. No client App credential is passed to the generation job.
+Pushes infer the version through git-cliff. Manual dispatches may supply an exact version. Generation packages the changelog and root version edits; the server applies them to `release/next` through securefix and maintains its PR. The generation job receives the Client App key through the release-prepare action; its token has only issues write access on the server repository.
 
 ## 6. Add repository settings reconciliation
 

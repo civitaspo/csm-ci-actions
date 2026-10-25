@@ -1,0 +1,27 @@
+name: csm-ci approve
+description: Approve a pull request whose commits pass the trust rules and policies, or that an approver forced with /approve <sha>.
+inputs:
+  github-token:
+    description: Token with contents:read on the server repository, to read csm-ci.yaml.
+    default: ${{ github.token }}
+  config-path:
+    description: Path of csm-ci.yaml in the server repository.
+    default: csm-ci.yaml
+  server-token:
+    description: Server App token for the client repository, to read the pull request and comment on it.
+    required: true
+  approver-token:
+    description: Approver App token for the client repository with pull_requests:write.
+    required: true
+  repository:
+    description: owner/repo of the client repository.
+    required: true
+  args:
+    description: JSON request numbers from intake, pull_number and optionally comment_id.
+    required: true
+outputs:
+  result:
+    description: approved, already-approved, declined or dismissed.
+runs:
+  using: node24
+  main: ../../../dist/server-approve.js

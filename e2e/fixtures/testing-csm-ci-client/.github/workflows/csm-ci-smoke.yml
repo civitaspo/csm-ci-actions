@@ -28,11 +28,14 @@ jobs:
           private-key: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}
           repositories: ${{ vars.CSM_CI_SERVER_REPOSITORY }}
           permission-issues: write
-      # e2e branch is moved to the commit under test by csm-ci-actions/e2e/run.ts.
-      # jactionlint ignore=unpinned-uses
-      - uses: civitaspo/csm-ci-actions/actions/request@e2e
-        with:
-          github-token: ${{ steps.token.outputs.token }}
-          server-repository: ${{ vars.CSM_CI_SERVER_REPOSITORY }}
-          kind: ${{ inputs.kind }}
-          args: ${{ inputs.args }}
+      - name: Create test request label
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          SERVER: ${{ vars.CSM_CI_SERVER_REPOSITORY }}
+          KIND: ${{ inputs.kind }}
+          ARGS: ${{ inputs.args }}
+        run: |
+          label="csm-ci-${KIND}-$(openssl rand -hex 8)"
+          description="${GITHUB_REPOSITORY,,}/$ARGS"
+          gh api --method POST "repos/$SERVER/labels" -f name="$label" -f description="$description" -f color=ededed >/dev/null
+          echo "created label $label ($description) in $SERVER"

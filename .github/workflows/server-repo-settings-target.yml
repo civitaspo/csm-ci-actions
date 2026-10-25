@@ -37,7 +37,7 @@ jobs:
           path: .csm-ci-actions
           persist-credentials: false
       - id: target
-        uses: ./.csm-ci-actions/actions/repo-settings
+        uses: ./.csm-ci-actions/actions/server/repo-settings
         with:
           mode: validate-target
           github-token: ${{ github.token }}
@@ -66,7 +66,7 @@ jobs:
           repositories: ${{ steps.target.outputs.target-name }}
           permission-administration: write
       - id: inspect
-        uses: ./.csm-ci-actions/actions/repo-settings
+        uses: ./.csm-ci-actions/actions/server/repo-settings
         with:
           mode: inspect
           github-token: ${{ github.token }}
@@ -77,7 +77,7 @@ jobs:
           actions-repository: ${{ job.workflow_repository }}
       - id: preflight
         if: inputs.event-mode == 'dispatch' && steps.inspect.outputs.activation-required == 'true'
-        uses: ./.csm-ci-actions/actions/repo-settings
+        uses: ./.csm-ci-actions/actions/server/repo-settings
         with:
           mode: preflight
           github-token: ${{ github.token }}
@@ -103,7 +103,7 @@ jobs:
           permission-contents: write
       - name: Apply repository settings
         if: steps.inspect.outputs.has-changes == 'true'
-        uses: ./.csm-ci-actions/actions/repo-settings
+        uses: ./.csm-ci-actions/actions/server/repo-settings
         with:
           mode: apply
           github-token: ${{ github.token }}
@@ -115,7 +115,7 @@ jobs:
           actions-repository: ${{ job.workflow_repository }}
           approver-app-slug: ${{ steps.approver-token.outputs.app-slug }}
       - id: managed-inspect
-        uses: ./.csm-ci-actions/actions/repo-settings
+        uses: ./.csm-ci-actions/actions/server/repo-settings
         with:
           mode: managed-inspect
           github-token: ${{ github.token }}
@@ -148,7 +148,7 @@ jobs:
           permission-workflows: write
       - name: Apply managed files
         if: steps.managed-inspect.outputs.has-changes == 'true'
-        uses: ./.csm-ci-actions/actions/repo-settings
+        uses: ./.csm-ci-actions/actions/server/repo-settings
         with:
           mode: managed-apply
           github-token: ${{ github.token }}
