@@ -14,8 +14,6 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-    outputs:
-      has-changes: ${{ steps.securefix.outputs.has-changes }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -55,12 +53,8 @@ jobs:
               printf 'securefix run %s\n' "$RUN_ID" > e2e/securefix-result.txt
               ;;
           esac
-      - id: securefix
-        uses: civitaspo/csm-ci-actions/actions/securefix-client@e2e
+      - uses: civitaspo/csm-ci-actions/actions/securefix-client@e2e
         with:
-          workspace: ${{ github.workspace }}
-  request:
-    needs: package
-    if: needs.package.outputs.has-changes == 'true'
-    uses: civitaspo/csm-ci-actions/.github/workflows/client-securefix.yml@e2e
-    secrets: inherit
+          client-id: ${{ vars.CSM_CI_CLIENT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}
+          server-repository: ${{ vars.CSM_CI_SERVER_REPOSITORY }}

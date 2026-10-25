@@ -32784,41 +32784,6 @@ var LabelEventSchema = object({
   sender: object({ id: number2(), type: string2() })
 });
 
-// src/lib/securefix.ts
-var MAX_SECUREFIX_FILES = 512;
-var MAX_SECUREFIX_FILE_SIZE = 8 * 1024 * 1024;
-var MAX_SECUREFIX_TOTAL_SIZE = 10 * 1024 * 1024;
-var MAX_SECUREFIX_MANIFEST_SIZE = 1024 * 1024;
-var SHA256 = /^[a-f0-9]{64}$/;
-var SHA = /^[a-f0-9]{40}$/;
-var ManifestEntry = discriminatedUnion("kind", [
-  strictObject({ kind: literal("write"), path: string2(), size: number2().int().nonnegative(), sha256: string2().regex(SHA256) }),
-  strictObject({ kind: literal("delete"), path: string2() })
-]);
-var SecurefixManifestSchema = strictObject({
-  version: literal(1),
-  repository: string2().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/).transform((value) => value.toLowerCase()),
-  run_id: number2().int().positive(),
-  head_sha: string2().regex(SHA),
-  message: string2().min(1).max(500),
-  files: array(ManifestEntry)
-});
-var SecurefixRunSchema = object({
-  id: number2().int().positive(),
-  run_attempt: number2().int().positive(),
-  event: string2(),
-  head_branch: string2(),
-  head_sha: string2(),
-  path: string2(),
-  repository: object({ id: number2().int().positive(), full_name: string2() }),
-  head_repository: object({ id: number2().int().positive(), full_name: string2() }).nullable(),
-  pull_requests: array(object({
-    number: number2().int().positive(),
-    head: object({ ref: string2(), sha: string2() }),
-    base: object({ ref: string2(), sha: string2() })
-  }))
-});
-
 // node_modules/universal-user-agent/index.js
 function getUserAgent() {
   if (typeof navigator === "object" && "userAgent" in navigator) {
@@ -36869,6 +36834,42 @@ async function loadConfig(gh, repository, ref, path) {
     throw new Error(`${path} at ${repository}@${ref} is not a file`);
   return parseConfig(data);
 }
+
+// src/lib/securefix.ts
+var MAX_SECUREFIX_FILES = 512;
+var MAX_SECUREFIX_FILE_SIZE = 8 * 1024 * 1024;
+var MAX_SECUREFIX_TOTAL_SIZE = 10 * 1024 * 1024;
+var MAX_SECUREFIX_MANIFEST_SIZE = 1024 * 1024;
+var SHA256 = /^[a-f0-9]{64}$/;
+var SHA = /^[a-f0-9]{40}$/;
+var ManifestEntry = discriminatedUnion("kind", [
+  strictObject({ kind: literal("write"), path: string2(), size: number2().int().nonnegative(), sha256: string2().regex(SHA256) }),
+  strictObject({ kind: literal("delete"), path: string2() })
+]);
+var SecurefixManifestSchema = strictObject({
+  version: literal(1),
+  repository: string2().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/).transform((value) => value.toLowerCase()),
+  run_id: number2().int().positive(),
+  head_sha: string2().regex(SHA),
+  message: string2().min(1).max(500),
+  files: array(ManifestEntry)
+});
+var SECUREFIX_CLIENT_EVENTS = new Set(["pull_request", "push", "workflow_dispatch"]);
+var SecurefixRunSchema = object({
+  id: number2().int().positive(),
+  run_attempt: number2().int().positive(),
+  event: string2(),
+  head_branch: string2(),
+  head_sha: string2(),
+  path: string2(),
+  repository: object({ id: number2().int().positive(), full_name: string2() }),
+  head_repository: object({ id: number2().int().positive(), full_name: string2() }).nullable(),
+  pull_requests: array(object({
+    number: number2().int().positive(),
+    head: object({ ref: string2(), sha: string2() }),
+    base: object({ ref: string2(), sha: string2() })
+  }))
+});
 
 // src/lib/git-ref.ts
 import { chmod as chmod2, mkdtemp, rm as rm2, writeFile as writeFile2 } from "node:fs/promises";

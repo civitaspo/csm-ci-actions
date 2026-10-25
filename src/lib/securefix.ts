@@ -7,6 +7,7 @@ import picomatch from "picomatch";
 import { z } from "zod";
 import type { SecurefixRoute } from "./config.ts";
 import { Rejection } from "./request.ts";
+import { splitRepository } from "./github.ts";
 
 export const SECUREFIX_ARTIFACT = "securefix";
 export const MAX_SECUREFIX_FILES = 512;
@@ -32,6 +33,26 @@ export type SecurefixManifest = z.infer<typeof SecurefixManifestSchema>;
 export type SecurefixChange =
   | { kind: "write"; path: string; content: Buffer }
   | { kind: "delete"; path: string };
+
+const SECUREFIX_CLIENT_EVENTS = new Set(["pull_request", "push", "workflow_dispatch"]);
+
+// Decides, before anything is packaged, whether this job may request securefix and which head the
+// server must bind the run to. The server re-checks all of it (plan S1); this only fails early.
+export function securefixClientContext(input: { eventName: string; event: unknown; repository: string; sha: string; serverRepository: string }): { headSha: string; server: { owner: string; repo: string } } {
+  if (!SECUREFIX_CLIENT_EVENTS.has(input.eventName)) throw new Rejection(`securefix client runs only on pull_request, push or workflow_dispatch, not ${input.eventName}`);
+  const server = (() => {
+    try {
+      return splitRepository(input.serverRepository);
+    } catch {
+      throw new Rejection(`server-repository ${JSON.stringify(input.serverRepository)} is not owner/repo`);
+    }
+  })();
+  if (input.eventName !== "pull_request") return { headSha: input.sha, server };
+  const pull = z.object({ pull_request: z.object({ head: z.object({ sha: z.string().regex(/^[0-9a-f]{40}$/u), repo: z.object({ full_name: z.string() }).nullable() }) }) }).safeParse(input.event);
+  if (!pull.success) throw new Rejection("securefix client could not read the pull request head from the event");
+  if (pull.data.pull_request.head.repo?.full_name.toLowerCase() !== input.repository.toLowerCase()) throw new Rejection("securefix client does not accept pull requests from forks");
+  return { headSha: pull.data.pull_request.head.sha, server };
+}
 
 export async function buildSecurefixArtifact(input: { workspace: string; repository: string; runId: number; headSha: string; message: string }): Promise<{ path: string; hasChanges: boolean }> {
   const status = execFileSync("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"], { cwd: input.workspace });

@@ -4,11 +4,36 @@ Securefix packages generated working-tree changes from a client workflow, then a
 
 ## Client workflow
 
-Run `civitaspo/csm-ci-actions/actions/securefix-client@<ref>` in the job that generates the changes. It reads the client repository worktree, rejects unsafe paths, symlinks, submodules, non-regular files, and files over 8 MB; it also enforces a 512-file limit and 10 MB total. It creates a strict manifest with repository, run id, head SHA, commit message, file sizes and SHA-256 digests, then uploads the artifact with the official `actions/upload-artifact` action under the name `securefix`.
+Add one step, `civitaspo/csm-ci-actions/actions/securefix-client@<sha>`, after the steps that change files, in the same job:
 
-Call `civitaspo/csm-ci-actions/.github/workflows/client-securefix.yml@<ref>` from a dependent job after the packaging job. The reusable workflow has access to the same caller run id, mints the Client App token for the server repository, and sends the `securefix` request. A workflow run has a separate runner per job, so the package action must run after generation in the client job; the reusable request workflow does not attempt to read that job's workspace. Use `secrets: inherit` on the reusable-workflow job so it can access the Client App key.
+```yaml
+name: securefix
+on:
+  pull_request:
+permissions: {}
+jobs:
+  fix:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@<sha>
+        with:
+          persist-credentials: false
+      # Fix code as you like.
+      - run: npx prettier -w .
+      - uses: civitaspo/csm-ci-actions/actions/securefix-client@<sha>
+        with:
+          client-id: ${{ vars.CSM_CI_CLIENT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}
+          server-repository: ${{ vars.CSM_CI_SERVER_REPOSITORY }}
+```
 
-The reusable workflow accepts `pull_request`, `push`, and `workflow_dispatch` runs; fork pull requests are skipped. Server-side binding remains authoritative. PR mode requires exactly one open, ready PR from the same repository to the default branch. Route mode requires a configured workflow path and source branch.
+The action reads the client repository worktree (`workspace`, default the job workspace). It rejects unsafe paths, symlinks, submodules, non-regular files and files over 8 MB, and it enforces a 512-file limit and 10 MB in total. It creates a strict manifest with repository, run id, head SHA, commit message (`message`), file sizes and SHA-256 digests, and uploads it with the official `actions/upload-artifact` action under the name `securefix`. Then the official `actions/create-github-app-token` action mints a Client App token for the server repository with `issues: write`, and the action creates the `securefix` request label. When nothing changed, it uploads and requests nothing. The `has-changes` and `label` outputs report what happened.
+
+The Client App key is present in the job that runs your fix tools, as with securefix-action. That key can only create labels in the server repository, and the server re-fetches every fact (plan S1 and S7), so a stolen key gains nothing a forged label would not.
+
+The action accepts `pull_request` from the same repository, `push` and `workflow_dispatch`, and fails on any other event or on a fork pull request. Server-side binding remains authoritative. PR mode requires exactly one open, ready PR from the same repository to the default branch. Route mode requires a configured workflow path and source branch.
 
 ## Server configuration
 

@@ -6,7 +6,7 @@ import { renameSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, spyOn, test } from "bun:test";
-import { bindSecurefixPullRequest, buildSecurefixArtifact, findSecurefixRoute, parseSecurefixManifest, readSecurefixArtifact, validateEntries, validateRouteChanges, validateSecurefixPath, validateSecurefixRun, validateSecurefixRouteCommitFile, validateSecurefixRouteHead, type SecurefixManifest, type SecurefixRun } from "./securefix.ts";
+import { bindSecurefixPullRequest, buildSecurefixArtifact, securefixClientContext, findSecurefixRoute, parseSecurefixManifest, readSecurefixArtifact, validateEntries, validateRouteChanges, validateSecurefixPath, validateSecurefixRun, validateSecurefixRouteCommitFile, validateSecurefixRouteHead, type SecurefixManifest, type SecurefixRun } from "./securefix.ts";
 import type { SecurefixRoute } from "./config.ts";
 
 const sha = "a".repeat(40);
@@ -443,5 +443,33 @@ describe("securefix run and path bindings", () => {
     ["missing post-change content", { filename: "CHANGELOG.md", status: "modified" }, Buffer.from("before\n"), null, 'securefix route commit has no content for "CHANGELOG.md"'],
   ] as const)("rejects route commit file case: %s", (_name, file, before, after, message) => {
     expect(() => validateSecurefixRouteCommitFile(route, file, before, after)).toThrow(message);
+  });
+});
+
+describe("securefix client context", () => {
+  const head = "b".repeat(40);
+  const base = { repository: "owner/client", sha, serverRepository: "owner/server" };
+  const pull = (repo: { full_name: string } | null, headSha: string = head) => ({ pull_request: { head: { sha: headSha, repo } } });
+
+  test.each([
+    ["push", "push", {}, sha],
+    ["workflow_dispatch", "workflow_dispatch", {}, sha],
+    ["a same-repository pull_request", "pull_request", pull({ full_name: "owner/client" }), head],
+    ["a same-repository pull_request in another case", "pull_request", pull({ full_name: "Owner/Client" }), head],
+  ])("accepts %s and binds the right head", (_name, eventName, event, expected) => {
+    expect(securefixClientContext({ ...base, eventName, event })).toEqual({ headSha: expected, server: { owner: "owner", repo: "server" } });
+  });
+
+  test.each([
+    ["pull_request_target", { ...base, eventName: "pull_request_target", event: pull({ full_name: "owner/client" }) }, "securefix client runs only on pull_request, push or workflow_dispatch, not pull_request_target"],
+    ["issue_comment", { ...base, eventName: "issue_comment", event: {} }, "securefix client runs only on pull_request, push or workflow_dispatch, not issue_comment"],
+    ["a server repository without an owner", { ...base, eventName: "push", event: {}, serverRepository: "server" }, 'server-repository "server" is not owner/repo'],
+    ["a server repository with extra segments", { ...base, eventName: "push", event: {}, serverRepository: "owner/server/extra" }, 'server-repository "owner/server/extra" is not owner/repo'],
+    ["a pull_request event without a head", { ...base, eventName: "pull_request", event: {} }, "securefix client could not read the pull request head from the event"],
+    ["a pull_request head that is not a full SHA", { ...base, eventName: "pull_request", event: pull({ full_name: "owner/client" }, "abc") }, "securefix client could not read the pull request head from the event"],
+    ["a fork pull_request", { ...base, eventName: "pull_request", event: pull({ full_name: "someone/client" }) }, "securefix client does not accept pull requests from forks"],
+    ["a pull_request whose head repository was deleted", { ...base, eventName: "pull_request", event: pull(null) }, "securefix client does not accept pull requests from forks"],
+  ])("rejects %s", (_name, input, message) => {
+    expect(() => securefixClientContext(input)).toThrow(message);
   });
 });

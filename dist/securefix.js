@@ -36850,6 +36850,7 @@ var SecurefixManifestSchema = strictObject({
   message: string2().min(1).max(500),
   files: array(ManifestEntry)
 });
+var SECUREFIX_CLIENT_EVENTS = new Set(["pull_request", "push", "workflow_dispatch"]);
 var SecurefixRunSchema = object({
   id: number2().int().positive(),
   run_attempt: number2().int().positive(),

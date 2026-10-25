@@ -2,7 +2,7 @@
 
 `client-release-pr.yml` generates a release pull request from the client's default branch. It uses git-cliff 2.14.2 to infer a version from Git history and generate `CHANGELOG.md`. A manual dispatch can instead supply an explicit semantic version without the `v` prefix.
 
-The generation job checks out the triggering commit with full history and a read-only workflow token. It has no App token or environment secrets. git-cliff runs with `--no-exec`; package-manager scripts and client build scripts are not run. A separate job receives only the Client App key and requests the existing securefix operation.
+The generation job checks out the triggering commit with full history and a read-only workflow token. git-cliff runs with `--no-exec`; package-manager scripts and client build scripts are not run. The same job then runs the [securefix client](securefix.md#client-workflow) action, which receives the Client App key, packages the edits and requests the existing securefix operation. It has no environment secrets.
 
 ## Generated files
 
