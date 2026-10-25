@@ -1,7 +1,7 @@
 [tools]
 bun = "1.4.3"
 "github:jdx/jactionlint" = "2.3.0"
-"github:github/gh-actions-lock" = "0.4.0"
+"github:github/gh-actions-lock" = { version = "0.4.0", bin = "gh-actions-lock" }
 
 [tasks.actions-lock]
 run = "gh-actions-lock .github/workflows/client-release-prepare.yml .github/workflows/client-release-publish.yml --no-migrate-local-actions --no-narrow --no-interactive"
