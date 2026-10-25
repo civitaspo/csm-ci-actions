@@ -851,3 +851,65 @@ The S4 history proof moved from securefix into `src/lib/server-owned-history.ts`
 - Whether GitHub requires workflows write for that reset is unknown. The workflow mints it for every reset to fail safe.
 - The e2e fixture calls the per-target workflow with the schedule mode. The cron trigger and the outer workflow's discovery of every installed repository were not exercised.
 - Activating `controlled-merges` on the server, which depends on the approver installation above.
+
+## 20. Final report: first release through Phase 6
+
+Phases 2 to 6 are merged. Phase 7 is the user's runbook in [cutover.md](cutover.md); nothing was executed in production. Every merge below passed `status-check`, and each feature's CI e2e and smoke ran from `main` right after the merge.
+
+### Merged pull requests and post-merge CI e2e
+
+| PR | Work | Post-merge CI e2e from `main` |
+|---|---|---|
+| [6](https://github.com/civitaspo/csm-ci-actions/pull/6) | Request timeout and bounded retry of safe reads | [smoke](https://github.com/civitaspo/csm-ci-actions/actions/runs/40118182203), [approve](https://github.com/civitaspo/csm-ci-actions/actions/runs/40118332288) |
+| [7](https://github.com/civitaspo/csm-ci-actions/pull/7) | Parallel feature scenarios with exact request correlation | [approve](https://github.com/civitaspo/csm-ci-actions/actions/runs/40121818143), [smoke](https://github.com/civitaspo/csm-ci-actions/actions/runs/40121839872) |
+| [8](https://github.com/civitaspo/csm-ci-actions/pull/8) | Phase 3 policy-check and sensitive paths | [policy-check](https://github.com/civitaspo/csm-ci-actions/actions/runs/40124151667), [smoke](https://github.com/civitaspo/csm-ci-actions/actions/runs/40124183888), [approve](https://github.com/civitaspo/csm-ci-actions/actions/runs/40124403552) (11/11 with the CI-only untrusted-committer cases) |
+| [9](https://github.com/civitaspo/csm-ci-actions/pull/9) | Phase 2 merge | [merge failed](https://github.com/civitaspo/csm-ci-actions/actions/runs/40127955610) on an e2e expectation, fixed in PR 10; [smoke](https://github.com/civitaspo/csm-ci-actions/actions/runs/40127975831) |
+| [10](https://github.com/civitaspo/csm-ci-actions/pull/10) | Merge e2e expectation for edited comments | [merge](https://github.com/civitaspo/csm-ci-actions/actions/runs/40130018389), [smoke](https://github.com/civitaspo/csm-ci-actions/actions/runs/40130129706) |
+| [11](https://github.com/civitaspo/csm-ci-actions/pull/11) | Phase 4 securefix | [securefix](https://github.com/civitaspo/csm-ci-actions/actions/runs/40132821986), [smoke](https://github.com/civitaspo/csm-ci-actions/actions/runs/40132862932) |
+| [13](https://github.com/civitaspo/csm-ci-actions/pull/13) | Release attestation spike contract | [smoke](https://github.com/civitaspo/csm-ci-actions/actions/runs/40133607613) |
+| [14](https://github.com/civitaspo/csm-ci-actions/pull/14) | Phase 5a release publish | [release failed](https://github.com/civitaspo/csm-ci-actions/actions/runs/40143101984) on tag visibility delay, fixed in PR 17; [smoke](https://github.com/civitaspo/csm-ci-actions/actions/runs/40143103996) |
+| [17](https://github.com/civitaspo/csm-ci-actions/pull/17) | Release tag visibility follow-up | [release](https://github.com/civitaspo/csm-ci-actions/actions/runs/40148584310), [smoke](https://github.com/civitaspo/csm-ci-actions/actions/runs/40148586386) |
+| [21](https://github.com/civitaspo/csm-ci-actions/pull/21) | Phase 5b release-pr | [release-pr](https://github.com/civitaspo/csm-ci-actions/actions/runs/40152507012), [smoke](https://github.com/civitaspo/csm-ci-actions/actions/runs/40152508687) |
+| [22](https://github.com/civitaspo/csm-ci-actions/pull/22) | Plan: Phase 6 decisions | Documentation only; covered by the PR 23 runs |
+| [23](https://github.com/civitaspo/csm-ci-actions/pull/23) | Phase 6 repo-settings | [repo-settings](https://github.com/civitaspo/csm-ci-actions/actions/runs/40157590133), [smoke](https://github.com/civitaspo/csm-ci-actions/actions/runs/40157767523) |
+| [24](https://github.com/civitaspo/csm-ci-actions/pull/24) | Phase 7 cutover runbook | Documentation only |
+
+### What each phase verified
+
+- **API robustness (PR 6).** A hung request times out, 502/503/504 and network errors retry only for safe reads, and writes never retry. Section 11.
+- **Parallel e2e (PR 7).** Scenarios of one feature run concurrently, matched to their own server runs by request identity. Section 12.
+- **Phase 3 policy-check.** `csm-ci/policy` is bound to the head, sensitive paths need an approver marker bound to author, state and head, and approve and `/recheck` refresh the check. Section 13.
+- **Phase 2 merge.** `/merge` takes no argument, pins the head it observed, waits for approval, policy and required checks, and rejects edited, stale, replayed or force-pushed requests. Section 14.
+- **Phase 4 securefix.** PR mode is bound to exactly one PR whose base is default; route mode is bound to its workflow, event and default head, with path, size, symlink and version-only limits; writes are compare-and-swap. Section 14.
+- **Phase 5a release.** The server verifies the merge, creates the tag (only the Server App may), builds without credentials, attests assets, and publishes an immutable release; check-dist mismatches abort. Sections 15 to 17.
+- **Phase 5b release-pr.** git-cliff generation goes through the securefix route; an exact repeat preserves the PR and commit. Section 18.
+- **Phase 6 repo-settings.** Drift repair, a managed PR, a no-op second run, a schedule that keeps a stopped `controlled-merges` stopped while repairing it, and a server schedule that never creates it. The shared S4 history proof was regression-tested with securefix and release-pr. Section 19.
+
+### Decisions and reasons
+
+- `/merge` and `/approve` take no argument. A short SHA can be brute-forced and a full one is impractical to type; the server pins the head it observed and rejects later pushes.
+- `/approve` approves trusted commits only (section 8 item 1 left as a proposal), because the commit date cannot prove when a commit was pushed.
+- Sensitive-paths circularity (section 6.3): `/approve` first validates the command and every other policy, then writes the approval pinned to the head with the source comment marker, then re-evaluates all policies. Later evaluations use that persisted head-bound marker. Automatic approval and `/recheck` never create human approval evidence, so no evaluation path bypasses the policy.
+- Phase 6 uses one per-target reconciler instead of a generic plan/executor, a global `repo_settings` block, and a literal-path managed-file map instead of a template catalog.
+- The administration token also reads repository state, because GitHub hides ruleset bypass actors from read-only tokens.
+- The `controlled-merges` preflight runs only for activation, so steady-state dispatches are not blocked by queued auto-merges. Every repair that does not activate it omits enforcement, so a stop set mid-run survives.
+- `review-and-checks` does not require up-to-date branches, because `/merge` never updates them.
+
+### Needs the user
+
+1. Install the testing approver App on `testing-csm-ci-server` to verify `controlled-merges` activation on a server. Production needs the same on `csm-ci-server`.
+2. Provision the Client App repository variables and key on the server repository, so the server's own merge caller works.
+3. Every Phase 7 step in [cutover.md](cutover.md): repository and App creation, credentials, caller migration and retiring securefix-server.
+4. Renovate PRs 2, 3, 12, 15, 16, 18, 19 and 20 were left untouched. Dependency updates need a rebuilt `dist/` (section 8 item 2).
+
+### Not verified
+
+- Live changed-content reset of an existing `release/next` or `csm-ci/repo-settings` branch. Force-pushes in the testing repositories were not authorized; unit and local Git lease tests cover it. Whether that reset needs workflows write is unknown; the managed-file reset mints it to fail safe.
+- The cron trigger of repo-settings and the outer workflow's discovery across every installed repository; e2e dispatches the per-target schedule branch directly.
+- `controlled-merges` activation on a server (item 1 above).
+- The 60-minute command deadline and dismissal by a push during approval are unit-tested only.
+
+### Process incidents
+
+- An interrupted mutation run left `if (false)` in place of the comparison pagination guard in the uncommitted Phase 6 source, and a later run saved that text as its baseline. It was found by review and restored before the first commit. Section 19 records the mutation-script rule this led to.
+- While reviewing the cutover runbook, a review subagent made read-only `GET` requests to `civitaspo/securefix-server` and one production client repository. Both are outside the three repositories this work was authorized to touch. It wrote nothing. The brief forbade GitHub writes but did not restrict reads to the authorized repositories. Only generic lessons from those reads went into [cutover.md](cutover.md); it names no production repository, ruleset or App ID.
