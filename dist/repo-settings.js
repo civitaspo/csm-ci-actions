@@ -37104,7 +37104,7 @@ async function inspectManagedFiles(gh, input) {
   const status = branchNeedsWrite || requiresPullRequestUpdate ? "ready" : "already-applied";
   return {
     status,
-    requiresWorkflowsWrite: branchNeedsWrite && changedPaths.some((path) => path.startsWith(".github/workflows/")),
+    requiresWorkflowsWrite: branchNeedsWrite && (changedPaths.some((path) => path.startsWith(".github/workflows/")) || targetSha !== null && targetSha !== defaultSha),
     requiresPullRequestUpdate,
     branchNeedsWrite,
     repository: input.repository.toLowerCase(),
@@ -37336,7 +37336,7 @@ async function hasDistributedCaller(gh, target, defaultBranch, actionsRepository
       if (!hasCreatedEvent(workflow.on, requirement.event))
         continue;
       for (const job of Object.values(workflow.jobs)) {
-        if (!isRecord(job) || typeof job.uses !== "string" || !job.uses.startsWith(expectedUses) || job.uses.length === expectedUses.length || "if" in job)
+        if (!isRecord(job) || typeof job.uses !== "string" || !job.uses.toLowerCase().startsWith(expectedUses) || job.uses.length === expectedUses.length || "if" in job)
           continue;
         if (job.secrets === "inherit")
           distributed.add(requirement.workflow);
@@ -37400,9 +37400,9 @@ function repoSettingsRuleSets(config) {
     { name: "integrity", enforcement: "active", target: "branch", conditions: defaultBranch, rules: [{ type: "deletion" }, { type: "non_fast_forward" }, { type: "required_linear_history" }, { type: "required_signatures" }], bypass_actors: [] },
     { name: "review-and-checks", enforcement: "active", target: "branch", conditions: defaultBranch, rules: [
       { type: "pull_request", parameters: { required_approving_review_count: 1, dismiss_stale_reviews_on_push: true, required_reviewers: [], require_code_owner_review: false, require_last_push_approval: false, required_review_thread_resolution: false, require_extra_approval_for_unattributed_changes: true, allowed_merge_methods: ["squash"] } },
-      { type: "required_status_checks", parameters: { strict_required_status_checks_policy: true, do_not_enforce_on_create: false, required_status_checks: [{ context: "csm-ci/policy", integration_id: config.apps.server_app_id }, ...config.merge.required_checks.map((check) => ({ context: check.name, integration_id: check.app_id }))] } }
+      { type: "required_status_checks", parameters: { strict_required_status_checks_policy: false, do_not_enforce_on_create: false, required_status_checks: [{ context: "csm-ci/policy", integration_id: config.apps.server_app_id }, ...config.merge.required_checks.map((check) => ({ context: check.name, integration_id: check.app_id }))] } }
     ], bypass_actors: [] },
-    { name: "controlled-merges", enforcement: "active", target: "branch", conditions: defaultBranch, rules: [{ type: "update", parameters: { update_allows_fetch_and_merge: false } }], bypass_actors: serverBypass },
+    { name: "controlled-merges", enforcement: "active", target: "branch", conditions: defaultBranch, rules: [{ type: "update" }], bypass_actors: serverBypass },
     { name: "release-tags", enforcement: "active", target: "tag", conditions: { ref_name: { include: ["refs/tags/v*"], exclude: [] } }, rules: [{ type: "creation" }, { type: "update" }, { type: "deletion" }], bypass_actors: [{ actor_id: config.apps.server_app_id, actor_type: "Integration", bypass_mode: "always" }] }
   ];
 }
@@ -37411,16 +37411,6 @@ async function inspectRepoSettings(args) {
   if (!repoSettings)
     throw new Rejection("repo_settings is not configured");
   const address = { ...splitRepository(args.target.name) };
-  if (args.mode === "dispatch" && !args.approverAppSlug)
-    throw new Rejection("approver App slug is required for dispatch preflight");
-  let dispatchPreflight;
-  if (args.mode === "dispatch") {
-    if (!args.approverAppSlug)
-      throw new Rejection("approver App slug is required for dispatch preflight");
-    const basic = await inspectRepoSettingsPreflight({ readGH: args.readGH, target: args.target, ...args.actionsRepository ? { actionsRepository: args.actionsRepository } : {} });
-    const approverCanWrite = await verifyRepoSettingsApprover({ readGH: args.readGH, config: args.config, approverAppSlug: args.approverAppSlug });
-    dispatchPreflight = { ...basic, approverCanWrite };
-  }
   const [repositoryResponse, ruleSets, immutableEnabled] = await Promise.all([
     args.adminGH.rest.repos.get(address),
     args.adminGH.paginate("GET /repos/{owner}/{repo}/rulesets", { ...address, per_page: 100 }),
@@ -37443,32 +37433,40 @@ async function inspectRepoSettings(args) {
   const ids = {};
   const enforcements = {};
   const rulesetsToChange = [];
+  let activation = false;
   for (const definition of definitions) {
     const existing = byName.get(definition.name)?.[0];
     ids[definition.name] = existing?.id;
     enforcements[definition.name] = existing?.enforcement;
-    if (definition.name === "controlled-merges" && args.mode === "schedule") {
-      if (!existing)
-        continue;
-    }
-    if (definition.name === "controlled-merges" && args.mode === "dispatch") {
-      validateDispatchPreflight(dispatchPreflight);
+    const controlled = definition.name === "controlled-merges";
+    if (controlled && args.mode === "schedule" && !existing)
+      continue;
+    if (controlled && args.mode === "dispatch" && existing?.enforcement !== "active") {
       if (existing && !sameServerPullRequestBypass(existing.bypass_actors, args.config.apps.server_app_id)) {
         throw new Rejection("controlled-merges bypass must contain only the Server App pull_request bypass");
       }
+      activation = true;
     }
-    if (!existing || !sameRuleSet(existing, definition, definition.name === "controlled-merges" && args.mode === "schedule" ? existing.enforcement : undefined))
+    if (!existing || !sameRuleSet(existing, definition, controlled && args.mode === "schedule" ? existing.enforcement : undefined))
       rulesetsToChange.push(definition.name);
   }
   return {
     target: args.target,
     changes: { settings: changedSettings(repositoryResponse.data, repoSettings.settings ?? {}), immutableReleases: !immutableEnabled, rulesets: rulesetsToChange },
+    activation,
     rulesetIds: ids,
     rulesetEnforcements: enforcements
   };
 }
 async function applyRepoSettings(args) {
-  const inspection = await inspectRepoSettings({ readGH: args.readGH, adminGH: args.adminGH, config: args.config, target: args.target, mode: args.mode, ...args.approverAppSlug ? { approverAppSlug: args.approverAppSlug } : {}, ...args.actionsRepository ? { actionsRepository: args.actionsRepository } : {} });
+  const inspection = await inspectRepoSettings({ adminGH: args.adminGH, config: args.config, target: args.target, mode: args.mode });
+  if (inspection.activation) {
+    if (!args.approverAppSlug)
+      throw new Rejection("approver App slug is required for dispatch preflight");
+    const basic = await inspectRepoSettingsPreflight({ readGH: args.readGH, target: args.target, ...args.actionsRepository ? { actionsRepository: args.actionsRepository } : {} });
+    const approverCanWrite = await verifyRepoSettingsApprover({ readGH: args.readGH, config: args.config, approverAppSlug: args.approverAppSlug });
+    validateDispatchPreflight({ ...basic, approverCanWrite });
+  }
   const repoSettings = args.config.repo_settings;
   if (!repoSettings)
     throw new Rejection("repo_settings is not configured");
@@ -37505,16 +37503,15 @@ async function applyRepoSettings(args) {
       await args.adminGH.request({ method: "POST", url: "/repos/{owner}/{repo}/rulesets", ...address, ...definition });
       rulesetsCreated++;
     } else {
-      const enforcement = name === "controlled-merges" && args.mode === "schedule" ? inspection.rulesetEnforcements[name] ?? "disabled" : definition.enforcement;
-      await args.adminGH.request({ method: "PUT", url: "/repos/{owner}/{repo}/rulesets/{ruleset_id}", ...address, ruleset_id: id, ...definition, enforcement });
+      const { enforcement: _enforcement, ...withoutEnforcement } = definition;
+      const body = name === "controlled-merges" && args.mode === "schedule" ? withoutEnforcement : definition;
+      await args.adminGH.request({ method: "PUT", url: "/repos/{owner}/{repo}/rulesets/{ruleset_id}", ...address, ruleset_id: id, ...body });
       rulesetsUpdated++;
     }
   }
   return { settingsUpdated, immutableReleasesEnabled, rulesetsUpdated, rulesetsCreated };
 }
 function validateDispatchPreflight(preflight) {
-  if (!preflight)
-    throw new Rejection("dispatch preflight is required to enable controlled-merges");
   const checks = [
     [preflight.callerDistributed, "caller workflow has not been distributed"],
     [preflight.approverCanWrite, "approver bot does not have write permission"],
@@ -37625,6 +37622,14 @@ async function main() {
     setOutput("is-server", String(target.isServer));
     return;
   }
+  if (mode === "inspect") {
+    const result = await inspectRepoSettings({ adminGH: github(input("admin-token", true)), config, target, mode: eventMode(input("event-mode", true)) });
+    info(`drift for ${target.name}: ${JSON.stringify(result.changes)}; activation required: ${result.activation}`);
+    setOutput("changes", JSON.stringify(result.changes));
+    setOutput("activation-required", String(result.activation));
+    setOutput("has-changes", String(result.changes.settings.length > 0 || result.changes.immutableReleases || result.changes.rulesets.length > 0));
+    return;
+  }
   const readGH = github(input("read-token", true));
   if (mode === "preflight") {
     const result = await inspectRepoSettingsPreflight({ readGH, target, actionsRepository: input("actions-repository", true) });
@@ -37637,15 +37642,8 @@ async function main() {
     info(`preflight for ${target.name} completed`);
     return;
   }
-  if (mode === "inspect" || mode === "apply") {
+  if (mode === "apply") {
     const approverAppSlug = input("approver-app-slug");
-    if (mode === "inspect") {
-      const result = await inspectRepoSettings({ readGH, adminGH: github(input("admin-token", true)), config, target, mode: eventMode(input("event-mode", true)), ...approverAppSlug ? { approverAppSlug } : {}, actionsRepository });
-      info(`drift for ${target.name}: ${JSON.stringify(result.changes)}`);
-      setOutput("changes", JSON.stringify(result.changes));
-      setOutput("has-changes", String(result.changes.settings.length > 0 || result.changes.immutableReleases || result.changes.rulesets.length > 0));
-      return;
-    }
     const result = await applyRepoSettings({ readGH, adminGH: github(input("admin-token", true)), config, target, mode: eventMode(input("event-mode", true)), ...approverAppSlug ? { approverAppSlug } : {}, actionsRepository });
     info(`applied to ${target.name}: ${JSON.stringify(result)}`);
     setOutput("result", JSON.stringify(result));

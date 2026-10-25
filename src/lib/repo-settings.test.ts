@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { CONFIG_YAML, config, fakeFetch } from "./testing.ts";
 import { parseConfig } from "./config.ts";
 import { github } from "./github.ts";
-import { discoverRepoSettingsTargets, inspectRepoSettings, inspectRepoSettingsPreflight, repoSettingsRuleSets, type RepoSettingsTarget } from "./repo-settings.ts";
+import { applyRepoSettings, discoverRepoSettingsTargets, inspectRepoSettings, inspectRepoSettingsPreflight, repoSettingsRuleSets, type RepoSettingsTarget } from "./repo-settings.ts";
 
 describe("discoverRepoSettingsTargets", () => {
   const installed = [
@@ -56,7 +56,7 @@ describe("inspectRepoSettings", () => {
     enforcement: "disabled",
     target: "branch",
     conditions: { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } },
-    rules: [{ type: "update", parameters: { update_allows_fetch_and_merge: false } }],
+    rules: [{ type: "update" }],
     bypass_actors: [{ actor_id: 1, actor_type: "Integration", bypass_mode: "pull_request" }],
   };
 
@@ -67,7 +67,7 @@ describe("inspectRepoSettings", () => {
       { method: "GET", path: "/repos/owner/client/rulesets/81", body: disabledControlled },
       { method: "GET", path: "/repos/owner/client/immutable-releases", body: { enabled: true } },
     ]);
-    const plan = await inspectRepoSettings({ readGH: github("read", fetch), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "schedule" });
+    const plan = await inspectRepoSettings({ adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "schedule" });
     expect(plan.changes.rulesets).not.toContain("controlled-merges");
     expect(plan.rulesetEnforcements["controlled-merges"]).toBe("disabled");
   });
@@ -78,7 +78,7 @@ describe("inspectRepoSettings", () => {
       { method: "GET", path: "/repos/owner/client/rulesets", body: [] },
       { method: "GET", path: "/repos/owner/client/immutable-releases", body: { enabled: true } },
     ]);
-    const plan = await inspectRepoSettings({ readGH: github("read", fetch), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "schedule" });
+    const plan = await inspectRepoSettings({ adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "schedule" });
     expect(plan.changes.rulesets).not.toContain("controlled-merges");
   });
 
@@ -96,10 +96,8 @@ describe("inspectRepoSettings", () => {
       ...rules,
       { method: "GET", path: "/repos/owner/client/immutable-releases", body: { enabled: true } },
     ]);
-    const readFetch = fakeFetch([]);
-    const plan = await inspectRepoSettings({ readGH: github("read", readFetch), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "schedule" });
+    const plan = await inspectRepoSettings({ adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "schedule" });
     expect(plan.changes).toEqual({ settings: [], immutableReleases: false, rulesets: [] });
-    expect(readFetch.calls).toEqual([]);
   });
 
   test("reports each drifted repository setting", async () => {
@@ -108,7 +106,7 @@ describe("inspectRepoSettings", () => {
       { method: "GET", path: "/repos/owner/client/rulesets", body: [] },
       { method: "GET", path: "/repos/owner/client/immutable-releases", body: { enabled: true } },
     ]);
-    const plan = await inspectRepoSettings({ readGH: github("read", fakeFetch([])), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "schedule" });
+    const plan = await inspectRepoSettings({ adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "schedule" });
     expect(plan.changes.settings).toEqual(["allow_auto_merge"]);
   });
 
@@ -119,7 +117,7 @@ describe("inspectRepoSettings", () => {
       { method: "GET", path: "/repos/owner/client/rulesets", body: [] },
       { method: "GET", path: "/repos/owner/client/immutable-releases", body: { enabled: true } },
     ]);
-    await expect(inspectRepoSettings({ readGH: github("read", fakeFetch([])), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "schedule" }))
+    await expect(inspectRepoSettings({ adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "schedule" }))
       .rejects.toThrow("repository setting allow_auto_merge is not visible to the inspection token");
   });
 
@@ -131,7 +129,7 @@ describe("inspectRepoSettings", () => {
       { method: "GET", path: "/repos/owner/client/rulesets/81", body: hidden },
       { method: "GET", path: "/repos/owner/client/immutable-releases", body: { enabled: true } },
     ]);
-    await expect(inspectRepoSettings({ readGH: github("read", fakeFetch([])), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "schedule" }))
+    await expect(inspectRepoSettings({ adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "schedule" }))
       .rejects.toThrow("ruleset controlled-merges hides its bypass actors; inspection requires administration write access");
   });
 
@@ -148,7 +146,7 @@ describe("inspectRepoSettings", () => {
       { method: "GET", path: "/repos/owner/client/rulesets/82", body: second },
       { method: "GET", path: "/repos/owner/client/immutable-releases", body: { enabled: true } },
     ]);
-    await expect(inspectRepoSettings({ readGH: github("read", fetch), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "schedule" }))
+    await expect(inspectRepoSettings({ adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "schedule" }))
       .rejects.toThrow("multiple Repository rulesets named controlled-merges");
   });
 
@@ -158,7 +156,7 @@ describe("inspectRepoSettings", () => {
       { method: "GET", path: "/repos/owner/client/rulesets", body: [] },
       { method: "GET", path: "/repos/owner/client/immutable-releases", status: 500, body: { message: "failure" } },
     ]);
-    await expect(inspectRepoSettings({ readGH: github("read", fetch), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "schedule" })).rejects.toThrow();
+    await expect(inspectRepoSettings({ adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "schedule" })).rejects.toThrow();
   });
 
   const dispatchRejects: [string, { event?: string; jobIf?: string; approverId?: number; queueCount?: number; bypass?: { actor_id: number; actor_type: string; bypass_mode: string }[] }, string][] = [
@@ -168,15 +166,50 @@ describe("inspectRepoSettings", () => {
     ["auto-merge queue is occupied", { queueCount: 1 }, "auto-merge queue is not empty"],
     ["controlled-merges has another bypass", { bypass: [{ actor_id: 99, actor_type: "Integration", bypass_mode: "pull_request" }] }, "controlled-merges bypass must contain only the Server App pull_request bypass"],
   ];
-  test.each(dispatchRejects)("dispatch rejects %s", async (_, options, message) => {
+  test.each(dispatchRejects)("dispatch activation rejects %s before any write", async (_, options, message) => {
     const fetch = dispatchFetch(options);
-    await expect(inspectRepoSettings({ readGH: github("read", fetch), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "dispatch", approverAppSlug: "approver" })).rejects.toThrow(message);
+    await expect(applyRepoSettings({ readGH: github("read", fetch), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "dispatch", approverAppSlug: "approver" })).rejects.toThrow(message);
+    expect(fetch.calls.filter((call) => !call.startsWith("GET ") && call !== "POST /graphql")).toEqual([]);
   });
 
-  test("dispatch requires the minted approver app slug", async () => {
-    const fetch = fakeFetch([]);
-    await expect(inspectRepoSettings({ readGH: github("read", fetch), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "dispatch" })).rejects.toThrow("approver App slug is required for dispatch preflight");
-    expect(fetch.calls).toEqual([]);
+  test("dispatch activation requires the minted approver app slug", async () => {
+    const fetch = dispatchFetch({});
+    await expect(applyRepoSettings({ readGH: github("read", fetch), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "dispatch" })).rejects.toThrow("approver App slug is required for dispatch preflight");
+    expect(fetch.calls.filter((call) => !call.startsWith("GET "))).toEqual([]);
+  });
+
+  test.each([
+    ["absent", undefined, true],
+    ["disabled", "disabled", true],
+    ["evaluate", "evaluate", true],
+    ["active", "active", false],
+  ] as const)("dispatch with %s controlled-merges needs activation: %s", async (_name, enforcement, expected) => {
+    const fetch = dispatchFetch({ queueCount: 1, ...(enforcement ? { enforcement } : { absent: true }) });
+    const plan = await inspectRepoSettings({ adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "dispatch" });
+    expect(plan.activation).toBe(expected);
+  });
+
+  test("dispatch repairs an active controlled-merges without the activation preflight", async () => {
+    const fetch = dispatchFetch({ queueCount: 1, enforcement: "active", bypass: [{ actor_id: 99, actor_type: "Integration", bypass_mode: "always" }] });
+    const result = await applyRepoSettings({ readGH: github("read", fetch), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "dispatch" });
+    expect(result.rulesetsUpdated).toBe(1);
+    expect(fetch.calls).not.toContain("POST /graphql");
+  });
+
+  test("schedule repairs controlled-merges without sending enforcement", async () => {
+    const drifted = { ...disabledControlled, bypass_actors: [{ actor_id: 99, actor_type: "Integration", bypass_mode: "always" }] };
+    const fetch = fakeFetch([
+      { method: "GET", path: "/repos/owner/client", body: repository },
+      { method: "GET", path: "/repos/owner/client/rulesets", body: [{ id: 81, name: "controlled-merges", source_type: "Repository" }] },
+      { method: "GET", path: "/repos/owner/client/rulesets/81", body: drifted },
+      { method: "GET", path: "/repos/owner/client/immutable-releases", body: { enabled: true } },
+      { method: "PUT", path: "/repos/owner/client/rulesets/81", body: drifted },
+      { method: "POST", path: "/repos/owner/client/rulesets", body: { id: 90 } },
+    ]);
+    await applyRepoSettings({ readGH: github("read", fakeFetch([])), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "schedule" });
+    const put = fetch.requests.find((request) => request.method === "PUT");
+    expect(put).toBeDefined();
+    expect(JSON.parse(put?.body ?? "{}")).not.toHaveProperty("enforcement");
   });
 
   test.each([
@@ -204,6 +237,28 @@ describe("inspectRepoSettings", () => {
   });
 });
 
+describe("repoSettingsRuleSets", () => {
+  test("review-and-checks does not require branches to be up to date, because /merge never updates them", () => {
+    const review = repoSettingsRuleSets(config()).find((set) => set.name === "review-and-checks");
+    const checks = review?.rules.find((rule) => rule.type === "required_status_checks");
+    expect(checks && "parameters" in checks ? checks.parameters.strict_required_status_checks_policy : undefined).toBe(false);
+  });
+});
+
+describe("inspectRepoSettingsPreflight", () => {
+  test("matches the caller's reusable workflow reference case-insensitively", async () => {
+    const workflow = "on:\n  issue_comment:\n    types: [created]\njobs:\n  merge:\n    uses: Civitaspo/CSM-CI-Actions/.github/workflows/client-merge.yml@e2e\n    secrets: inherit\n";
+    const fetch = fakeFetch([
+      { method: "GET", path: "/repos/owner/client", body: { default_branch: "main" } },
+      { method: "GET", path: "/repos/owner/client/contents/.github%2Fworkflows", body: [{ name: "merge.yml", type: "file" }] },
+      { method: "GET", path: "/repos/owner/client/contents/.github%2Fworkflows%2Fmerge.yml", body: workflow },
+      { method: "POST", path: "/graphql", body: { data: { repository: { pullRequests: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } } },
+    ]);
+    const result = await inspectRepoSettingsPreflight({ readGH: github("read", fetch), target: { name: "owner/client", isServer: false } });
+    expect(result.callerDistributed).toBe(true);
+  });
+});
+
 function configWithSettings() {
   return parseConfig(`${CONFIG_YAML}\nrepo_settings: { settings: { delete_branch_on_merge: true, allow_auto_merge: true, allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false } }\n`);
 }
@@ -212,24 +267,26 @@ function configWithoutServer() {
   return parseConfig(`${CONFIG_YAML.replace("name: owner/*", "name: owner/client")}\nrepo_settings: {}\n`);
 }
 
-function dispatchFetch(options: { event?: string; jobIf?: string; approverId?: number; queueCount?: number; bypass?: { actor_id: number; actor_type: string; bypass_mode: string }[] }) {
+function dispatchFetch(options: { event?: string; jobIf?: string; approverId?: number; queueCount?: number; enforcement?: string; absent?: boolean; bypass?: { actor_id: number; actor_type: string; bypass_mode: string }[] }) {
   const workflow = `on:\n  ${options.event ?? "issue_comment"}:\n    types: [created]\njobs:\n  merge:\n    uses: civitaspo/csm-ci-actions/.github/workflows/client-merge.yml@e2e\n    secrets: inherit${options.jobIf ? `\n    if: ${options.jobIf}` : ""}\n`;
   const controlled = {
     id: 81,
     name: "controlled-merges",
     source_type: "Repository",
-    enforcement: "active",
+    enforcement: options.enforcement ?? "disabled",
     target: "branch",
     conditions: { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } },
-    rules: [{ type: "update", parameters: { update_allows_fetch_and_merge: false } }],
+    rules: [{ type: "update" }],
     bypass_actors: options.bypass ?? [{ actor_id: 1, actor_type: "Integration", bypass_mode: "pull_request" }],
   };
   return fakeFetch([
     { method: "GET", path: "/repos/owner/client", body: { default_branch: "main", delete_branch_on_merge: true, allow_auto_merge: true, allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false } },
     { method: "GET", path: "/repos/owner/client/contents/.github%2Fworkflows", body: [{ name: "merge.yml", type: "file" }] },
     { method: "GET", path: "/repos/owner/client/contents/.github%2Fworkflows%2Fmerge.yml", body: workflow },
-    { method: "GET", path: "/repos/owner/client/rulesets", body: [{ id: 81, name: "controlled-merges", source_type: "Repository" }] },
+    { method: "GET", path: "/repos/owner/client/rulesets", body: options.absent ? [] : [{ id: 81, name: "controlled-merges", source_type: "Repository" }] },
     { method: "GET", path: "/repos/owner/client/rulesets/81", body: controlled },
+    { method: "PUT", path: "/repos/owner/client/rulesets/81", body: controlled },
+    { method: "POST", path: "/repos/owner/client/rulesets", body: { id: 90 } },
     { method: "GET", path: "/repos/owner/client/immutable-releases", body: { enabled: true } },
     { method: "GET", path: "/users/approver%5Bbot%5D", body: { id: options.approverId ?? 4000, login: "approver[bot]" } },
     {

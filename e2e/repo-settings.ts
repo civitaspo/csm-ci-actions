@@ -84,13 +84,23 @@ async function listManagedRuleSetDetails(gh: GitHub, repository: string, raw: un
   }));
 }
 
+// Each step runs even when an earlier one fails, so one failed call cannot leave the rest unrestored.
 async function restoreRepository(gh: GitHub, repository: string, snapshot: RepoSnapshot): Promise<void> {
   const address = splitRepository(repository);
-  const current = await listManagedRulesets(gh, repository);
+  const failures: unknown[] = [];
+  const attempt = async (step: () => Promise<unknown>) => {
+    try {
+      await step();
+    } catch (error) {
+      failures.push(error);
+    }
+  };
   const originalIds = new Set(snapshot.rulesets.map((ruleset) => ruleset.id));
-  for (const ruleset of current) {
-    if (!originalIds.has(ruleset.id)) await gh.rest.repos.deleteRepoRuleset({ ...address, ruleset_id: ruleset.id });
-  }
+  await attempt(async () => {
+    for (const ruleset of await listManagedRulesets(gh, repository)) {
+      if (!originalIds.has(ruleset.id)) await attempt(() => gh.rest.repos.deleteRepoRuleset({ ...address, ruleset_id: ruleset.id }));
+    }
+  });
   for (const ruleset of snapshot.rulesets) {
     const body: RuleSetSnapshot = {
       name: ruleset.name,
@@ -100,10 +110,11 @@ async function restoreRepository(gh: GitHub, repository: string, snapshot: RepoS
       rules: ruleset.rules,
       bypass_actors: ruleset.bypass_actors,
     };
-    await gh.rest.repos.updateRepoRuleset({ ...address, ruleset_id: ruleset.id, ...body });
+    await attempt(() => gh.rest.repos.updateRepoRuleset({ ...address, ruleset_id: ruleset.id, ...body }));
   }
-  await gh.rest.repos.update({ ...address, ...snapshot.settings } as Parameters<GitHub["rest"]["repos"]["update"]>[0]);
-  if (!snapshot.immutableReleases) await gh.request("DELETE /repos/{owner}/{repo}/immutable-releases", address);
+  await attempt(() => gh.rest.repos.update({ ...address, ...snapshot.settings } as Parameters<GitHub["rest"]["repos"]["update"]>[0]));
+  if (!snapshot.immutableReleases) await attempt(() => gh.request("DELETE /repos/{owner}/{repo}/immutable-releases", address));
+  if (failures.length > 0) throw new AggregateError(failures, `restoring ${repository} failed in ${failures.length} step(s)`);
   const restored = await snapshotRepository(gh, repository);
   assert(JSON.stringify(restored.settings) === JSON.stringify(snapshot.settings), `repository settings were not restored for ${repository}`);
   assert(restored.immutableReleases === snapshot.immutableReleases, `immutable releases were not restored for ${repository}`);
@@ -297,7 +308,7 @@ export const repoSettings: Scenario[] = [
         assert(repeatedPulls.length === 1 && repeatedPulls[0]?.number === managedPull.number && repeatedPulls[0]?.headSha === managedPull.headSha, "the repeated run did not preserve the existing managed-files pull request head");
         const afterRepeat = await rulesetUpdateTimes(ctx.gh);
         assert(JSON.stringify([...afterRepeat].sort(([a], [b]) => a - b)) === JSON.stringify([...beforeRepeat].sort(([a], [b]) => a - b)), "the repeated run updated a ruleset");
-        for (const name of ["Apply repository settings", "Apply managed files", "Mint managed contents token", "Mint managed workflows token"]) {
+        for (const name of ["Apply repository settings", "Apply managed files", "Mint approver contents token", "Mint managed contents token", "Mint managed workflows token"]) {
           assert(repeat.stepConclusions.get(name) === "skipped", `the repeated run did not skip ${name} (${repeat.url})`);
         }
 

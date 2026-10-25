@@ -42,6 +42,9 @@ function githubFixture(options: {
   targetContent?: string;
   sourceContent?: string;
   targetMode?: string;
+  blobEncoding?: string;
+  treeEntry?: { path: string; type: string; mode: string; sha?: string };
+  changedFiles?: "missing" | number;
   targetMissing?: boolean;
   signatureValid?: boolean;
   treeTruncated?: boolean;
@@ -56,10 +59,10 @@ function githubFixture(options: {
     if (ref === defaultSha) return { parents: [], author: { id: 500 }, committer: { login: "owner" }, commit: { verification: { verified: true }, tree: { sha: defaultTreeSha } } };
     return {
       parents: [{ sha: history.find((item) => item.sha === ref)?.parent ?? defaultSha }],
-      files: [{
+      ...(options.changedFiles === "missing" ? {} : { files: options.changedFiles !== undefined ? Array.from({ length: options.changedFiles }, () => ({ filename: "managed.yml" })) : [{
         filename: history.find((item) => item.sha === ref)?.filename ?? "managed.yml",
         ...(history.find((item) => item.sha === ref)?.previousFilename ? { previous_filename: history.find((item) => item.sha === ref)?.previousFilename } : {}),
-      }],
+      }] }),
       author: { id: 900 },
       committer: { login: "web-flow" },
       commit: { verification: { verified: true }, tree: { sha: treeSha } },
@@ -80,8 +83,8 @@ function githubFixture(options: {
           if (options.targetMissing) throw Object.assign(new Error("Not Found"), { status: 404 });
           return { data: { object: { sha: targetSha } } };
         },
-        getTree: async ({ tree_sha }: { tree_sha: string }) => ({ data: { truncated: options.treeTruncated ?? false, tree: [{ path: "managed.yml", type: "blob", mode: options.targetMode ?? "100644", sha: tree_sha === defaultTreeSha ? blobSha : targetBlobSha }] } }),
-        getBlob: async ({ file_sha }: { file_sha: string }) => ({ data: { encoding: "base64", content: Buffer.from(file_sha === blobSha ? options.sourceContent ?? "old\n" : options.targetContent ?? "wanted\n").toString("base64") } }),
+        getTree: async ({ tree_sha }: { tree_sha: string }) => ({ data: { truncated: options.treeTruncated ?? false, tree: [options.treeEntry ?? { path: "managed.yml", type: "blob", mode: options.targetMode ?? "100644", sha: tree_sha === defaultTreeSha ? blobSha : targetBlobSha }] } }),
+        getBlob: async ({ file_sha }: { file_sha: string }) => ({ data: { encoding: options.blobEncoding ?? "base64", content: Buffer.from(file_sha === blobSha ? options.sourceContent ?? "old\n" : options.targetContent ?? "wanted\n").toString("base64") } }),
       },
       repos: {
         getCommit: async ({ ref }: { ref: string }) => ({ data: commitFor(ref) }),
@@ -159,6 +162,30 @@ describe("inspectManagedFiles", () => {
       .rejects.toThrow("managed files could not safely inspect a Git tree");
   });
 
+  test("rejects a blob that is not base64 encoded", async () => {
+    await expect(inspectManagedFiles(githubFixture({ blobEncoding: "utf-8" }), input))
+      .rejects.toThrow('managed file "managed.yml" has an unsupported Git blob encoding');
+  });
+
+  test.each([
+    ["a submodule", { path: "sub", type: "commit", mode: "160000", sha: blobSha }],
+    ["a file", { path: "sub", type: "blob", mode: "100644", sha: blobSha }],
+    ["a tree with a symlink mode", { path: "sub", type: "tree", mode: "120000", sha: blobSha }],
+    ["a tree without a sha", { path: "sub", type: "tree", mode: "040000" }],
+  ])("rejects a managed path that traverses %s", async (_name, treeEntry) => {
+    await expect(inspectManagedFiles(githubFixture({ treeEntry }), { ...input, files: { "sub/managed.yml": "wanted\n" } }))
+      .rejects.toThrow('managed path "sub/managed.yml" traverses a non-directory Git entry at "sub"');
+  });
+
+  test.each([
+    ["missing", "missing" as const],
+    ["at the 300 file limit", 300],
+    ["above the 300 file limit", 301],
+  ])("rejects a branch commit whose change list is %s", async (_name, changedFiles) => {
+    await expect(inspectManagedFiles(githubFixture({ changedFiles }), input))
+      .rejects.toThrow("managed files branch change list is incomplete");
+  });
+
   test("creates the managed branch from the current default head without calling the reset lease", async () => {
     const read = githubFixture({ targetMissing: true });
     let createdRef = false;
@@ -223,6 +250,29 @@ describe("inspectManagedFiles", () => {
     }
   });
 
+  test("rejects the conditional reset when the lease reports that a ref moved", async () => {
+    const read = githubFixture({ targetContent: "stale\n" });
+    const writeClient = { rest: {}, paginate: async () => [] } as unknown as GitHub;
+    const reset = spyOn(gitRef, "resetBranchWithLease").mockImplementation(async () => { throw new gitRef.GitRefChanged(); });
+    try {
+      await expect(applyManagedFiles(read, { ...input, writeToken: "unused", writeClient }))
+        .rejects.toThrow("managed files branch or default branch moved before the conditional reset");
+    } finally {
+      reset.mockRestore();
+    }
+  });
+
+  test("rethrows other reset failures unchanged", async () => {
+    const read = githubFixture({ targetContent: "stale\n" });
+    const writeClient = { rest: {}, paginate: async () => [] } as unknown as GitHub;
+    const reset = spyOn(gitRef, "resetBranchWithLease").mockImplementation(async () => { throw new Error("git push failed"); });
+    try {
+      await expect(applyManagedFiles(read, { ...input, writeToken: "unused", writeClient })).rejects.toThrow("git push failed");
+    } finally {
+      reset.mockRestore();
+    }
+  });
+
   test("rejects the managed branch as the repository default branch", async () => {
     await expect(inspectManagedFiles(githubFixture(), { ...input, defaultBranch: "csm-ci/repo-settings" }))
       .rejects.toThrow("managed files branch csm-ci/repo-settings cannot be the repository default branch");
@@ -234,6 +284,15 @@ describe("inspectManagedFiles", () => {
     expect(result.branchNeedsWrite).toBe(false);
     expect(result.requiresPullRequestUpdate).toBe(true);
     expect(result.requiresWorkflowsWrite).toBe(false);
+  });
+
+  test.each([
+    ["resetting an existing branch", { targetContent: "stale\n" }, true],
+    ["creating the branch", { targetMissing: true }, false],
+  ] as const)("requests workflows write only when %s", async (_name, options, expected) => {
+    const result = await inspectManagedFiles(githubFixture(options), input);
+    expect(result.branchNeedsWrite).toBe(true);
+    expect(result.requiresWorkflowsWrite).toBe(expected);
   });
 
   test("rejects an open managed branch PR with a different base before apply", async () => {
@@ -301,6 +360,19 @@ describe("inspectManagedFiles", () => {
     } as unknown as GitHub;
     await expect(applyManagedFiles(read, { ...input, writeToken: "unused", writeClient }))
       .rejects.toThrow("managed files branch moved before pull request update");
+  });
+
+  test("rejects PR update if the default ref moved after inspection", async () => {
+    const read = githubFixture({ targetContent: "wanted\n", pulls: [] });
+    const writeClient = {
+      rest: {
+        git: { getRef: async ({ ref }: { ref: string }) => ({ data: { object: { sha: ref === "heads/main" ? targetSha : defaultSha } } }) },
+        pulls: { list: async () => ({ data: [] }) },
+      },
+      paginate: async () => [],
+    } as unknown as GitHub;
+    await expect(applyManagedFiles(read, { ...input, writeToken: "unused", writeClient }))
+      .rejects.toThrow("managed files default branch moved before pull request update");
   });
 
   test("does not inspect or reopen the managed branch when default already matches", async () => {

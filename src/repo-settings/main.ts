@@ -46,6 +46,14 @@ async function main(): Promise<void> {
     core.setOutput("is-server", String(target.isServer));
     return;
   }
+  if (mode === "inspect") {
+    const result = await inspectRepoSettings({ adminGH: github(input("admin-token", true)), config, target, mode: eventMode(input("event-mode", true)) });
+    core.info(`drift for ${target.name}: ${JSON.stringify(result.changes)}; activation required: ${result.activation}`);
+    core.setOutput("changes", JSON.stringify(result.changes));
+    core.setOutput("activation-required", String(result.activation));
+    core.setOutput("has-changes", String(result.changes.settings.length > 0 || result.changes.immutableReleases || result.changes.rulesets.length > 0));
+    return;
+  }
   const readGH = github(input("read-token", true));
   if (mode === "preflight") {
     const result = await inspectRepoSettingsPreflight({ readGH, target, actionsRepository: input("actions-repository", true) });
@@ -56,15 +64,8 @@ async function main(): Promise<void> {
     core.info(`preflight for ${target.name} completed`);
     return;
   }
-  if (mode === "inspect" || mode === "apply") {
+  if (mode === "apply") {
     const approverAppSlug = input("approver-app-slug");
-    if (mode === "inspect") {
-      const result = await inspectRepoSettings({ readGH, adminGH: github(input("admin-token", true)), config, target, mode: eventMode(input("event-mode", true)), ...(approverAppSlug ? { approverAppSlug } : {}), actionsRepository });
-      core.info(`drift for ${target.name}: ${JSON.stringify(result.changes)}`);
-      core.setOutput("changes", JSON.stringify(result.changes));
-      core.setOutput("has-changes", String(result.changes.settings.length > 0 || result.changes.immutableReleases || result.changes.rulesets.length > 0));
-      return;
-    }
     const result = await applyRepoSettings({ readGH, adminGH: github(input("admin-token", true)), config, target, mode: eventMode(input("event-mode", true)), ...(approverAppSlug ? { approverAppSlug } : {}), actionsRepository });
     core.info(`applied to ${target.name}: ${JSON.stringify(result)}`);
     core.setOutput("result", JSON.stringify(result));

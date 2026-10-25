@@ -55,13 +55,16 @@ describe("repo-settings reusable workflows", () => {
     expect(workflow?.if).toContain("requires-workflows-write == 'true'");
 
     const names = steps.map((step) => step.id);
-    expect(names.indexOf("preflight")).toBeLessThan(names.indexOf("approver-token"));
-    expect(names.indexOf("approver-token")).toBeLessThan(names.indexOf("admin-token"));
     expect(names.indexOf("admin-token")).toBeLessThan(names.indexOf("inspect"));
+    expect(names.indexOf("inspect")).toBeLessThan(names.indexOf("preflight"));
+    expect(names.indexOf("preflight")).toBeLessThan(names.indexOf("approver-token"));
     const read = steps.find((step) => step.id === "read-token");
     expect(record(read?.with)).not.toHaveProperty("permission-administration");
-    const inspect = steps.find((step) => step.id === "inspect");
-    expect(record(inspect?.with)["approver-app-slug"]).toBe("${{ steps.approver-token.outputs.app-slug }}");
+    for (const id of ["preflight", "approver-token"]) {
+      expect(steps.find((step) => step.id === id)?.if).toContain("steps.inspect.outputs.activation-required == 'true'");
+    }
+    const apply = steps.find((step) => step.name === "Apply repository settings");
+    expect(record(apply?.with)["approver-app-slug"]).toBe("${{ steps.approver-token.outputs.app-slug }}");
   });
 
   test("every action adapter stage reads pinned config and gets the real workflow repository", () => {

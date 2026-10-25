@@ -24,12 +24,6 @@ inputs:
     description: Optional owner/repo selection for discovery.
   event-mode:
     description: schedule or dispatch, derived by the trusted caller workflow.
-  caller-distributed:
-    description: Whether a valid reusable caller is present on the default branch.
-  approver-can-write:
-    description: Whether the approver App identity and contents:write capability were verified.
-  auto-merge-queue-count:
-    description: Count of open pull requests with auto-merge enabled.
   actions-repository:
     description: owner/repo where the reusable caller workflows are distributed.
     required: true
@@ -54,6 +48,8 @@ outputs:
     description: Count of open pull requests with auto-merge enabled.
   changes:
     description: JSON summary of repository settings and ruleset drift.
+  activation-required:
+    description: true when a dispatch would create controlled-merges or make it active, which requires the preflight.
   has-changes:
     description: Whether this target needs settings or managed-file changes.
   requires-workflows-write:

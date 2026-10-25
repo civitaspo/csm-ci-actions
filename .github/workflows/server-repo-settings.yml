@@ -1,7 +1,8 @@
 name: csm-ci repository settings
 
 # Called by the server repository's schedule or workflow_dispatch caller. The
-# event mode is derived here so the caller cannot relabel a scheduled run.
+# event mode comes from the caller's event. The target workflow takes the mode
+# as an input and trusts its caller, a workflow on the server's default branch.
 on:
   workflow_call:
     inputs:

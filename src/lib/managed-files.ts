@@ -140,7 +140,8 @@ export async function inspectManagedFiles(gh: GitHub, input: ManagedFilesInput):
   const status = branchNeedsWrite || requiresPullRequestUpdate ? "ready" : "already-applied";
   return {
     status,
-    requiresWorkflowsWrite: branchNeedsWrite && changedPaths.some((path) => path.startsWith(".github/workflows/")),
+    // The reset moves the branch across any default-branch workflow changes, which GitHub may refuse without workflows write.
+    requiresWorkflowsWrite: branchNeedsWrite && (changedPaths.some((path) => path.startsWith(".github/workflows/")) || (targetSha !== null && targetSha !== defaultSha)),
     requiresPullRequestUpdate,
     branchNeedsWrite,
     repository: input.repository.toLowerCase(),
