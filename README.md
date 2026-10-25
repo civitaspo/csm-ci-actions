@@ -49,7 +49,7 @@ Each server job mints a token for one repository with only the permissions that 
 
 ## Setup
 
-See [docs/setup.md](docs/setup.md).
+See [docs/setup.md](docs/setup.md). To move existing repositories from securefix-server, follow [docs/cutover.md](docs/cutover.md).
 
 ## Development
 
