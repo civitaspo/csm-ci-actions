@@ -103,8 +103,10 @@ async function restoreRepository(gh: GitHub, repository: string, snapshot: RepoS
     await gh.rest.repos.updateRepoRuleset({ ...address, ruleset_id: ruleset.id, ...body });
   }
   await gh.rest.repos.update({ ...address, ...snapshot.settings } as Parameters<GitHub["rest"]["repos"]["update"]>[0]);
+  if (!snapshot.immutableReleases) await gh.request("DELETE /repos/{owner}/{repo}/immutable-releases", address);
   const restored = await snapshotRepository(gh, repository);
   assert(JSON.stringify(restored.settings) === JSON.stringify(snapshot.settings), `repository settings were not restored for ${repository}`);
+  assert(restored.immutableReleases === snapshot.immutableReleases, `immutable releases were not restored for ${repository}`);
   assert(JSON.stringify(normalizeRuleSets(restored.rulesets)) === JSON.stringify(normalizeRuleSets(snapshot.rulesets)), `rulesets were not restored for ${repository}`);
 }
 
@@ -272,7 +274,6 @@ export const repoSettings: Scenario[] = [
     run: async (ctx) => {
       await ensureNoPreviousManagedState(ctx);
       const snapshot = await snapshotRepository(ctx.gh, CLIENT);
-      assert(snapshot.immutableReleases, "immutable releases must already be enabled; this e2e cannot safely restore that irreversible setting");
       let observedHead: string | undefined;
       let managedPull: ManagedPull | undefined;
       try {
@@ -332,11 +333,11 @@ export const repoSettings: Scenario[] = [
           const controlledAfter = (await listManagedRulesets(ctx.gh, SERVER)).find((ruleset) => ruleset.name === "controlled-merges");
           assert(controlledAfter?.enforcement === originalControlled?.enforcement, "server schedule created or changed controlled-merges");
           assert(await managedBranchHead(ctx.gh, SERVER) === undefined, `empty managed_files created ${BRANCH} in ${SERVER}`);
+          assert(await immutableReleaseState(ctx.gh, SERVER), `server schedule did not enable immutable releases in ${SERVER}`);
         } finally {
           await restoreRepository(ctx.gh, SERVER, serverSnapshot);
         }
       });
-      assert(await immutableReleaseState(ctx.gh, SERVER), `server schedule did not leave immutable releases enabled in ${SERVER}`);
     },
   },
 ];
