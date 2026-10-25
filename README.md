@@ -6,13 +6,112 @@ This project is **strongly inspired by the [Client-Server Model](https://github.
 
 csm-ci-actions extends that approach with approval and policy checks, controlled squash merges, release preparation and publishing, and repository settings reconciliation. Securefix applies generated file changes only after validating their source, paths, content, and current branch head.
 
-## Choose an entry point
+Start with the request flow and setup order below, then use the [client](#client-actions) and [server](#server-workflows-and-actions) action references for individual inputs and examples.
 
-- **Client repository operators:** enable the operations in the server configuration, then add the [client callers](#client-actions).
-- **Server operators:** provision the Apps and credentials in the [setup guide](docs/setup.md), then install the [server callers](#server-workflows-and-actions).
-- **Contributors:** use the [local checks and live tests](#development).
+Pin every action and reusable workflow to a reviewed full commit SHA. Replace `<sha>` in the examples before using them. Keep caller workflows on each repository's default branch.
 
-Pin every action and reusable workflow to a reviewed full commit SHA. Replace `<sha>` in the examples before using them. Keep callers on the repository's default branch.
+## How a client request reaches the server
+
+The server runs in GitHub Actions in a separate repository. It does not run an external Webhook receiver. Each client repository needs caller workflows for the operations it uses. Installing the Server App gives the server access to the repository; it does not make the server collect that repository's PR events automatically.
+
+For example, a policy check follows this path:
+
+```mermaid
+sequenceDiagram
+    participant PR as Client PR
+    participant Client as Client workflow
+    participant Labels as Server repository labels
+    participant Server as Server workflow
+    PR->>Client: pull_request_target event
+    Client->>Labels: Client App creates a request label
+    Labels->>Server: label created event
+    Server->>PR: Read live PR facts and evaluate policies
+    Server->>PR: Publish csm-ci/policy with the Server App
+    Server->>Labels: Delete the request label
+```
+
+The client's `.github/workflows/csm-ci-policy-check.yml` calls [`client-policy-check.yml`](.github/workflows/client-policy-check.yml). That workflow runs the [client policy-check action](actions/client/policy-check/README.md) to send the request. The server's `.github/workflows/csm-ci.yml` receives the label event and calls [`server.yml`](.github/workflows/server.yml). Its [intake](actions/server/intake/README.md) validates the request before the [server policy-check action](actions/server/policy-check/README.md) evaluates the PR. Other operations use the same label-based request path, with their own client events and server validation.
+
+## Set up the server
+
+The server needs GitHub Apps and their installations, credentials in its `csm-ci` environment, a `csm-ci.yaml` configuration on its default branch, and caller workflows. Adding `server.yml` alone does not provision these. Follow [setup](docs/setup.md) to register the Apps, store their credentials, and configure trusted identities, repositories, enabled operations, policies, and required checks.
+
+These reusable workflows have separate roles. Add callers in the server repository that invoke them:
+
+| Reusable workflow | Caller event | Role |
+| --- | --- | --- |
+| [`server.yml`](.github/workflows/server.yml) | `label: created` | Coordinate request validation and processing, including operation stages, token issuance, and cleanup. |
+| [`server-check.yml`](.github/workflows/server-check.yml) | `push` and `pull_request` | Validate `csm-ci.yaml` and lint the server workflows. |
+| [`server-repo-settings.yml`](.github/workflows/server-repo-settings.yml) | `schedule` and `workflow_dispatch` | Apply repository settings and protection rules, and open PRs for configured managed files. Its execution mode controls which changes it makes. |
+
+A minimal request receiver is `.github/workflows/csm-ci.yml`:
+
+```yaml
+name: csm-ci
+on:
+  label:
+    types: [created]
+permissions: {}
+jobs:
+  server:
+    uses: civitaspo/csm-ci-actions/.github/workflows/server.yml@<sha>
+    secrets: inherit
+    permissions:
+      contents: read
+      issues: write
+      id-token: write
+      attestations: write
+```
+
+Do not add caller-level concurrency that cancels unrelated labels. The reusable workflow owns request serialization. `secrets: inherit` is required for the called jobs' environment credentials. The [setup guide](docs/setup.md#4-add-the-server-workflows) includes the configuration-check caller.
+
+## Enable client repositories in order
+
+Repository protection and file distribution are different parts of setup:
+
+- `controlled-merges` is a GitHub ruleset that limits default-branch updates to PR merges by the Server App, so changes go through the server's `/merge` validation. Other rulesets enforce required checks and release-tag protection.
+- `managed-files-only` is an execution mode of the repository-settings workflow. It opens or updates PRs containing files specified by `managed_files` in `csm-ci.yaml`, without changing repository settings or protection rules. Use it to distribute the required client workflows before enabling protection.
+
+Follow this order for a new client:
+
+1. Create and install the Apps and store credentials as described in [setup](docs/setup.md) and [trust and credentials](#trust-and-credentials).
+2. Add the target repository and enabled operations to the server's `csm-ci.yaml`. Add the server callers above. Configure `managed_files` with the client workflow files you want to distribute, including the merge and policy-check callers required for protection.
+3. Dispatch `server-repo-settings.yml` through its caller with `mode: managed-files-only`. It opens a `csm-ci/repo-settings` PR in each configured target, or the selected `repository`.
+4. Review and merge those PRs through the repository's current process. Confirm the client workflows are on the default branch and the configured required checks run.
+5. Dispatch the same caller with `mode: reconcile`. It checks the activation prerequisites, applies repository settings and rulesets, and reconciles managed files. A failed activation preflight stops administrative changes.
+6. Use `/merge` on PRs during normal operation. The client merge workflow sends the request; the server checks the requester, approval, policies, and required checks before the Server App squash-merges the PR.
+
+The `managed_files` map distributes any configured, permitted file contents as literal text. It does not expand templates or create Apps, installations, variables, or secrets. See [repository settings](docs/repo-settings.md) for the configuration shape and activation prerequisites, and [client callers](docs/setup.md#5-add-the-client-workflows) for the event filters each operation needs. Securefix runs as a step after the client's tools rather than as a separate thin workflow.
+
+Add the following caller to the server's default branch. Manual dispatch defaults to bootstrap; the daily schedule reconciles settings:
+
+```yaml
+name: csm-ci-repo-settings
+on:
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: Optional configured owner/repo target.
+        type: string
+      mode:
+        type: choice
+        default: managed-files-only
+        options: [managed-files-only, reconcile]
+permissions: {}
+jobs:
+  settings:
+    uses: civitaspo/csm-ci-actions/.github/workflows/server-repo-settings.yml@<sha>
+    permissions:
+      contents: read
+    with:
+      repository: ${{ inputs.repository || '' }}
+      mode: ${{ inputs.mode || 'reconcile' }}
+    secrets: inherit
+```
+
+Scheduled runs use `reconcile`. They repair settings and managed files while preserving a disabled `controlled-merges` emergency stop; they do not create or activate that ruleset. A manual reconciliation can activate it after preflight succeeds. See [repository settings](docs/repo-settings.md) for drift repair, pending-run replacement, and managed-branch recovery.
 
 ## Trust and credentials
 
@@ -27,6 +126,19 @@ A client action creates a `csm-ci-<op>-<random>` label in the server repository.
 The server also needs the client variables, key, and callers when it submits requests for its own pull requests. These variable and secret names are fixed. Testing App names use the `testing-` prefix.
 
 The Server App key is shared by privileged jobs. Narrow tokens limit ordinary use, but do not prevent a compromised job from minting a broader token. Securefix and release preparation expose the Client App key to the job that runs client tools. That key can affect issues and labels in the server repository, so it is not a read-only credential. The server validates requests independently of client tools. Protect write access to the server repository and its `csm-ci` environment.
+
+## How a release moves from a PR to publication
+
+Release publishing starts when a release PR is merged. A tag push is not its entry point. Configure the client entry in the server's `csm-ci.yaml` with the `release` operation and a `release.build_type` of `none`, `js-action`, `goreleaser`, or `cargo`. Preparation also needs the `securefix` operation and a route from the default branch to `release/next`. See [release PR configuration](docs/release-pr.md#server-route) and [build configuration](docs/release.md).
+
+1. The client's [`release-prepare`](actions/client/release-prepare/README.md) runs on a default-branch push or manual dispatch. It generates `.release-version`, the changelog, and supported version edits, then uses securefix to ask the server to create or update the `release/next` PR.
+2. Review the PR and request `/merge`. After validation, the Server App merges it into the default branch.
+3. The client's [`client-release-publish.yml`](.github/workflows/client-release-publish.yml) handles the merged PR's `pull_request: closed` event and sends a release request through the [client release-publish action](actions/client/release-publish/README.md).
+4. The server's [intake](actions/server/intake/README.md) validates the request and enabled operation. [`release-plan`](actions/server/release-plan/README.md) re-reads GitHub facts and requires a same-repository `release/next` PR merged into the default branch by the configured Server bot, with a semantic version in `.release-version` at the merge commit. In the plan job, [`release-tag`](actions/server/release-tag/README.md) creates the annotated `v<version>` tag if absent, before the build starts. An existing tag must match the planned identity and merge commit.
+5. [`release-build`](actions/server/release-build/README.md) receives a source archive of that merge commit and runs the configured build in a separate job without secrets or an environment. With `build_type: none`, no client build runs.
+6. The publish job uses [`release-assets`](actions/server/release-assets/README.md) to validate outputs and create checksums, then attaches attestations. [`release-publish`](actions/server/release-publish/README.md) creates or resumes a draft, uploads and verifies assets, publishes it, and verifies the immutable release and tag.
+
+The [release guide](docs/release.md) describes tag protection, supported builds, and retry checks. Client workflows request preparation and publication; the server validates the PR and performs the protected writes.
 
 ## Client actions
 
@@ -87,34 +199,7 @@ Use the PR head SHA, not GitHub's synthetic merge commit. For another checkout d
 
 ## Server workflows and actions
 
-Keep `csm-ci.yaml` on the server's default branch. The reusable workflows coordinate validation, token issuance, job isolation, and cleanup. Use these workflows as the server entry points; individual server actions are stages within them.
-
-| Reusable workflow | Caller and purpose |
-| --- | --- |
-| [`server.yml`](.github/workflows/server.yml) | `label: created`. Validate and handle approve, policy-check, merge, securefix, and release requests. |
-| [`server-check.yml`](.github/workflows/server-check.yml) | `push` and `pull_request`. Validate configuration with the pinned actions version and lint the server workflows. |
-| [`server-repo-settings.yml`](.github/workflows/server-repo-settings.yml) | `schedule` and `workflow_dispatch`. Reconcile configured targets or distribute managed files in manual bootstrap mode. Optional inputs are `config-path`, `repository`, and `mode`. |
-
-A minimal request receiver is `.github/workflows/csm-ci.yml`:
-
-```yaml
-name: csm-ci
-on:
-  label:
-    types: [created]
-permissions: {}
-jobs:
-  server:
-    uses: civitaspo/csm-ci-actions/.github/workflows/server.yml@<sha>
-    secrets: inherit
-    permissions:
-      contents: read
-      issues: write
-      id-token: write
-      attestations: write
-```
-
-Do not add caller-level concurrency that cancels unrelated labels. The reusable workflow owns request serialization. `secrets: inherit` is required for the called jobs' environment credentials. The [setup guide](docs/setup.md#4-add-the-server-workflows) includes the configuration-check caller.
+The reusable workflows coordinate validation, token issuance, job isolation, and cleanup. Use the workflows described in [server setup](#set-up-the-server) as the entry points. Individual server actions are stages within them.
 
 The server actions live under `actions/server/<name>`:
 
@@ -134,42 +219,6 @@ The server actions live under `actions/server/<name>`:
 | [`check-config`](actions/server/check-config/README.md) | Validate a local `csm-ci.yaml` against this revision's schema. Used by `server-check.yml`. |
 
 The [release guide](docs/release.md) describes the five release stages, build configuration, and replay behavior. [Release attestations](docs/release-attestation.md) describe provenance. Each linked action reference includes all inputs and outputs and a usage example. Server examples identify the earlier workflow stage that produces each required value; use the coordinating reusable workflow to preserve these boundaries.
-
-### Bootstrap managed files before enabling protections
-
-After provisioning Apps and credentials, use `managed-files-only` to open the configured `csm-ci/repo-settings` PR. This manual mode does not mint administration or approver tokens or change repository settings, rulesets, or immutable releases. It still enforces target, path, history, and head checks.
-
-Add the following caller to the server's default branch. Manual dispatch defaults to bootstrap; the daily schedule reconciles settings:
-
-```yaml
-name: csm-ci-repo-settings
-on:
-  schedule:
-    - cron: '23 3 * * *'
-  workflow_dispatch:
-    inputs:
-      repository:
-        description: Optional configured owner/repo target.
-        type: string
-      mode:
-        type: choice
-        default: managed-files-only
-        options: [managed-files-only, reconcile]
-permissions: {}
-jobs:
-  settings:
-    uses: civitaspo/csm-ci-actions/.github/workflows/server-repo-settings.yml@<sha>
-    permissions:
-      contents: read
-    with:
-      repository: ${{ inputs.repository || '' }}
-      mode: ${{ inputs.mode || 'reconcile' }}
-    secrets: inherit
-```
-
-Review and merge the generated PR through the repository's current process. Verify the required callers and checks on default before dispatching `reconcile`. Reconciliation activates `controlled-merges` only after its preflight succeeds. The global managed-files map contains literal text; it does not template each repository or provision credentials.
-
-Scheduled runs use `reconcile`. They preserve a disabled `controlled-merges` emergency stop. A later manual reconciliation can activate it again. See [repository settings](docs/repo-settings.md) for prerequisites, drift repair, pending-run replacement, and managed-branch recovery.
 
 ## Development
 
