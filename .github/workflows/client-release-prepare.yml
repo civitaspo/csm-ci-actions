@@ -35,14 +35,8 @@ jobs:
           fetch-depth: 0
           path: client
           persist-credentials: false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ job.workflow_repository }}
-          ref: ${{ job.workflow_sha }}
-          path: .csm-ci-actions
-          persist-credentials: false
       - id: prepare
-        uses: ./.csm-ci-actions/actions/client/release-prepare
+        uses: $/actions/client/release-prepare
         with:
           workspace: ${{ github.workspace }}/client
           version: ${{ inputs.version }}
