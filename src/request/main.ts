@@ -7,8 +7,9 @@ async function main(): Promise<void> {
   const server = core.getInput("server-repository", { required: true });
   const gh = github(core.getInput("github-token", { required: true }));
   const label = await createRequestLabel(gh, server, core.getInput("kind", { required: true }), repository, core.getInput("args", { required: true }).split("/"));
-  core.setOutput("label", label);
-  core.info(`created label ${label} in ${server}`);
+  core.setOutput("label", label.name);
+  // e2e correlates requests by this exact line.
+  core.info(`created label ${label.name} (${label.description}) in ${server}`);
 }
 
 main().catch((e: unknown) => core.setFailed(e instanceof Error ? e.message : String(e)));

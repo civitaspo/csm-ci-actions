@@ -1,7 +1,7 @@
 import * as core from "@actions/core";
 import { readFile } from "node:fs/promises";
 import { createRequestLabel, github } from "../lib/github.ts";
-import { buildSecurefixArtifact, securefixClientContext } from "../lib/securefix.ts";
+import { assertWorkspaceAtHead, buildSecurefixArtifact, securefixClientContext } from "../lib/securefix.ts";
 
 function env(name: string): string {
   const value = process.env[name];
@@ -25,9 +25,16 @@ async function packageChanges(): Promise<void> {
     sha: env("GITHUB_SHA"),
     serverRepository: core.getInput("server_repository", { required: true }),
   });
+  if (context.kind === "skip") {
+    core.notice(context.reason);
+    core.setOutput("has-changes", "false");
+    return;
+  }
+  const workspace = core.getInput("workspace") || env("GITHUB_WORKSPACE");
+  assertWorkspaceAtHead(workspace, context.headSha);
   const id = runId();
   const result = await buildSecurefixArtifact({
-    workspace: core.getInput("workspace") || env("GITHUB_WORKSPACE"),
+    workspace,
     repository: env("GITHUB_REPOSITORY"),
     runId: id,
     headSha: context.headSha,
@@ -43,8 +50,9 @@ async function packageChanges(): Promise<void> {
 async function sendRequest(): Promise<void> {
   const server = core.getInput("server_repository", { required: true });
   const label = await createRequestLabel(github(core.getInput("token", { required: true })), server, "securefix", env("GITHUB_REPOSITORY"), [runId()]);
-  core.setOutput("label", label);
-  core.info(`created label ${label} in ${server}`);
+  core.setOutput("label", label.name);
+  // e2e correlates requests by this exact line.
+  core.info(`created label ${label.name} (${label.description}) in ${server}`);
 }
 
 const step = process.env.CSM_CI_SECUREFIX_STEP;

@@ -32,6 +32,19 @@ describe("securefix client action", () => {
     }
   });
 
+  test("scopes the token to the server repository named by the package step", () => {
+    const token = steps.find((step) => step.id === "token");
+    expect(token?.with?.owner).toBe("${{ steps.package.outputs.server-owner }}");
+    expect(token?.with?.repositories).toBe("${{ steps.package.outputs.server-name }}");
+  });
+
+  test("every package output the action reads is one main.ts sets", () => {
+    const source = readFileSync("src/securefix-client/main.ts", "utf8");
+    const referenced = [...readFileSync("actions/securefix-client/action.yml", "utf8").matchAll(/steps\.(package|request)\.outputs\.([a-z-]+)/gu)].map((match) => match[2]);
+    expect(referenced.length).toBeGreaterThan(0);
+    for (const name of new Set(referenced)) expect(source).toContain(`core.setOutput("${name}"`);
+  });
+
   test("the request step receives the minted token", () => {
     expect(steps.find((step) => step.id === "request")?.env?.INPUT_TOKEN).toBe("${{ steps.token.outputs.token }}");
   });

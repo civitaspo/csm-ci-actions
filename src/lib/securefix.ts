@@ -38,7 +38,11 @@ const SECUREFIX_CLIENT_EVENTS = new Set(["pull_request", "push", "workflow_dispa
 
 // Decides, before anything is packaged, whether this job may request securefix and which head the
 // server must bind the run to. The server re-checks all of it (plan S1); this only fails early.
-export function securefixClientContext(input: { eventName: string; event: unknown; repository: string; sha: string; serverRepository: string }): { headSha: string; server: { owner: string; repo: string } } {
+export type SecurefixClientContext =
+  | { kind: "ready"; headSha: string; server: { owner: string; repo: string } }
+  | { kind: "skip"; reason: string };
+
+export function securefixClientContext(input: { eventName: string; event: unknown; repository: string; sha: string; serverRepository: string }): SecurefixClientContext {
   if (!SECUREFIX_CLIENT_EVENTS.has(input.eventName)) throw new Rejection(`securefix client runs only on pull_request, push or workflow_dispatch, not ${input.eventName}`);
   const server = (() => {
     try {
@@ -47,11 +51,19 @@ export function securefixClientContext(input: { eventName: string; event: unknow
       throw new Rejection(`server-repository ${JSON.stringify(input.serverRepository)} is not owner/repo`);
     }
   })();
-  if (input.eventName !== "pull_request") return { headSha: input.sha, server };
+  if (input.eventName !== "pull_request") return { kind: "ready", headSha: input.sha, server };
   const pull = z.object({ pull_request: z.object({ head: z.object({ sha: z.string().regex(/^[0-9a-f]{40}$/u), repo: z.object({ full_name: z.string() }).nullable() }) }) }).safeParse(input.event);
   if (!pull.success) throw new Rejection("securefix client could not read the pull request head from the event");
-  if (pull.data.pull_request.head.repo?.full_name.toLowerCase() !== input.repository.toLowerCase()) throw new Rejection("securefix client does not accept pull requests from forks");
-  return { headSha: pull.data.pull_request.head.sha, server };
+  // A fork pull request has no secrets and securefix never writes to forks; skip instead of failing its checks.
+  if (pull.data.pull_request.head.repo?.full_name.toLowerCase() !== input.repository.toLowerCase()) return { kind: "skip", reason: "securefix client skips pull requests from forks" };
+  return { kind: "ready", headSha: pull.data.pull_request.head.sha, server };
+}
+
+// The server writes whole file contents onto the run head, so the files must come from that commit.
+// On pull_request, a checkout without a ref is the merge commit, which would carry base changes.
+export function assertWorkspaceAtHead(workspace: string, headSha: string): void {
+  const actual = execFileSync("git", ["rev-parse", "HEAD"], { cwd: workspace }).toString("utf8").trim();
+  if (actual !== headSha) throw new Rejection(`securefix workspace is at ${actual}, not the run head ${headSha}; check out the head commit`);
 }
 
 export async function buildSecurefixArtifact(input: { workspace: string; repository: string; runId: number; headSha: string; message: string }): Promise<{ path: string; hasChanges: boolean }> {

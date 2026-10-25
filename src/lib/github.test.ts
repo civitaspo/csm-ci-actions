@@ -276,10 +276,11 @@ describe("hasServerMarker", () => {
 describe("createRequestLabel", () => {
   test("creates a securefix request label in the server repository", async () => {
     const fetch = fakeFetch([{ method: "POST", path: "/repos/owner/server/labels", status: 201, body: {} }]);
-    const name = await createRequestLabel(github("token", fetch), "owner/server", "securefix", "Owner/Client", [42]);
-    expect(name).toMatch(/^csm-ci-securefix-[0-9a-f]{16}$/u);
+    const label = await createRequestLabel(github("token", fetch), "owner/server", "securefix", "Owner/Client", [42]);
+    expect(label.name).toMatch(/^csm-ci-securefix-[0-9a-f]{16}$/u);
+    expect(label.description).toBe("owner/client/42");
     const body = JSON.parse(fetch.requests[0]?.body ?? "{}") as { name: string; description: string; color: string };
-    expect(body).toEqual({ name, description: "owner/client/42", color: "1f6feb" });
+    expect(body).toEqual({ ...label, color: "1f6feb" });
   });
 
   test("propagates a failed label creation", async () => {
