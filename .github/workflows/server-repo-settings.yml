@@ -14,6 +14,10 @@ on:
         description: Optional configured repository to reconcile.
         type: string
         default: ''
+      mode:
+        description: Reconcile repository settings, or distribute managed files only.
+        type: string
+        default: reconcile
 
 permissions: {}
 
@@ -26,6 +30,7 @@ jobs:
     permissions:
       contents: read
     outputs:
+      operation-mode: ${{ steps.validate-mode.outputs.operation-mode }}
       clients: ${{ steps.discover.outputs.clients }}
       has-clients: ${{ steps.discover.outputs.has-clients }}
       server: ${{ steps.discover.outputs.server }}
@@ -37,6 +42,15 @@ jobs:
           ref: ${{ job.workflow_sha }}
           path: .csm-ci-actions
           persist-credentials: false
+      - id: validate-mode
+        uses: ./.csm-ci-actions/actions/server/repo-settings
+        with:
+          mode: validate-mode
+          operation-mode: ${{ inputs.mode }}
+          event-mode: ${{ github.event_name == 'schedule' && 'schedule' || 'dispatch' }}
+          github-token: ${{ github.token }}
+          config-path: ${{ inputs.config-path }}
+          actions-repository: ${{ job.workflow_repository }}
       - id: discovery-token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
@@ -50,6 +64,8 @@ jobs:
         uses: ./.csm-ci-actions/actions/server/repo-settings
         with:
           mode: discover
+          operation-mode: ${{ steps.validate-mode.outputs.operation-mode }}
+          event-mode: ${{ github.event_name == 'schedule' && 'schedule' || 'dispatch' }}
           github-token: ${{ github.token }}
           config-path: ${{ inputs.config-path }}
           actions-repository: ${{ job.workflow_repository }}
@@ -72,6 +88,7 @@ jobs:
     with:
       repository: ${{ matrix.target.name }}
       event-mode: ${{ github.event_name == 'schedule' && 'schedule' || 'dispatch' }}
+      mode: ${{ needs.discover.outputs.operation-mode }}
       config-path: ${{ inputs.config-path }}
     secrets: inherit
 
@@ -89,5 +106,6 @@ jobs:
     with:
       repository: ${{ fromJSON(needs.discover.outputs.server).name }}
       event-mode: ${{ github.event_name == 'schedule' && 'schedule' || 'dispatch' }}
+      mode: ${{ needs.discover.outputs.operation-mode }}
       config-path: ${{ inputs.config-path }}
     secrets: inherit

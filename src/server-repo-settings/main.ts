@@ -2,7 +2,7 @@ import * as core from "@actions/core";
 import { applyManagedFiles, inspectManagedFiles } from "../lib/managed-files.ts";
 import { applyRepoSettings, discoverRepoSettingsTargets, inspectRepoSettings, inspectRepoSettingsPreflight } from "../lib/repo-settings.ts";
 import { github, loadConfig, splitRepository } from "../lib/github.ts";
-import { repoSettingsEventMode, validateRepoSettingsContext } from "./context.ts";
+import { repoSettingsEventMode, repoSettingsOperationMode, validateRepoSettingsContext, validateRepoSettingsStage } from "./context.ts";
 
 function env(name: string): string {
   const value = process.env[name];
@@ -15,13 +15,19 @@ function input(name: string, required = false): string {
 }
 
 async function main(): Promise<void> {
+  const mode = input("mode", true);
+  const operationMode = repoSettingsOperationMode(input("operation-mode"), env("GITHUB_EVENT_NAME"), input("event-mode") || undefined);
+  validateRepoSettingsStage(mode, operationMode);
+  core.setOutput("operation-mode", operationMode);
+  if (mode === "validate-mode") {
+    return;
+  }
   const serverRepository = env("GITHUB_REPOSITORY");
   const configPath = input("config-path") || "csm-ci.yaml";
   const actionsRepository = input("actions-repository", true);
   const configGH = github(input("github-token") || env("GITHUB_TOKEN"));
   const config = await loadConfig(configGH, serverRepository, env("GITHUB_SHA"), configPath);
   const { data: server } = await configGH.rest.repos.get(splitRepository(serverRepository));
-  const mode = input("mode", true);
   const repository = input("repository");
   const target = repository ? { name: repository.toLowerCase(), isServer: repository.toLowerCase() === serverRepository.toLowerCase() } : undefined;
   validateRepoSettingsContext({ config, serverRepository, serverRef: env("GITHUB_REF"), serverDefaultBranch: server.default_branch, actionsRepository, ...(target ? { targetRepository: target.name } : {}) });
@@ -66,7 +72,16 @@ async function main(): Promise<void> {
   }
   if (mode === "apply") {
     const approverAppSlug = input("approver-app-slug");
-    const result = await applyRepoSettings({ readGH, adminGH: github(input("admin-token", true)), config, target, mode: repoSettingsEventMode(input("event-mode", true), env("GITHUB_EVENT_NAME")), ...(approverAppSlug ? { approverAppSlug } : {}), actionsRepository });
+    const result = await applyRepoSettings({
+      readGH,
+      adminGH: github(input("admin-token", true)),
+      config,
+      target,
+      mode: repoSettingsEventMode(input("event-mode", true), env("GITHUB_EVENT_NAME")),
+      ...(approverAppSlug ? { approverAppSlug } : {}),
+      actionsRepository,
+      onRulesetCreated: ({ id, name }) => core.info(`created-repo-settings-ruleset ${JSON.stringify({ repository: target.name, id, name })}`),
+    });
     core.info(`applied to ${target.name}: ${JSON.stringify(result)}`);
     core.setOutput("result", JSON.stringify(result));
     return;

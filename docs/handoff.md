@@ -933,7 +933,7 @@ Release preparation installs the pinned git-cliff version, generates changes and
 
 Local checks passed: tool installation, frozen dependency installation, typecheck, 868 tests, build, clean committed bundles and jactionlint. Mutation checks covered the new client event/argument rules, release-build selection and release-prepare change gates. An independent review found a stale release workflow test, which was updated and passed in the complete suite.
 
-The initial signed head was `63a08a53e4cbfe348b839cbd7a1d5f7abcbca7bf`. The release-prepare completion correction is signed head `9eddb0a6ea5a11d75bdd5957de8c126dd366c608`. GitHub verified both signatures. All eight feature suites completed at the initial head. Release-pr and smoke were then repeated at the correction head; the other operations were unchanged by that correction. Post-merge CI evidence will be recorded in the final report.
+The initial signed head was `63a08a53e4cbfe348b839cbd7a1d5f7abcbca7bf`. The release-prepare completion correction is signed head `9eddb0a6ea5a11d75bdd5957de8c126dd366c608`. GitHub verified both signatures. All eight feature suites completed at the initial head. Release-pr and smoke were then repeated at the correction head; the other operations were unchanged by that correction. PR 30 was squash-merged as `bb0e6ffc4fea5344d35d3483caab017396120910`; the post-merge CI evidence below exercises that revision.
 
 | Feature | Passed | CI-only skips | Representative live runs |
 | --- | ---: | ---: | --- |
@@ -946,7 +946,20 @@ The initial signed head was `63a08a53e4cbfe348b839cbd7a1d5f7abcbca7bf`. The rele
 | repo-settings | 1 | 0 | [40182965065](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40182965065), [40183125187](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40183125187) |
 | smoke | 5 | 0 | [40183587908](https://github.com/civitaspo/testing-csm-ci-client/actions/runs/40183587908), [40183598173](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40183598173) |
 
-Release verification covered all four build types, asset attestations, immutable-release replay, stale bundles, tag collisions, foreign releases, invalid versions and owner-merge rejection. Repo-settings verification restored both testing repositories after the scenarios. The ten local skips require CI identity or credentials and remain explicitly pending until the post-merge CI suites run. No production cutover was executed.
+Release verification covered all four build types, asset attestations, immutable-release replay, stale bundles, tag collisions, foreign releases, invalid versions and owner-merge rejection. Repo-settings verification restored both testing repositories after the scenarios. The post-merge CI suites passed all ten cases skipped locally, with no skips. No production cutover was executed.
+
+### Post-merge CI e2e
+
+| Feature | Run from main |
+| --- | --- |
+| approve | [Passed](https://github.com/civitaspo/csm-ci-actions/actions/runs/40183837034) |
+| merge | [Passed](https://github.com/civitaspo/csm-ci-actions/actions/runs/40184091141) |
+| policy-check | [Passed](https://github.com/civitaspo/csm-ci-actions/actions/runs/40185055313) |
+| securefix | [Passed](https://github.com/civitaspo/csm-ci-actions/actions/runs/40185276320) |
+| release | [Passed](https://github.com/civitaspo/csm-ci-actions/actions/runs/40185838104) |
+| release-pr | [Passed](https://github.com/civitaspo/csm-ci-actions/actions/runs/40188328480) |
+| repo-settings | [Passed](https://github.com/civitaspo/csm-ci-actions/actions/runs/40188620990) |
+| smoke | [Passed](https://github.com/civitaspo/csm-ci-actions/actions/runs/40188838690) |
 
 ## 23. Managed-files-only bootstrap specification
 
@@ -955,3 +968,48 @@ The Phase 6 plan now specifies an explicit `managed-files-only` dispatch mode. I
 Bootstrap proceeds from user-provisioned Apps and credentials to file distribution, review and merge through the repository's existing process, caller and check verification, and then normal reconciliation. The global literal map remains unchanged; per-repository templates and server-specific distribution are outside this change. This section records a specification change, not an implemented mode.
 
 Local installation, frozen dependencies, typecheck, all 868 tests, build with clean bundles and jactionlint passed. Independent specification review found no blocking issue. Smoke passed all five scenarios at signed, pushed head `b52f6eecc26fbfb54367e721c0804cd2bc3f1091`: [client request](https://github.com/civitaspo/testing-csm-ci-client/actions/runs/40188267793), [server request](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40188277257), [server check](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40188268177). The evidence-only handoff update does not change executable files. No rejection rule changed; implementation must add message assertions and mutation checks for the new guards.
+
+PR 31 was squash-merged as `b35ad94befe8cc4005269cf6194b9943f845bf65`. Its [post-merge CI smoke](https://github.com/civitaspo/csm-ci-actions/actions/runs/40189040890) passed all five scenarios without skips.
+
+## 24. Independent Phase 6 review
+
+The review covered repo-settings, the shared server-owned history proof, the securefix client, token boundaries and e2e cleanup against the plan after the layout change. Separate reviewers examined security boundaries, history and managed branches, and restoration. The table below resolves every risk in sections 5 and 6 of the preceding implementation handoff.
+
+### Findings and decisions
+
+| Risk or concern | Decision and reason |
+| --- | --- |
+| 1. Shared Server App key | Retain the S7 trust model. Target tokens are scoped to one repository, but a compromised server job with the key can mint broader App permissions. Avoiding an administration token in bootstrap mode does not isolate the key. |
+| 2. Live approver capability token | Retain token issuance as the capability proof during activation. Subsequent action inputs receive the App slug, not this token; the official token action revokes it during cleanup. No reliable replacement proof has been established. |
+| 3. Trusted internal event mode | Retain the target helper for trusted workflows on the server default branch. The pinned configuration, server/default-ref checks and schedule-to-dispatch rejection still apply. Direct callers can bypass outer ordering; write access to the trusted server branch is already inside S1. |
+| 4. Poisoned managed branch | Fail closed. Untrusted commits, paths or ambiguous PRs require operator investigation; they are never overwritten to restore service. Administrative repair precedes managed-file inspection, and one client failure does not stop server reconciliation. |
+| 5. Compare pagination before trust checks | Verify each page before requesting another. An untrusted first page must stop further pagination. Preserve final head, linear-history, changed-file completeness and duplicate checks. Do not introduce an arbitrary history limit or rely on the earlier handoff's unsupported approximate compare cap. |
+| 6. Caller presence without ref provenance | Retain the S1 decision. Preflight checks the caller path, event, inherited secrets and lack of a job condition. It intentionally does not establish the referenced action revision's provenance. |
+| 7. Existing-branch reset | Retain conditional Git leases and expected-head checks. Live changed-content resets remain outside the authorized tests. GitHub PR-head convergence after a reset and the exact workflows permission requirement remain unverified. Re-dispatch after convergence; investigate persistent mismatches. |
+| 8. Recursive omission of metadata keys | Accept as compatibility debt for the current fixed rulesets. No current managed parameter depends on nested `id`, `_links`, `source` or `source_type`. Review this comparison before adding ruleset parameters. |
+| 9. Extra approval for unattributed changes | Keep PR 26's `false`. The plan requires one approving review and stale-approval dismissal; it does not require this additional condition, whose GitHub semantics remain unverified. |
+| 10. Client key in tool jobs | Retain the S1/S7 decision for securefix and release preparation. The minted token has issues write on the server only. Server validation independently reads the authoritative request and repository facts. |
+| 11. One installation's discovery | Retain the documented scope: configured repositories must also be visible in the server owner's installation. A different owner's repository is not automatically managed. |
+| Server after client failure | Keep PR 26. Failed client repair must not prevent server repair; cancellation still stops the server wave. |
+| Ruleset restoration ownership | Record IDs returned by successful creation in the correlated server run. Cleanup may delete only those recorded IDs, never an unknown ruleset merely because its managed name was absent from the snapshot. Preserve unknown IDs and report recovery needs while attempting the remaining restoration steps. |
+| Managed branch without a PR | Keep cleanup's refusal. A verified commit alone does not establish a matching PR and unchanged current head. Operator recovery must establish ownership before deletion. |
+| Failed server restoration | Preserve the failure and recovery diagnostics. Leftover protections can prevent the later fixture-config restore; do not claim every partial failure repairs itself. |
+| Pending-run replacement | Retain the existing concurrency group and document its limitation: a later queued run can replace a pending dispatch despite `cancel-in-progress: false`. Check the final run and dispatch again when necessary. |
+| Mutation interruption | Copy baseline sources once before the first mutant, impose a timeout on each run and restore unconditionally. Never use a potentially mutated working file as the next baseline. |
+| Dependency bundles and test rulesets | Dependency updates still require regenerated committed bundles. Testing repositories' pre-existing rulesets are restored rather than permanently replaced. |
+
+A further functional defect was reproduced against the actual managed-file inspector and a local Git repository: a retained managed branch can be an ancestor of default, still contain the desired files, and have no unmerged commits after default later drifts. Content equality alone then selects a PR-only retry, which cannot produce a diff. The branch must instead be rebuilt from the current default head under the existing lease. An ahead branch with the expected content keeps its existing idempotent behavior. Securefix's repeat check already requires the exact source-parent binding and does not share this defect.
+
+The managed-files-only implementation follows section 23's boundary. The literal map and ordinary managed PR remain the distribution mechanism; it does not merge the PR, provision credentials or enable protections.
+
+### Verification boundaries
+
+Live verification still excludes changed-content resets of existing managed branches, actual cron triggering, full unselected discovery, server controlled-merges activation, deploy-key bypass repair and same-second GitHub comparison ordering. Missing or inaccessible creation evidence must leave a newly observed ruleset intact and report the gap. A missing creation response after a successful write cannot be safely reconstructed from a ruleset name alone.
+
+### Local verification
+
+Tool and frozen dependency installation, typecheck, all 915 tests, build and jactionlint passed. All 35 targeted mutants were detected by failing assertions; the runner restored its original source copies after every mutant. Coverage includes operation and event guards, action-entry validation before configuration/token inputs, workflow token gates, history completeness and early trust, ancestor recovery, creation receipts and cleanup ownership. The empty-page fixture rejects an unexpected third comparison, so a removed pagination guard produces an assertion failure instead of relying on a process timeout.
+
+Both original bug reproductions now pass: the first untrusted history page is rejected after one comparison call, and an ancestor managed branch requires a lease-protected rebuild even when its files match. A local Git repository establishes the ancestor/default-drift shape. These are local proofs, not a claim that a live changed-content reset was performed.
+
+Review also exposed inconsistent handling of an explicitly empty mode: the action normalized it to `reconcile`, while workflow conditions used the raw input. Workflows now consume the validated mode output for target calls and administrative-stage gates. This does not weaken the rejection of managed-files-only execution on a schedule or another non-dispatch event.

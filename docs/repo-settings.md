@@ -47,11 +47,21 @@ A scheduled run does not create `controlled-merges` or activate a disabled rules
 
 The checks run only when a dispatch would activate the ruleset. A dispatch for a repository whose `controlled-merges` is already active repairs drift without them. A failed preflight fails the run before administrative changes. App permission proof uses the official token action. The collaborator-permission endpoint does not reliably describe whether an App's approval counts.
 
+## Bootstrap mode
+
+The reusable workflow accepts `mode: reconcile | managed-files-only`. It defaults to `reconcile`. Scheduled runs always reconcile and reject `managed-files-only`.
+
+Use `managed-files-only` to distribute the configured files before a target has the merge caller, policy checks, or the approver App needed for activation. This mode skips settings and ruleset inspection, activation preflight, approver capability, and administrative apply. It still validates the server and target context, inspects the managed branch, and opens or updates the managed-file pull request.
+
+After Apps and credentials are provisioned, dispatch `managed-files-only`, review and merge the generated pull request through the repository's current process, verify the caller workflows and required checks on the default branch, then dispatch `reconcile`. The [first-release plan](first-release-plan.md#phase-6-repo-settings) defines the complete bootstrap order.
+
 ## Managed-file pull requests
 
 Managed files use `csm-ci/repo-settings` on both clients and the server. The server verifies every commit after the merge-base before reusing this branch. Each commit must be a GitHub-signed Server App commit and change only managed paths. Symlinks, submodules, unsafe trees, and ambiguous pull requests are rejected.
 
-For changed content, the server resets the verified managed branch to the observed default-branch head with a Git lease, then writes through `createCommitOnBranch` with the expected head. Concurrent changes fail instead of being overwritten. An exact repeated request keeps the existing commit and pull request. When default already contains the desired files, no update is needed.
+For changed content, the server resets the verified managed branch to the observed default-branch head with a Git lease, then writes through `createCommitOnBranch` with the expected head. A verified managed branch that is an ancestor of default is also rebuilt, even when its files match, so the pull request can target the current default branch. Concurrent changes fail instead of being overwritten. An exact repeated request keeps the existing commit and pull request. When default already contains the desired files, no update is needed.
+
+The target workflow serializes runs per repository and does not cancel a running attempt. GitHub can replace an older pending run when a newer run enters the same concurrency group. Check the final run result and dispatch again if the requested run was replaced.
 
 Managed files reach default only through the pull request. A trusted merger requests `/merge` after review. New executable files are unsupported because `createCommitOnBranch` cannot set their executable bit.
 

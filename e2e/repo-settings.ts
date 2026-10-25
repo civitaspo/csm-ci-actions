@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { type GitHub, splitRepository } from "../src/lib/github.ts";
-import { assert, CLIENT, dispatch, hasStatus, SERVER, SERVER_BOT_ID, type Ctx, type Scenario, until, withServerConfig } from "./harness.ts";
+import { inspectRepoSettingsPreflight } from "../src/lib/repo-settings.ts";
+import { assert, CLIENT, dispatch, hasStatus, jobLog, SERVER, SERVER_BOT_ID, type Ctx, type Scenario, until, withServerConfig } from "./harness.ts";
+import { parseCreatedRulesets, rulesetCleanupPlan } from "./repo-settings-ownership.ts";
 
 const BRANCH = "csm-ci/repo-settings";
 const MANAGED_MARKER = "<!-- csm-ci:repo-settings:managed-files -->";
@@ -85,7 +87,7 @@ async function listManagedRuleSetDetails(gh: GitHub, repository: string, raw: un
 }
 
 // Each step runs even when an earlier one fails, so one failed call cannot leave the rest unrestored.
-async function restoreRepository(gh: GitHub, repository: string, snapshot: RepoSnapshot): Promise<void> {
+async function restoreRepository(gh: GitHub, repository: string, snapshot: RepoSnapshot, createdRulesetIds: ReadonlySet<number>): Promise<void> {
   const address = splitRepository(repository);
   const failures: unknown[] = [];
   const attempt = async (step: () => Promise<unknown>) => {
@@ -97,9 +99,10 @@ async function restoreRepository(gh: GitHub, repository: string, snapshot: RepoS
   };
   const originalIds = new Set(snapshot.rulesets.map((ruleset) => ruleset.id));
   await attempt(async () => {
-    for (const ruleset of await listManagedRulesets(gh, repository)) {
-      if (!originalIds.has(ruleset.id)) await attempt(() => gh.rest.repos.deleteRepoRuleset({ ...address, ruleset_id: ruleset.id }));
-    }
+    const current = await listManagedRulesets(gh, repository);
+    const plan = rulesetCleanupPlan(current, originalIds, createdRulesetIds);
+    for (const message of plan.errors) failures.push(new Error(message));
+    for (const id of plan.deleteIds) await attempt(() => gh.rest.repos.deleteRepoRuleset({ ...address, ruleset_id: id }));
   });
   for (const ruleset of snapshot.rulesets) {
     const body: RuleSetSnapshot = {
@@ -160,26 +163,50 @@ async function ownedManagedHead(ctx: Ctx, repository = CLIENT): Promise<{ sha: s
   return { sha, ...(pull ? { pull } : {}) };
 }
 
-async function dispatchReconciliation(ctx: Ctx, repository: string, mode: "schedule" | "dispatch", configPath?: string): Promise<{ id: number; url: string; stepConclusions: Map<string, string | null> }> {
-  const run = await dispatch(ctx, SERVER, "csm-ci-repo-settings.yml", { repository, "event-mode": mode, ...(configPath ? { "config-path": configPath } : {}) });
-  assert(run.conclusion === "success", `repo-settings ${mode} run concluded ${run.conclusion} (${run.html_url})`);
+async function dispatchReconciliation(
+  ctx: Ctx,
+  repository: string,
+  eventMode: "schedule" | "dispatch",
+  configPath?: string,
+  options: { operationMode?: "reconcile" | "managed-files-only"; createdRulesetIds?: Set<number>; expectedConclusion?: "success" | "failure" } = {},
+): Promise<{ id: number; url: string; stepConclusions: Map<string, string | null>; reconcileLog: string }> {
+  const operationMode = options.operationMode ?? "reconcile";
+  const expectedConclusion = options.expectedConclusion ?? "success";
+  const run = await dispatch(ctx, SERVER, "csm-ci-repo-settings.yml", {
+    repository,
+    "event-mode": eventMode,
+    mode: operationMode,
+    ...(configPath ? { "config-path": configPath } : {}),
+  });
   const namedJobs = await until(`repo-settings jobs for ${run.html_url}`, async () => {
     const result = await ctx.gh.rest.actions.listJobsForWorkflowRun({ ...splitRepository(SERVER), run_id: run.id });
     return result.data.jobs.length > 0 ? result.data.jobs : undefined;
   });
-  assert(namedJobs.some((job) => job.name.includes("reconcile") && job.conclusion === "success"), `repo-settings reconcile job did not succeed (${run.html_url})`);
   const reconcileJob = namedJobs.find((job) => job.name.includes("reconcile"));
+  assert(reconcileJob, `repo-settings reconcile job is missing (${run.html_url})`);
+  let reconcileLog: string;
+  try {
+    reconcileLog = await jobLog(ctx, SERVER, reconcileJob.id);
+  } catch (error) {
+    throw new Error(`could not read repo-settings reconcile log for ruleset ownership (${run.html_url}): ${String(error)}`);
+  }
+  const created = parseCreatedRulesets(reconcileLog, repository);
+  for (const ruleset of created.rulesets) options.createdRulesetIds?.add(ruleset.id);
+  assert(created.errors.length === 0, `repo-settings ruleset ownership records are invalid: ${created.errors.join("; ")} (${run.html_url})`);
+  assert(run.conclusion === expectedConclusion, `repo-settings ${eventMode} run concluded ${run.conclusion}, expected ${expectedConclusion} (${run.html_url})`);
+  if (expectedConclusion === "success") assert(reconcileJob.conclusion === "success", `repo-settings reconcile job did not succeed (${run.html_url})`);
   const steps = reconcileJob?.steps ?? [];
   return {
     id: run.id,
     url: run.html_url,
     stepConclusions: new Map(steps.map((step) => [step.name, step.conclusion])),
+    reconcileLog,
   };
 }
 
-async function ensureNoPreviousManagedState(ctx: Ctx): Promise<void> {
-  assert((await managedBranchHead(ctx.gh)) === undefined, `ref ${BRANCH} already exists in ${CLIENT}; refusing to reuse it`);
-  assert((await openManagedPull(ctx.gh)).length === 0, `an open managed-files pull request already exists in ${CLIENT}`);
+async function ensureNoPreviousManagedState(ctx: Ctx, repository = CLIENT): Promise<void> {
+  assert((await managedBranchHead(ctx.gh, repository)) === undefined, `ref ${BRANCH} already exists in ${repository}; refusing to reuse it`);
+  assert((await openManagedPull(ctx.gh, repository)).length === 0, `an open managed-files pull request already exists in ${repository}`);
 }
 
 async function cleanupManagedState(ctx: Ctx, observedHead: string | undefined, pull: ManagedPull | undefined, repository = CLIENT): Promise<void> {
@@ -287,11 +314,12 @@ export const repoSettings: Scenario[] = [
     run: async (ctx) => {
       await ensureNoPreviousManagedState(ctx);
       const snapshot = await snapshotRepository(ctx.gh, CLIENT);
+      const createdRulesetIds = new Set<number>();
       let observedHead: string | undefined;
       let managedPull: ManagedPull | undefined;
       try {
         await makeSettingsDrift(ctx);
-        const initial = await dispatchReconciliation(ctx, CLIENT, "dispatch");
+        const initial = await dispatchReconciliation(ctx, CLIENT, "dispatch", undefined, { createdRulesetIds });
         assert(initial.stepConclusions.get("Mint approver contents token") === "success", `client dispatch did not verify the Approver App installation (${initial.url})`);
         assert((await listManagedRulesets(ctx.gh)).find((ruleset) => ruleset.name === "controlled-merges")?.enforcement === "active", "controlled-merges was not active before the schedule stop test");
         await assertSettingsReconciled(ctx);
@@ -304,7 +332,7 @@ export const repoSettings: Scenario[] = [
         assert(managedPull, "managed-files pull request was not created");
 
         const beforeRepeat = await rulesetUpdateTimes(ctx.gh);
-        const repeat = await dispatchReconciliation(ctx, CLIENT, "dispatch");
+        const repeat = await dispatchReconciliation(ctx, CLIENT, "dispatch", undefined, { createdRulesetIds });
         assert(await managedBranchHead(ctx.gh) === observedHead, "the repeated run changed the managed-files branch head");
         const repeatedPulls = await openManagedPull(ctx.gh);
         assert(repeatedPulls.length === 1 && repeatedPulls[0]?.number === managedPull.number && repeatedPulls[0]?.headSha === managedPull.headSha, "the repeated run did not preserve the existing managed-files pull request head");
@@ -315,17 +343,18 @@ export const repoSettings: Scenario[] = [
         }
 
         await disableControlledMerges(ctx);
-        await dispatchReconciliation(ctx, CLIENT, "schedule");
+        await dispatchReconciliation(ctx, CLIENT, "schedule", undefined, { createdRulesetIds });
         await assertControlledMergesDisabled(ctx);
       } finally {
         try {
           await cleanupManagedState(ctx, observedHead, managedPull);
         } finally {
-          await restoreRepository(ctx.gh, CLIENT, snapshot);
+          await restoreRepository(ctx.gh, CLIENT, snapshot, createdRulesetIds);
         }
       }
 
       const serverSnapshot = await snapshotRepository(ctx.gh, SERVER);
+      const serverCreatedRulesetIds = new Set<number>();
       assert(await managedBranchHead(ctx.gh, SERVER) === undefined, `ref ${BRANCH} already exists in ${SERVER}; refusing to reuse it`);
       assert((await openManagedPull(ctx.gh, SERVER)).length === 0, `an open managed-files pull request already exists in ${SERVER}`);
       await withServerConfig(ctx, (text) => {
@@ -335,7 +364,7 @@ export const repoSettings: Scenario[] = [
       }, async () => {
         try {
           const originalControlled = serverSnapshot.rulesets.find((ruleset) => ruleset.name === "controlled-merges");
-          const serverSchedule = await dispatchReconciliation(ctx, SERVER, "schedule");
+          const serverSchedule = await dispatchReconciliation(ctx, SERVER, "schedule", undefined, { createdRulesetIds: serverCreatedRulesetIds });
           assert(serverSchedule.stepConclusions.get("Mint approver contents token") === "skipped", `server schedule tried to mint an Approver App token (${serverSchedule.url})`);
           await assertRepositorySettings(ctx, SERVER);
           for (const name of ["integrity", "review-and-checks", "release-tags"]) {
@@ -348,9 +377,64 @@ export const repoSettings: Scenario[] = [
           assert(await managedBranchHead(ctx.gh, SERVER) === undefined, `empty managed_files created ${BRANCH} in ${SERVER}`);
           assert(await immutableReleaseState(ctx.gh, SERVER), `server schedule did not enable immutable releases in ${SERVER}`);
         } finally {
-          await restoreRepository(ctx.gh, SERVER, serverSnapshot);
+          await restoreRepository(ctx.gh, SERVER, serverSnapshot, serverCreatedRulesetIds);
         }
       });
+
+      const bootstrapSnapshot = await snapshotRepository(ctx.gh, SERVER);
+      const bootstrapCreatedRulesetIds = new Set<number>();
+      await ensureNoPreviousManagedState(ctx, SERVER);
+      try {
+        const preflight = await inspectRepoSettingsPreflight({ readGH: ctx.gh, target: { name: SERVER, isServer: true } });
+        assert(!preflight.callerDistributed, "the server caller workflows are already distributed in " + SERVER + "; bootstrap precondition changed");
+        assert(!bootstrapSnapshot.rulesets.some((ruleset) => ruleset.name === "controlled-merges"), "controlled-merges already exists in " + SERVER + "; bootstrap precondition changed");
+
+        const first = await dispatchReconciliation(ctx, SERVER, "dispatch", undefined, {
+          operationMode: "managed-files-only",
+          createdRulesetIds: bootstrapCreatedRulesetIds,
+        });
+        assert(first.stepConclusions.get("Mint administration write token") === "skipped", "managed-files-only minted an administration token (" + first.url + ")");
+        assert(first.stepConclusions.get("Mint approver contents token") === "skipped", "managed-files-only minted an approver token (" + first.url + ")");
+        assert(first.stepConclusions.get("Apply repository settings") === "skipped", "managed-files-only applied repository settings (" + first.url + ")");
+        assert(first.stepConclusions.get("Apply managed files") === "success", "managed-files-only did not apply managed files (" + first.url + ")");
+        const bootstrapHead = await until("managed " + BRANCH + " branch in " + SERVER, async () => await managedBranchHead(ctx.gh, SERVER));
+        const bootstrapPulls = await until("managed-files pull request in " + SERVER, async () => {
+          const found = await openManagedPull(ctx.gh, SERVER);
+          return found.length === 1 ? found : undefined;
+        });
+        const bootstrapPull = bootstrapPulls[0];
+        assert(bootstrapPull?.headSha === bootstrapHead, "managed-files-only pull request head does not match its branch (" + first.url + ")");
+
+        const second = await dispatchReconciliation(ctx, SERVER, "dispatch", undefined, {
+          operationMode: "managed-files-only",
+          createdRulesetIds: bootstrapCreatedRulesetIds,
+        });
+        assert(await managedBranchHead(ctx.gh, SERVER) === bootstrapHead, "repeated managed-files-only changed the branch head (" + second.url + ")");
+        const repeatedPulls = await openManagedPull(ctx.gh, SERVER);
+        assert(repeatedPulls.length === 1 && repeatedPulls[0]?.number === bootstrapPull.number && repeatedPulls[0]?.headSha === bootstrapHead, "repeated managed-files-only did not preserve its pull request (" + second.url + ")");
+        for (const name of ["Mint administration write token", "Mint approver contents token", "Apply repository settings", "Apply managed files"]) {
+          assert(second.stepConclusions.get(name) === "skipped", "repeated managed-files-only did not skip " + name + " (" + second.url + ")");
+        }
+
+        const normal = await dispatchReconciliation(ctx, SERVER, "dispatch", undefined, {
+          createdRulesetIds: bootstrapCreatedRulesetIds,
+          expectedConclusion: "failure",
+        });
+        assert(normal.reconcileLog.includes("caller workflow is not distributed on " + SERVER), "normal dispatch did not reject the missing caller before writes (" + normal.url + ")");
+        assert(normal.stepConclusions.get("Apply repository settings") === "skipped", "normal dispatch applied repository settings before rejecting the caller (" + normal.url + ")");
+        assert(await managedBranchHead(ctx.gh, SERVER) === bootstrapHead, "normal dispatch changed the managed branch after caller rejection (" + normal.url + ")");
+        const after = await snapshotRepository(ctx.gh, SERVER);
+        assert(JSON.stringify(after.settings) === JSON.stringify(bootstrapSnapshot.settings)
+          && after.immutableReleases === bootstrapSnapshot.immutableReleases
+          && JSON.stringify(normalizeRuleSets(after.rulesets)) === JSON.stringify(normalizeRuleSets(bootstrapSnapshot.rulesets)),
+        "managed-files-only or rejected normal dispatch changed server administration state (" + normal.url + ")");
+      } finally {
+        try {
+          await cleanupManagedState(ctx, undefined, undefined, SERVER);
+        } finally {
+          await restoreRepository(ctx.gh, SERVER, bootstrapSnapshot, bootstrapCreatedRulesetIds);
+        }
+      }
     },
   },
 ];

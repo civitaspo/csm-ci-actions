@@ -196,6 +196,7 @@ export type RepoSettingsInspection = {
 };
 
 export type RepoSettingsApplyResult = { settingsUpdated: number; immutableReleasesEnabled: number; rulesetsUpdated: number; rulesetsCreated: number };
+const CreatedRuleSet = z.object({ id: z.number().int().positive(), name: z.string() });
 
 // GitHub returns ruleset bypass_actors only to callers with write access to the ruleset, so
 // repository state is read with the administration token.
@@ -258,6 +259,7 @@ export async function applyRepoSettings(args: {
   mode: RepoSettingsMode;
   approverAppSlug?: string;
   actionsRepository?: string;
+  onRulesetCreated?: (ruleset: { id: number; name: string }) => void;
 }): Promise<RepoSettingsApplyResult> {
   const inspection = await inspectRepoSettings({ adminGH: args.adminGH, config: args.config, target: args.target, mode: args.mode });
   if (inspection.activation) {
@@ -295,7 +297,12 @@ export async function applyRepoSettings(args: {
     if (!definition) throw new Error(`missing fixed ruleset definition: ${name}`);
     const id = inspection.rulesetIds[name];
     if (id === undefined) {
-      await args.adminGH.request({ method: "POST", url: "/repos/{owner}/{repo}/rulesets", ...address, ...definition });
+      const response = await args.adminGH.request({ method: "POST", url: "/repos/{owner}/{repo}/rulesets", ...address, ...definition });
+      const created = CreatedRuleSet.safeParse(response.data);
+      if (!created.success || created.data.name !== definition.name) {
+        throw new Rejection(`created ruleset response for ${definition.name} did not include a valid id and matching name`);
+      }
+      args.onRulesetCreated?.(created.data);
       rulesetsCreated++;
     } else {
       // A PUT without enforcement keeps the live value, so a stop set after inspection survives

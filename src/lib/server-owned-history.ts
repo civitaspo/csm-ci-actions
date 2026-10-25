@@ -38,29 +38,32 @@ export async function loadServerOwnedHistory(gh: GitHub, input: {
     per_page: 100,
   };
   const comparison = await gh.rest.repos.compareCommitsWithBasehead(comparisonInput);
-  const comparedCommits = [...comparison.data.commits];
-  const seen = new Set(comparedCommits.map(({ sha }) => sha));
-  for (let page = 2; comparedCommits.length < comparison.data.ahead_by; page++) {
-    const next = await gh.rest.repos.compareCommitsWithBasehead({ ...comparisonInput, page });
-    if (next.data.commits.length === 0 || next.data.commits.some(({ sha }) => seen.has(sha))) throw new Rejection(input.messages.incomplete);
-    for (const commit of next.data.commits) {
-      seen.add(commit.sha);
-      comparedCommits.push(commit);
-    }
-  }
   const result: ServerOwnedCommit[] = [];
   const mergeBaseSha = comparison.data.merge_base_commit?.sha;
   if (!mergeBaseSha) throw new Rejection(input.messages.incomplete);
   let expectedParent = mergeBaseSha;
-  for (const compared of comparedCommits) {
-    if (!await isServerMadeCommit(gh, { owner: input.owner, repo: input.repo, sha: compared.sha, serverBotId: input.serverBotId })) {
-      throw new Rejection(input.messages.untrusted);
+  const seen = new Set<string>();
+  let commits = comparison.data.commits;
+  let collected = 0;
+  for (let page = 1; ; page++) {
+    if (page > 1 && (commits.length === 0 || commits.some(({ sha }) => seen.has(sha)))) {
+      throw new Rejection(input.messages.incomplete);
     }
-    const { data: commit } = await gh.rest.repos.getCommit({ owner: input.owner, repo: input.repo, ref: compared.sha });
-    if (commit.parents.length !== 1 || commit.parents[0]?.sha !== expectedParent) throw new Rejection(input.messages.nonLinear);
-    if (commit.files === undefined || commit.files.length >= 300) throw new Rejection(input.messages.changesIncomplete);
-    result.push({ sha: compared.sha, parentSha: expectedParent, files: commit.files });
-    expectedParent = compared.sha;
+    for (const compared of commits) {
+      seen.add(compared.sha);
+      collected++;
+      if (!await isServerMadeCommit(gh, { owner: input.owner, repo: input.repo, sha: compared.sha, serverBotId: input.serverBotId })) {
+        throw new Rejection(input.messages.untrusted);
+      }
+      const { data: commit } = await gh.rest.repos.getCommit({ owner: input.owner, repo: input.repo, ref: compared.sha });
+      if (commit.parents.length !== 1 || commit.parents[0]?.sha !== expectedParent) throw new Rejection(input.messages.nonLinear);
+      if (commit.files === undefined || commit.files.length >= 300) throw new Rejection(input.messages.changesIncomplete);
+      result.push({ sha: compared.sha, parentSha: expectedParent, files: commit.files });
+      expectedParent = compared.sha;
+    }
+    if (collected >= comparison.data.ahead_by) break;
+    const next = await gh.rest.repos.compareCommitsWithBasehead({ ...comparisonInput, page: page + 1 });
+    commits = next.data.commits;
   }
   if (expectedParent !== input.headSha) throw new Rejection(input.messages.incomplete);
   return result;
