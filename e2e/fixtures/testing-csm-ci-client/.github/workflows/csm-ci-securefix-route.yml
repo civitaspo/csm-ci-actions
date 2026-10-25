@@ -36,7 +36,7 @@ jobs:
               printf 'route update\n' > e2e/securefix-route-result.txt
               ;;
           esac
-      - uses: civitaspo/csm-ci-actions/actions/securefix-client@e2e
+      - uses: civitaspo/csm-ci-actions/actions/client/securefix@e2e
         with:
           client-id: ${{ vars.CSM_CI_CLIENT_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}

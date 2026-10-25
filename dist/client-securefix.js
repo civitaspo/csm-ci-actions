@@ -24940,7 +24940,7 @@ function info(message) {
   process.stdout.write(message + os4.EOL);
 }
 
-// src/securefix-client/main.ts
+// src/client-securefix/main.ts
 import { readFile as readFile2 } from "node:fs/promises";
 
 // node_modules/universal-user-agent/index.js
@@ -35310,7 +35310,7 @@ async function assertNoSymlinkParents(root, path) {
   }
 }
 
-// src/securefix-client/main.ts
+// src/client-securefix/main.ts
 function env(name) {
   const value = process.env[name];
   if (!value)

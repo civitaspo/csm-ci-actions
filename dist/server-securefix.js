@@ -37538,7 +37538,7 @@ function securefixPreparationOutput(result) {
   };
 }
 
-// src/securefix/main.ts
+// src/server-securefix/main.ts
 function env(name) {
   const value = process.env[name];
   if (!value)

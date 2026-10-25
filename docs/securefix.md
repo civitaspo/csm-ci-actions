@@ -4,7 +4,7 @@ Securefix packages generated working-tree changes from a client workflow, then a
 
 ## Client workflow
 
-Add one step, `civitaspo/csm-ci-actions/actions/securefix-client@<sha>`, after the steps that change files, in the same job:
+Add one step, `civitaspo/csm-ci-actions/actions/client/securefix@<sha>`, after the steps that change files, in the same job:
 
 ```yaml
 name: securefix
@@ -24,7 +24,7 @@ jobs:
           persist-credentials: false
       # Fix code as you like.
       - run: npx prettier -w .
-      - uses: civitaspo/csm-ci-actions/actions/securefix-client@<sha>
+      - uses: civitaspo/csm-ci-actions/actions/client/securefix@<sha>
         with:
           client-id: ${{ vars.CSM_CI_CLIENT_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}

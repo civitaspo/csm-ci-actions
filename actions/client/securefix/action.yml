@@ -28,7 +28,7 @@ runs:
   steps:
     - id: package
       shell: bash
-      run: node "$GITHUB_ACTION_PATH/../../dist/securefix-client.js"
+      run: node "$GITHUB_ACTION_PATH/../../../dist/client-securefix.js"
       env:
         CSM_CI_SECUREFIX_STEP: package
         INPUT_WORKSPACE: ${{ inputs.workspace }}
@@ -54,7 +54,7 @@ runs:
     - id: request
       if: steps.package.outputs.has-changes == 'true'
       shell: bash
-      run: node "$GITHUB_ACTION_PATH/../../dist/securefix-client.js"
+      run: node "$GITHUB_ACTION_PATH/../../../dist/client-securefix.js"
       env:
         CSM_CI_SECUREFIX_STEP: request
         INPUT_TOKEN: ${{ steps.token.outputs.token }}

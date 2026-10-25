@@ -4,7 +4,7 @@ import { parse } from "yaml";
 
 type Step = { id?: string; if?: string; uses?: string; run?: string; with?: Record<string, string>; env?: Record<string, string> };
 
-const action = parse(readFileSync("actions/securefix-client/action.yml", "utf8")) as { inputs: Record<string, { required?: boolean }>; runs: { using: string; steps: Step[] } };
+const action = parse(readFileSync("actions/client/securefix/action.yml", "utf8")) as { inputs: Record<string, { required?: boolean }>; runs: { using: string; steps: Step[] } };
 const steps = action.runs.steps;
 
 describe("securefix client action", () => {
@@ -39,8 +39,8 @@ describe("securefix client action", () => {
   });
 
   test("every package output the action reads is one main.ts sets", () => {
-    const source = readFileSync("src/securefix-client/main.ts", "utf8");
-    const referenced = [...readFileSync("actions/securefix-client/action.yml", "utf8").matchAll(/steps\.(package|request)\.outputs\.([a-z-]+)/gu)].map((match) => match[2]);
+    const source = readFileSync("src/client-securefix/main.ts", "utf8");
+    const referenced = [...readFileSync("actions/client/securefix/action.yml", "utf8").matchAll(/steps\.(package|request)\.outputs\.([a-z-]+)/gu)].map((match) => match[2]);
     expect(referenced.length).toBeGreaterThan(0);
     for (const name of new Set(referenced)) expect(source).toContain(`core.setOutput("${name}"`);
   });
@@ -54,7 +54,7 @@ describe("release-pr reusable workflow", () => {
   test("generates and requests in one job through the securefix client action", () => {
     const workflow = parse(readFileSync(".github/workflows/client-release-pr.yml", "utf8")) as { jobs: Record<string, { steps?: Step[] }> };
     expect(Object.keys(workflow.jobs)).toEqual(["generate"]);
-    const client = workflow.jobs.generate?.steps?.find((step) => step.uses === "./.csm-ci-actions/actions/securefix-client");
+    const client = workflow.jobs.generate?.steps?.find((step) => step.uses === "./.csm-ci-actions/actions/client/securefix");
     expect(client?.with?.["private-key"]).toBe("${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}");
   });
 });

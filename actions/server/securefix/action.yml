@@ -39,4 +39,4 @@ outputs:
     description: Route pull request created or updated by securefix.
 runs:
   using: node24
-  main: ../../dist/securefix.js
+  main: ../../../dist/server-securefix.js

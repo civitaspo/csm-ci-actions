@@ -104,7 +104,7 @@ jobs:
           args: ${{ needs.intake.outputs.args }}
       - id: securefix-locate
         if: needs.intake.outputs.kind == 'securefix'
-        uses: ./.csm-ci-actions/actions/securefix
+        uses: ./.csm-ci-actions/actions/server/securefix
         with:
           mode: locate
           config-path: ${{ inputs.config-path }}
@@ -131,7 +131,7 @@ jobs:
           digest-mismatch: error
       - id: securefix-prepare
         if: needs.intake.outputs.kind == 'securefix'
-        uses: ./.csm-ci-actions/actions/securefix
+        uses: ./.csm-ci-actions/actions/server/securefix
         with:
           mode: prepare
           config-path: ${{ inputs.config-path }}
@@ -278,7 +278,7 @@ jobs:
       - if: >-
           needs.intake.outputs.kind == 'securefix' &&
           (steps.securefix-prepare.outputs.result == 'ready' || steps.securefix-prepare.outputs.route-mode == 'true')
-        uses: ./.csm-ci-actions/actions/securefix
+        uses: ./.csm-ci-actions/actions/server/securefix
         with:
           mode: apply
           config-path: ${{ inputs.config-path }}
