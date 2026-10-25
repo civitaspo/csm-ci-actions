@@ -46,3 +46,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: jactionlint --online
+      - name: Verify shared release action lock
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: mise run actions-lock-verify

@@ -25,7 +25,10 @@ bun install --frozen-lockfile --ignore-scripts
 bun run typecheck && bun test && bun run build
 test -z "$(git status --porcelain dist/)"   # dist/ is committed and must match the build
 mise exec -- jactionlint
+mise run actions-lock-verify
 ```
+
+When changing either shared release workflow or its composite dependencies, run `mise run actions-lock` and commit the generated lockfile with the change. The task covers only those two workflows; other workflows retain their existing checkout pattern.
 
 ## Specification and documents
 
