@@ -142,7 +142,7 @@ repo_settings:                                      # global only (Phase 6)
 repositories:                                       # per repo, only ops and the release build type
   - name: owner/*                                   # first match wins
     ops: [approve, merge, policy-check, securefix, release]
-    release: { build_type: none | js-action | goreleaser | cargo, targets: [...] }
+    release: { build_type: none | js-action | goreleaser | cargo | cargo-raw, targets: [...] }
 ```
 
 - Read the file as of the server's `GITHUB_SHA`, and validate it with zod strict mode (unknown keys are errors).
@@ -445,11 +445,13 @@ After Phase 0, phases 1, 2, 3, 4, 5a, and 6 can proceed independently in paralle
     - No secrets, no environment, no cache
     - `persist-credentials: false`
     - Only for a private repo, check out with a `contents: read` token for `repositories: [client]`
-  - The handling per `build_type` is implemented on the csm-ci-actions side as a composite action. The contract is that artifacts go in `assets/`. `actions/server/release-build` takes the `build_type` as an input and runs that build system's steps. A new build system needs only its steps there and one line in the configuration schema. The types provided in v1 are as follows.
+  - The handling per `build_type` is implemented on the csm-ci-actions side as a composite action. The contract is that artifacts go in `assets/`. `actions/server/release-build` takes the `build_type` as an input and runs that build system's steps. Keep build handling there and configuration in the release schema; asset validation and checksum creation belong to the publish job. The types provided in v1 are as follows.
     - `none`
     - `js-action`: runs check-dist. It installs from the lockfile, builds, and confirms that `git status --porcelain <dist>` is empty. This guarantees that "dist was built from the released source". It produces no assets.
     - `goreleaser`: skips publish, sign, and announce.
     - `cargo`: builds with a matrix of targets and runners.
+    - `cargo-raw`: preserves an existing raw-binary download contract. Configuration requires one Cargo binary name (`binary`) matching `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$` and a nonempty, duplicate-free `targets` list drawn from `aarch64-apple-darwin`, `x86_64-apple-darwin`, `aarch64-unknown-linux-musl` and `x86_64-unknown-linux-musl`. Build only that binary with pinned Rust `1.99.1` and locked dependencies, on native macOS ARM, macOS Intel, Linux ARM and Linux x86 runners respectively. Install the native musl C compiler for Linux and bind both the Cargo linker and C compiler to it. Produce one executable named `<binary>-<target>` per target, without an archive or version in the filename. Verify its architecture, static Linux linkage, and reported `<binary> <version>` (optionally followed by SemVer build metadata) before upload. The existing `cargo` archive format and target set remain unchanged.
+  - For `cargo-raw`, the publish job derives the exact binary filenames from configuration, rejects missing or unexpected build outputs, and creates `<binary>-<target>.sha256` containing the binary's SHA256 and filename. Existing sidecars are accepted only when they match the recomputed content. These trusted sidecars preserve existing installers; the standard `SHA256SUMS` and attestation additionally cover every binary and sidecar. Upload the complete set to the draft before publishing. Client workflows must not try to attach binaries after an immutable release has been published.
   - **Even if we implement the build on the csm-ci-actions side, we still need to separate the build and signing jobs**. Whoever implements the build system, the client's code and its dependencies run during the build. Examples are `build.rs`, proc-macros, `go generate`, goreleaser hooks, npm lifecycle scripts, and crate or module supply chains.
     - So we give the build job neither `id-token` nor secrets. If we did, one malicious dependency could attach a genuine attestation or GPG signature to any artifact.
     - The separation is contained inside the reusable workflow, so users see only a choice of `build_type`.
@@ -481,7 +483,7 @@ After Phase 0, phases 1, 2, 3, 4, 5a, and 6 can proceed independently in paralle
   - Triggers are a push to default and `workflow_dispatch(version)`.
   - git-cliff produces the version and the CHANGELOG.
   - It writes `.release-version`.
-  - It bumps the root version.
+  - It updates the root version by default. The action and reusable workflow accept `update-root-version: false` for repositories whose binary release version comes exclusively from `.release-version`; in this mode, preserve all root manifests and lockfiles byte-for-byte and generate only `.release-version` and `CHANGELOG.md`. This preserves herdr-linear-agent's fixed Cargo and Herdr manifest versions. The default behavior of existing callers is unchanged.
   - For a dbt package, it also updates the root `version` scalar in `dbt_project.yml` when that file exists, alongside any supported root manifest. Preserve all other file content, including nested version fields. Reject malformed YAML, duplicate or missing root versions, non-scalar or non-semver values, and version syntax that cannot satisfy the route's version-only rule before writing release files.
 - Writes go through the securefix route `release-pr` (the S4 version-only check applies).
 
@@ -496,6 +498,8 @@ After Phase 0, phases 1, 2, 3, 4, 5a, and 6 can proceed independently in paralle
   - The tag is created by someone other than the Server App (rejected by the ruleset)
 - When release-pr is pushed again, the PR is updated.
 - Release preparation keeps `dbt_project.yml`, `pyproject.toml` and `.release-version` at the same version. Invalid dbt metadata fails without partial file updates; table-driven tests assert each rejection message and mutation checks demonstrate coverage.
+- Verify `cargo-raw` on all four native targets: executable format and architecture, static Linux linkage, reported version, exact binary/sidecar filenames, individual checksums, immutable publication, and locally verified provenance binding every asset to the client, merge and tag. Test each new rejection with its message and mutation-check it. Preserve the existing archive-builder coverage rather than replacing it.
+- Verify `update-root-version: false` generates a release PR without changing any manifest or lockfile, while omitted or true keeps the existing manifest updates. Herdr's installer must continue to consume the raw assets without a format or URL change.
 
 ### Phase 6: repo-settings
 
@@ -551,6 +555,8 @@ After Phase 0, phases 1, 2, 3, 4, 5a, and 6 can proceed independently in paralle
 3. When all repos are moved, archive securefix-server.
 
 Use an explicit production target list derived from the old server's policy. Exclude retired securefix-server repositories and include `csm-ci-actions` as a maintained client of `csm-ci-server`, including repository-settings reconciliation. Before activating protection on any target, verify its new callers and required checks. Release configurations must preserve the target's publishing requirements; the supported build types do not add Terraform Registry signing or publishing.
+
+For herdr-linear-agent, preserve the four raw macOS/musl binaries and their individual `.sha256` files consumed by its existing installer. Restore that contract in a new release through `cargo-raw`; do not modify older immutable releases or retain its post-publication asset uploader. Keep its fixed Cargo and Herdr manifest versions with `update-root-version: false`.
 
 ---
 
