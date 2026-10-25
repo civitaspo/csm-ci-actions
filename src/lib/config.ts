@@ -23,6 +23,12 @@ export const CARGO_TARGETS = [
   "x86_64-pc-windows-msvc",
   "x86_64-unknown-linux-gnu",
 ] as const;
+export const CARGO_RAW_TARGETS = [
+  "aarch64-apple-darwin",
+  "x86_64-apple-darwin",
+  "aarch64-unknown-linux-musl",
+  "x86_64-unknown-linux-musl",
+] as const;
 export const ReleaseSchema = z.discriminatedUnion("build_type", [
   z.strictObject({ build_type: z.literal("none") }),
   z.strictObject({ build_type: z.literal("js-action") }),
@@ -30,6 +36,11 @@ export const ReleaseSchema = z.discriminatedUnion("build_type", [
   z.strictObject({
     build_type: z.literal("cargo"),
     targets: z.array(z.enum(CARGO_TARGETS)).min(1).refine((targets) => new Set(targets).size === targets.length, "duplicate cargo target"),
+  }),
+  z.strictObject({
+    build_type: z.literal("cargo-raw"),
+    binary: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}(?![\s\S])/u, "binary must be a safe Cargo binary name of at most 64 characters"),
+    targets: z.array(z.enum(CARGO_RAW_TARGETS)).min(1).refine((targets) => new Set(targets).size === targets.length, "duplicate cargo-raw target"),
   }),
 ]);
 export type Release = z.infer<typeof ReleaseSchema>;

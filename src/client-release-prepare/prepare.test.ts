@@ -38,6 +38,39 @@ test("prepares root versions while preserving every unrelated byte", async () =>
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test.each([false, true, undefined])("root version updates respect updateRootVersion=%s", async (updateRootVersion) => {
+  const root = await workspace();
+  const originals = {
+    "package.json": '{\n  "version": "0.1.0"\n}\n',
+    "Cargo.toml": '[package]\nname = "sample"\nversion = "0.1.0"\n',
+    "Cargo.lock": 'version = 4\n\n[[package]]\nname = "sample"\nversion = "0.1.0"\n',
+    "pyproject.toml": '[project]\nversion = "0.1.0"\n',
+    "dbt_project.yml": 'version: "0.1.0"\n',
+    "herdr-plugin.toml": 'version = "0.1.0"\n',
+  };
+  try {
+    for (const [path, content] of Object.entries(originals)) await writeFile(join(root, path), content);
+    await prepareRelease({ workspace: root, version: "2.0.0", gitCliff: join(root, "git-cliff"), ...(updateRootVersion === undefined ? {} : { updateRootVersion }) });
+    for (const [path, content] of Object.entries(originals)) {
+      expect(await readFile(join(root, path), "utf8")).toBe(updateRootVersion === false || path === "herdr-plugin.toml" ? content : content.replace("0.1.0", "2.0.0"));
+    }
+    expect(await readFile(join(root, ".release-version"), "utf8")).toBe("2.0.0\n");
+    expect(await readFile(join(root, "CHANGELOG.md"), "utf8")).toBe("generated\n");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("disabled root updates leave unsupported manifests and linked lockfiles untouched", async () => {
+  const root = await workspace();
+  try {
+    await writeFile(join(root, "Cargo.toml"), "intentionally unsupported manifest\n");
+    await writeFile(join(root, "untouched.lock"), "fixed lock\n");
+    await symlink("untouched.lock", join(root, "Cargo.lock"));
+    await prepareRelease({ workspace: root, version: "2.0.0", updateRootVersion: false, gitCliff: join(root, "git-cliff") });
+    expect(await readFile(join(root, "Cargo.toml"), "utf8")).toBe("intentionally unsupported manifest\n");
+    expect(await readFile(join(root, "Cargo.lock"), "utf8")).toBe("fixed lock\n");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("supports a manifest-free Go or build_type none repository", async () => {
   const root = await workspace();
   try { expect(await prepareRelease({ workspace: root, version: "2.0.0", gitCliff: join(root, "git-cliff") })).toBe("2.0.0"); }
@@ -174,5 +207,18 @@ test("CLI reports a git-cliff failure as a failed action", async () => {
     expect(result.code).toBe(1);
     expect(result.stderr + result.stdout).toContain("deliberate-failure");
     expect(result.stderr + result.stdout).toContain("::error::");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test.each(["false", "true", "not-boolean"])("CLI handles update-root-version=%s", async (value) => {
+  const root = await workspace();
+  const original = '[package]\nname = "sample"\nversion = "0.1.0"\n';
+  try {
+    await writeFile(join(root, "Cargo.toml"), original);
+    const env = { ...process.env, INPUT_WORKSPACE: root, INPUT_VERSION: "2.0.0", "INPUT_UPDATE-ROOT-VERSION": value, PATH: `${root}:${process.env.PATH ?? ""}` };
+    const result = Bun.spawnSync([process.execPath, "run", "src/client-release-prepare/main.ts"], { cwd: process.cwd(), env });
+    expect(result.exitCode).toBe(value === "not-boolean" ? 1 : 0);
+    if (value === "not-boolean") expect(result.stdout.toString() + result.stderr.toString()).toContain('Input does not meet YAML 1.2 "Core Schema" specification: update-root-version');
+    expect(await readFile(join(root, "Cargo.toml"), "utf8")).toBe(value === "true" ? original.replace("0.1.0", "2.0.0") : original);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

@@ -16,6 +16,10 @@ inputs:
   version:
     description: Explicit unprefixed SemVer. When omitted, git-cliff selects the next version.
     required: false
+  update-root-version:
+    description: Update supported root manifest versions and the Cargo lockfile.
+    required: false
+    default: "true"
 outputs:
   label:
     description: Name of the securefix request label.
@@ -36,6 +40,7 @@ runs:
       env:
         INPUT_WORKSPACE: ${{ inputs.workspace }}
         INPUT_VERSION: ${{ inputs.version }}
+        INPUT_UPDATE-ROOT-VERSION: ${{ inputs.update-root-version }}
     - id: package
       shell: bash
       run: node "$GITHUB_ACTION_PATH/../../../dist/client-securefix.js"

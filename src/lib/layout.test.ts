@@ -55,7 +55,7 @@ describe("release build boundary", () => {
   });
 
   test("build implementations run only for their selected type and disable the tool cache", () => {
-    for (const step of buildSteps.slice(1)) expect(step.if).toMatch(/^inputs\.build-type == '(none|js-action|goreleaser|cargo)'$/u);
+    for (const step of buildSteps.slice(1)) expect(step.if).toMatch(/^inputs\.build-type == '(none|js-action|goreleaser|cargo|cargo-raw)'$/u);
     expect(buildSteps.find((step) => step.uses?.startsWith("oven-sh/setup-bun@"))?.with?.["no-cache"]).toBe(true);
   });
 

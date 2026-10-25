@@ -15,6 +15,7 @@ Call it through the reusable [client-release-prepare workflow](../../../.github/
 | `server-repository` | Yes | Server repository as `owner/repo`, normally `vars.CSM_CI_SERVER_REPOSITORY`. |
 | `workspace` | Yes | Path to the checked-out client repository root. |
 | `version` | No | Explicit semantic version without `v`. If empty, git-cliff selects the next version from Git history. |
+| `update-root-version` | No | Boolean, defaults to `true`. Set `false` to preserve all manifests and lockfiles and generate only `.release-version` and `CHANGELOG.md`. |
 
 ## Outputs
 

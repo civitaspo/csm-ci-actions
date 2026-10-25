@@ -5,6 +5,9 @@ inputs:
     description: Directory containing build outputs.
     required: false
     default: assets
+  release-config:
+    description: Validated release build configuration, required for cargo-raw sidecars.
+    required: false
 outputs:
   subject-path:
     description: Glob of all validated assets for actions/attest.

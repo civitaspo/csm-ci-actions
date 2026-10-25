@@ -3,8 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import { prepareAssets } from "./assets.ts";
+import { CARGO_RAW_TARGETS, type Release } from "../lib/config.ts";
 
 const directories: string[] = [];
+const rawRelease = { build_type: "cargo-raw", binary: "app", targets: [...CARGO_RAW_TARGETS] } satisfies Release;
 
 afterEach(async () => {
   await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
@@ -17,6 +19,28 @@ async function tempDirectory(): Promise<string> {
 }
 
 describe("prepareAssets", () => {
+  test("creates individual raw checksums and attestation subjects for all four targets", async () => {
+    const directory = await tempDirectory();
+    for (const target of CARGO_RAW_TARGETS) await writeFile(join(directory, `app-${target}`), "a");
+    const assets = await prepareAssets(directory, rawRelease);
+    expect(assets.map(({ name }) => name)).toEqual([...CARGO_RAW_TARGETS.flatMap((target) => [`app-${target}`, `app-${target}.sha256`])].sort().concat("SHA256SUMS"));
+    for (const target of CARGO_RAW_TARGETS) {
+      expect(await readFile(join(directory, `app-${target}.sha256`), "utf8")).toBe(`ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb  app-${target}\n`);
+    }
+    expect((await readFile(join(directory, "SHA256SUMS"), "utf8")).trim().split("\n")).toHaveLength(8);
+    await expect(prepareAssets(directory, rawRelease)).resolves.toEqual(assets);
+  });
+
+  test.each([
+    ["missing binary", {}, 'missing cargo-raw binary "app-x86_64-unknown-linux-musl"'],
+    ["unexpected file", { other: "x" }, 'unexpected cargo-raw asset "other"'],
+    ["incorrect sidecar", { "app-x86_64-unknown-linux-musl": "a", "app-x86_64-unknown-linux-musl.sha256": "wrong\n" }, 'cargo-raw checksum "app-x86_64-unknown-linux-musl.sha256" does not match its binary'],
+  ])("rejects cargo-raw %s with its error", async (_, files, message) => {
+    const directory = await tempDirectory();
+    for (const [name, content] of Object.entries(files)) await writeFile(join(directory, name), content);
+    await expect(prepareAssets(directory, { build_type: "cargo-raw", binary: "app", targets: ["x86_64-unknown-linux-musl"] })).rejects.toThrow(message);
+  });
+
   test("represents no build assets with an uploadable one-byte checksum list", async () => {
     const directory = await tempDirectory();
     const assets = await prepareAssets(directory);

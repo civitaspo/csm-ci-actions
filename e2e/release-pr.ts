@@ -65,6 +65,30 @@ async function expectReleasePr(ctx: Ctx, run: Run, runIds: Set<number>, version?
 
 export const releasePr: Scenario[] = [
   {
+    name: "disabled root version updates preserve manifests and generate only the release version and changelog",
+    serial: true,
+    run: (ctx) => withReleaseBranch(ctx, async (ids) => {
+      const version = `1.1.${Date.now()}`;
+      const base = (await ctx.gh.rest.repos.getBranch({ ...repo, branch: "main" })).data.commit.sha;
+      const paths = ["package.json", "Cargo.toml", "Cargo.lock", "pyproject.toml", "dbt_project.yml"];
+      const originals = await Promise.all(paths.map((path) => read(ctx, path, base)));
+      const run = await dispatch(ctx, CLIENT, "csm-ci-release-pr.yml", { version, "update-root-version": "false" });
+      ids.add(run.id);
+      assert(run.conclusion === "success", `release-pr failed (${run.html_url})`);
+      await expectOp(ctx, { kind: "securefix", repository: CLIENT, args: { run_id: run.id } }, new Date(run.created_at), "success");
+      const open = await pulls(ctx);
+      assert(open.length === 1 && open[0], "release-pr did not create exactly one pull request");
+      const pr = open[0];
+      assert(Number(pr.user?.id) === SERVER_BOT_ID && pr.base.ref === "main", "release PR identity or base is incorrect");
+      assert(await read(ctx, ".release-version", branch) === `${version}\n`, "release version was not generated");
+      assert((await read(ctx, "CHANGELOG.md", branch)).includes(version), "changelog was not generated");
+      for (const [index, path] of paths.entries()) assert(await read(ctx, path, branch) === originals[index], `${path} changed with root updates disabled`);
+      const files = await ctx.gh.paginate(ctx.gh.rest.pulls.listFiles, { ...repo, pull_number: pr.number, per_page: 100 });
+      assert(JSON.stringify(files.map((file) => file.filename).sort()) === JSON.stringify([".release-version", "CHANGELOG.md"]), "disabled root updates changed unexpected files");
+      ctx.urls.push(pr.html_url);
+    }),
+  },
+  {
     name: "an explicit release version creates one PR and a repeated request updates its metadata",
     serial: true,
     run: (ctx) => withReleaseBranch(ctx, async (ids) => {

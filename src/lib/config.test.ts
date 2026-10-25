@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { type Op, parseConfig, repositoryEntry } from "./config.ts";
+import { type Op, type Release, parseConfig, repositoryEntry } from "./config.ts";
 import { CONFIG_YAML, config } from "./testing.ts";
 
 describe("parseConfig", () => {
@@ -92,6 +92,16 @@ describe("parseConfig", () => {
     ["cargo with no target triples", releaseConfig("{ build_type: cargo, targets: [] }"), /Too small/],
     ["cargo with unsupported target triple", releaseConfig("{ build_type: cargo, targets: [custom-runner] }"), /Invalid option/],
     ["cargo with duplicate target triples", releaseConfig("{ build_type: cargo, targets: [x86_64-unknown-linux-gnu, x86_64-unknown-linux-gnu] }"), /duplicate cargo target/],
+    ["cargo-raw without a binary", releaseConfig("{ build_type: cargo-raw, targets: [x86_64-unknown-linux-musl] }"), /binary/],
+    ...["", "-binary", "../binary", "binary.exe", "binary name", "binary\n", "a".repeat(65)].map((binary) => [
+      `cargo-raw with unsafe binary ${JSON.stringify(binary)}`,
+      releaseConfig(`{ build_type: cargo-raw, binary: ${JSON.stringify(binary)}, targets: [x86_64-unknown-linux-musl] }`),
+      /binary must be a safe Cargo binary name/,
+    ] satisfies [string, string, RegExp]),
+    ["cargo-raw with empty targets", releaseConfig("{ build_type: cargo-raw, binary: app, targets: [] }"), /Too small/],
+    ["cargo-raw with unsupported target", releaseConfig("{ build_type: cargo-raw, binary: app, targets: [x86_64-unknown-linux-gnu] }"), /Invalid option/],
+    ["cargo-raw with duplicate targets", releaseConfig("{ build_type: cargo-raw, binary: app, targets: [x86_64-unknown-linux-musl, x86_64-unknown-linux-musl] }"), /duplicate cargo-raw target/],
+    ["cargo-raw with unknown fields", releaseConfig("{ build_type: cargo-raw, binary: app, targets: [x86_64-unknown-linux-musl], extra: true }"), /Unrecognized key/],
     ["non-cargo build with target triples", releaseConfig("{ build_type: none, targets: [x86_64-unknown-linux-gnu] }"), /Unrecognized key/],
   ];
   test.each(rejects)("rejects %s", (_, yaml, message) => {
@@ -133,5 +143,10 @@ describe("repositoryEntry", () => {
       build_type: "cargo",
       targets: ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin"],
     });
+  });
+  test("keeps raw binary and all four supported targets", () => {
+    const release = { build_type: "cargo-raw", binary: "herdr-linear-agent", targets: ["aarch64-apple-darwin", "x86_64-apple-darwin", "aarch64-unknown-linux-musl", "x86_64-unknown-linux-musl"] } satisfies Release;
+    const parsed = parseConfig(releaseConfig(JSON.stringify(release)));
+    expect(repositoryEntry(parsed, "owner/repo")?.release).toEqual(release);
   });
 });

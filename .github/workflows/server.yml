@@ -430,6 +430,7 @@ jobs:
           repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
           version: ${{ needs.release-plan.outputs.version }}
           target: ${{ matrix.target }}
+          binary: ${{ fromJSON(needs.release-plan.outputs.plan).release.binary || '' }}
       - if: hashFiles('assets/**') != ''
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -459,7 +460,7 @@ jobs:
           path: .csm-ci-actions
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        if: contains(fromJSON('["cargo", "goreleaser"]'), needs.release-plan.outputs.build-type)
+        if: contains(fromJSON('["cargo", "cargo-raw", "goreleaser"]'), needs.release-plan.outputs.build-type)
         with:
           pattern: release-assets-*
           path: assets
@@ -468,6 +469,7 @@ jobs:
         uses: ./.csm-ci-actions/actions/server/release-assets
         with:
           directory: assets
+          release-config: ${{ toJSON(fromJSON(needs.release-plan.outputs.plan).release) }}
       - id: predicate
         env:
           CLIENT_REPOSITORY: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}

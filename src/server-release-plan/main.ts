@@ -11,7 +11,7 @@ async function main(): Promise<void> {
   const release = ReleaseSchema.parse(JSON.parse(core.getInput("release-config", { required: true })));
   const plan = await planRelease(github(core.getInput("github-token", { required: true })), { repository, pullNumber, serverBotId, release });
   const { owner, repo } = splitRepository(repository);
-  const matrix = release.build_type === "cargo"
+  const matrix = release.build_type === "cargo" || release.build_type === "cargo-raw"
     ? release.targets.map((target) => ({ target, runner: CARGO_RUNNERS[target] }))
     : [{ target: "", runner: "ubuntu-24.04" }];
   core.setOutput("plan", JSON.stringify(plan));

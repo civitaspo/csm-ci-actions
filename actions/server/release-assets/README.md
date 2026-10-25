@@ -9,6 +9,7 @@ See [release publishing](../../../docs/release.md) for asset validation and publ
 | Input | Required | Default | Value |
 |---|---:|---|---|
 | `directory` | No | `assets` | Directory containing the build outputs. |
+| `release-config` | No | Empty | Release configuration as JSON. Pass the validated plan's configuration to enforce `cargo-raw` filenames and generate individual checksum sidecars. |
 
 ## Outputs
 
@@ -26,6 +27,7 @@ The directory must contain outputs from the matching release-build job. The work
   uses: civitaspo/csm-ci-actions/actions/server/release-assets@<reviewed-commit-sha>
   with:
     directory: assets
+    release-config: ${{ toJSON(fromJSON(needs.release-plan.outputs.plan).release) }}
 - uses: actions/attest@f057fd524d485ac48d9b534c235aad15b5bb303f # v3.0.0
   with:
     subject-path: ${{ steps.assets.outputs.subject-path }}

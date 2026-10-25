@@ -24918,6 +24918,17 @@ function getInput(name, options) {
   }
   return val.trim();
 }
+function getBooleanInput(name, options) {
+  const trueValue = ["true", "True", "TRUE"];
+  const falseValue = ["false", "False", "FALSE"];
+  const val = getInput(name, options);
+  if (trueValue.includes(val))
+    return true;
+  if (falseValue.includes(val))
+    return false;
+  throw new TypeError(`Input does not meet YAML 1.2 "Core Schema" specification: ${name}
+` + `Support boolean input list: \`true | True | TRUE | false | False | FALSE\``);
+}
 function setOutput(name, value) {
   const filePath = process.env["GITHUB_OUTPUT"] || "";
   if (filePath) {
@@ -25018,7 +25029,7 @@ async function prepareRelease(input) {
     throw new Error(`version ${JSON.stringify(version)} is not valid SemVer`);
   for (const path of [".release-version", "CHANGELOG.md"])
     await assertWritableFile(input.workspace, path);
-  const paths = ["package.json", "Cargo.toml", "Cargo.lock", "pyproject.toml", "dbt_project.yml"];
+  const paths = input.updateRootVersion === false ? [] : ["package.json", "Cargo.toml", "Cargo.lock", "pyproject.toml", "dbt_project.yml"];
   const originals = new Map;
   for (const path of paths) {
     const content = await readOptional(input.workspace, path);
@@ -25248,6 +25259,7 @@ function replaceCargoLockVersion(text, name, currentVersion, version) {
 try {
   const version = await prepareRelease({
     workspace: getInput("workspace", { required: true }),
+    updateRootVersion: getInput("update-root-version") === "" ? true : getBooleanInput("update-root-version"),
     ...getInput("version") ? { version: getInput("version") } : {}
   });
   setOutput("version", version);

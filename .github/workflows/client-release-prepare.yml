@@ -11,6 +11,11 @@ on:
         type: string
         required: false
         default: ""
+      update-root-version:
+        description: Update supported root manifest versions and the Cargo lockfile.
+        type: boolean
+        required: false
+        default: true
 
 permissions: {}
 
@@ -41,6 +46,7 @@ jobs:
         with:
           workspace: ${{ github.workspace }}/client
           version: ${{ inputs.version }}
+          update-root-version: ${{ inputs.update-root-version }}
           client-id: ${{ vars.CSM_CI_CLIENT_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}
           server-repository: ${{ vars.CSM_CI_SERVER_REPOSITORY }}

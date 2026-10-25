@@ -24,7 +24,7 @@ export async function publishRelease(
   if (new Set(expected.map(({ name }) => name)).size !== expected.length) {
     throw new Rejection("release asset manifest contains duplicate names");
   }
-  const local = await prepareAssets(input.directory);
+  const local = await prepareAssets(input.directory, plan.release);
   assertSameAssets(expected, local);
   const repo = splitRepository(plan.repository);
   await assertReleaseTag(gh, plan);
