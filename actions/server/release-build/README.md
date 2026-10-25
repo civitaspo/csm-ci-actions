@@ -1,6 +1,6 @@
 # csm-ci release build
 
-Build release assets from an isolated source snapshot. This composite action supports `none`, `js-action`, `goreleaser`, and `cargo`. It does not publish a release or create attestations. The trusted release build job in [server.yml](../../../.github/workflows/server.yml) runs it with no token permissions, secrets, environment, or cache.
+Build release assets from an isolated source snapshot. This composite action supports `none`, `js-action`, `goreleaser`, `cargo`, and `cargo-raw`. It does not publish a release or create attestations. The trusted release build job in [server.yml](../../../.github/workflows/server.yml) runs it with no token permissions, secrets, environment, or cache.
 
 See [release publishing](../../../docs/release.md) for build behavior, Cargo target restrictions, and the build isolation boundary.
 
@@ -8,11 +8,12 @@ See [release publishing](../../../docs/release.md) for build behavior, Cargo tar
 
 | Input | Required | Value |
 |---|---:|---|
-| `build-type` | Yes | `none`, `js-action`, `goreleaser`, or `cargo`. |
+| `build-type` | Yes | `none`, `js-action`, `goreleaser`, `cargo`, or `cargo-raw`. |
 | `client-path` | Yes | Path to the isolated source snapshot. |
 | `repository` | No | Client `owner/repo`; required for `cargo` asset naming. |
-| `version` | No | Planned semantic version; required for `cargo` asset naming. |
-| `target` | No | Allowed Cargo target triple; required for `cargo`. |
+| `version` | No | Planned semantic version; required for `cargo` and `cargo-raw`. |
+| `target` | No | Allowed Cargo target triple; required for `cargo` and `cargo-raw`. |
+| `binary` | No | Safe Cargo binary name; required for `cargo-raw`. |
 
 ## Outputs
 
@@ -30,6 +31,7 @@ This is the action step from the build job, after source preparation. Before it 
     repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
     version: ${{ needs.release-plan.outputs.version }}
     target: ${{ matrix.target }}
+    binary: ${{ fromJSON(needs.release-plan.outputs.plan).release.binary || '' }}
 ```
 
 The example belongs inside the isolated job from [server.yml](../../../.github/workflows/server.yml). Do not grant that job repository permissions or secrets. The action rejects unsupported build types and only packages outputs according to the selected build type.

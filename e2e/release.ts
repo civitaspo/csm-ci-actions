@@ -1,5 +1,6 @@
 import { assert, CLIENT, closeReleasePrIfOwned, configureRelease, dispatch, expectOp, hasStatus, jobs, jobLog, openReleasePr, postComment, recentWorkflowRuns, SERVER, SERVER_BOT_ID, serverRuns, type Ctx, type Conclusion, type ReleaseBuildType, type Run, type Scenario, until, waitRun, withServerConfig, withoutReleaseOperation } from "./harness.ts";
 import { splitRepository } from "../src/lib/github.ts";
+import { CARGO_RAW_TARGETS } from "../src/lib/config.ts";
 
 const PREDICATE = "https://github.com/civitaspo/csm-ci-actions/attestation/release/v1";
 const SIGNER = "civitaspo/csm-ci-actions/.github/workflows/server.yml";
@@ -81,6 +82,10 @@ async function expectLog(ctx: Ctx, result: ReleaseRun, name: string, pattern: Re
 }
 
 function expectedNames(type: ReleaseBuildType, ver: string): string[] {
+  if (type === "cargo-raw") return [
+    ...CARGO_RAW_TARGETS.flatMap((target) => [`testing-csm-ci-client-${target}`, `testing-csm-ci-client-${target}.sha256`]),
+    "SHA256SUMS",
+  ].sort();
   if (type === "cargo") return [
     ...["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"].map((target) => `testing-csm-ci-client-${ver}-${target}.tar.gz`),
     "SHA256SUMS",
@@ -143,7 +148,7 @@ export const release: Scenario[] = [
       catch (e) { if (!hasStatus(e, 404)) throw e; }
     }),
   },
-  ...(["none", "js-action", "goreleaser", "cargo"] as const).map((type) => ({
+  ...(["none", "js-action", "goreleaser", "cargo", "cargo-raw"] as const).map((type) => ({
     name: `publishes an immutable ${type} release with verified asset attestations`, serial: true,
     run: async (ctx: Ctx) => { await success(ctx, type); },
   })),

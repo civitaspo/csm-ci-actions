@@ -30891,6 +30891,12 @@ var CARGO_TARGETS = [
   "x86_64-pc-windows-msvc",
   "x86_64-unknown-linux-gnu"
 ];
+var CARGO_RAW_TARGETS = [
+  "aarch64-apple-darwin",
+  "x86_64-apple-darwin",
+  "aarch64-unknown-linux-musl",
+  "x86_64-unknown-linux-musl"
+];
 var ReleaseSchema = discriminatedUnion("build_type", [
   strictObject({ build_type: literal("none") }),
   strictObject({ build_type: literal("js-action") }),
@@ -30898,6 +30904,11 @@ var ReleaseSchema = discriminatedUnion("build_type", [
   strictObject({
     build_type: literal("cargo"),
     targets: array(_enum(CARGO_TARGETS)).min(1).refine((targets) => new Set(targets).size === targets.length, "duplicate cargo target")
+  }),
+  strictObject({
+    build_type: literal("cargo-raw"),
+    binary: string2().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}(?![\s\S])/u, "binary must be a safe Cargo binary name of at most 64 characters"),
+    targets: array(_enum(CARGO_RAW_TARGETS)).min(1).refine((targets) => new Set(targets).size === targets.length, "duplicate cargo-raw target")
   })
 ]);
 var OPS = ["approve", "merge", "policy-check", "securefix", "release"];
@@ -35198,9 +35209,11 @@ function status(error) {
 var CARGO_RUNNERS = {
   "aarch64-apple-darwin": "macos-15",
   "aarch64-unknown-linux-gnu": "ubuntu-24.04-arm",
+  "aarch64-unknown-linux-musl": "ubuntu-24.04-arm",
   "x86_64-apple-darwin": "macos-15-intel",
   "x86_64-pc-windows-msvc": "windows-2022",
-  "x86_64-unknown-linux-gnu": "ubuntu-24.04"
+  "x86_64-unknown-linux-gnu": "ubuntu-24.04",
+  "x86_64-unknown-linux-musl": "ubuntu-24.04"
 };
 
 // src/server-release-plan/main.ts
@@ -35211,7 +35224,7 @@ async function main() {
   const release = ReleaseSchema.parse(JSON.parse(getInput("release-config", { required: true })));
   const plan = await planRelease(github(getInput("github-token", { required: true })), { repository, pullNumber, serverBotId, release });
   const { owner, repo } = splitRepository(repository);
-  const matrix = release.build_type === "cargo" ? release.targets.map((target) => ({ target, runner: CARGO_RUNNERS[target] })) : [{ target: "", runner: "ubuntu-24.04" }];
+  const matrix = release.build_type === "cargo" || release.build_type === "cargo-raw" ? release.targets.map((target) => ({ target, runner: CARGO_RUNNERS[target] })) : [{ target: "", runner: "ubuntu-24.04" }];
   setOutput("plan", JSON.stringify(plan));
   setOutput("repository-owner", owner);
   setOutput("repository-name", repo);

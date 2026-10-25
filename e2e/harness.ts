@@ -4,7 +4,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { parseArgs } from "node:util";
 import { type GitHub, splitRepository } from "../src/lib/github.ts";
-import { CARGO_TARGETS, parseConfig } from "../src/lib/config.ts";
+import { CARGO_RAW_TARGETS, CARGO_TARGETS, type Release, parseConfig } from "../src/lib/config.ts";
 import { findRecentRunByTitle, matchesAcceptedRequest, matchesCleanupLabel, recentItems } from "./correlation.ts";
 
 export const OWNER = "civitaspo";
@@ -205,7 +205,7 @@ export const SERVER_BOT_ID = 347400474;
 
 export type Pr = { number: number; head: string; branch: string };
 export type RequestMatch = { kind: string; repository: string; args: Record<string, number>; label?: string };
-export type ReleaseBuildType = "none" | "js-action" | "goreleaser" | "cargo";
+export type ReleaseBuildType = Release["build_type"];
 
 // signed: createCommitOnBranch, which GitHub signs as web-flow for the token's user.
 // Otherwise the REST contents API, whose commits GitHub leaves unsigned.
@@ -273,7 +273,9 @@ export function configureRelease(type: ReleaseBuildType): (text: string) => stri
     const parsed = parseConfig(text);
     const repository = parsed.repositories.find((entry) => entry.name === CLIENT.toLowerCase());
     assert(repository?.release, `release config for ${CLIENT} is missing`);
-    const release = type === "cargo" ? `release: { build_type: cargo, targets: [${CARGO_TARGETS.join(", ")}] }` : `release: { build_type: ${type} }`;
+    const release = type === "cargo" ? `release: { build_type: cargo, targets: [${CARGO_TARGETS.join(", ")}] }`
+      : type === "cargo-raw" ? `release: { build_type: cargo-raw, binary: testing-csm-ci-client, targets: [${CARGO_RAW_TARGETS.join(", ")}] }`
+      : `release: { build_type: ${type} }`;
     const pattern = /release: \{ build_type: [^}]+\}/;
     assert(pattern.test(text), "could not locate release build configuration");
     return text.replace(pattern, release);

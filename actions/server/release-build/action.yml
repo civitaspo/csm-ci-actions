@@ -2,7 +2,7 @@ name: csm-ci release build
 description: Build release assets using the configured build type without publishing or signing.
 inputs:
   build-type:
-    description: One of none, js-action, goreleaser or cargo.
+    description: One of none, js-action, goreleaser, cargo or cargo-raw.
     required: true
   client-path:
     description: Path to the isolated source snapshot.
@@ -16,6 +16,9 @@ inputs:
   target:
     description: Allowed Cargo target triple, required for cargo.
     required: false
+  binary:
+    description: Safe Cargo binary name, required for cargo-raw.
+    required: false
 runs:
   using: composite
   steps:
@@ -24,7 +27,7 @@ runs:
         BUILD_TYPE: ${{ inputs.build-type }}
       run: |
         case "$BUILD_TYPE" in
-          none|js-action|goreleaser|cargo) ;;
+          none|js-action|goreleaser|cargo|cargo-raw) ;;
           *) echo "unsupported release build type: $BUILD_TYPE" >&2; exit 1 ;;
         esac
     - if: inputs.build-type == 'none'
@@ -126,3 +129,23 @@ runs:
         fi
         "$python" "$GITHUB_ACTION_PATH/package.py" ../assets/staging "../assets/$name"
         rm -rf ../assets/staging
+    - if: inputs.build-type == 'cargo-raw'
+      shell: bash
+      env:
+        CLIENT_PATH: ${{ inputs.client-path }}
+        TARGET: ${{ inputs.target }}
+        BINARY: ${{ inputs.binary }}
+        VERSION: ${{ inputs.version }}
+      run: |
+        python3 "$GITHUB_ACTION_PATH/raw.py" --validate "$TARGET" "$BINARY" "$VERSION"
+        rustup toolchain install 1.99.1 --profile minimal --no-self-update
+        rustup target add --toolchain 1.99.1 "$TARGET"
+        if [[ "$TARGET" == *linux-musl ]]; then
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          export "CC_${TARGET//-/_}=musl-gcc"
+          linker="CARGO_TARGET_${TARGET//-/_}_LINKER"
+          export "${linker^^}=musl-gcc"
+        fi
+        cargo +1.99.1 build --manifest-path "$CLIENT_PATH/Cargo.toml" --locked --release --bin "$BINARY" --target "$TARGET"
+        python3 "$GITHUB_ACTION_PATH/raw.py" "$CLIENT_PATH/target/$TARGET/release/$BINARY" "$TARGET" "$BINARY" "$VERSION" assets

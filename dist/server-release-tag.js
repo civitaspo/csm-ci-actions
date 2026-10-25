@@ -34814,6 +34814,12 @@ var CARGO_TARGETS = [
   "x86_64-pc-windows-msvc",
   "x86_64-unknown-linux-gnu"
 ];
+var CARGO_RAW_TARGETS = [
+  "aarch64-apple-darwin",
+  "x86_64-apple-darwin",
+  "aarch64-unknown-linux-musl",
+  "x86_64-unknown-linux-musl"
+];
 var ReleaseSchema = discriminatedUnion("build_type", [
   strictObject({ build_type: literal("none") }),
   strictObject({ build_type: literal("js-action") }),
@@ -34821,6 +34827,11 @@ var ReleaseSchema = discriminatedUnion("build_type", [
   strictObject({
     build_type: literal("cargo"),
     targets: array(_enum(CARGO_TARGETS)).min(1).refine((targets) => new Set(targets).size === targets.length, "duplicate cargo target")
+  }),
+  strictObject({
+    build_type: literal("cargo-raw"),
+    binary: string2().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}(?![\s\S])/u, "binary must be a safe Cargo binary name of at most 64 characters"),
+    targets: array(_enum(CARGO_RAW_TARGETS)).min(1).refine((targets) => new Set(targets).size === targets.length, "duplicate cargo-raw target")
   })
 ]);
 var OPS = ["approve", "merge", "policy-check", "securefix", "release"];

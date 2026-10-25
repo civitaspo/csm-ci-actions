@@ -1,3 +1,3 @@
 fn main() {
-    println!("testing csm-ci release");
+    println!("testing-csm-ci-client {}", env!("RELEASE_VERSION"));
 }

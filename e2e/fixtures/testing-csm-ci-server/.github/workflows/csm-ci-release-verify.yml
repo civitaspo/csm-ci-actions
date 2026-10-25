@@ -50,6 +50,10 @@ jobs:
           if grep -q '[^[:space:]]' SHA256SUMS; then
             sha256sum --check SHA256SUMS
           fi
+          shopt -s nullglob
+          for sidecar in *.sha256; do
+            sha256sum --check "$sidecar"
+          done
       - name: Verify each signature and release predicate
         env:
           GH_TOKEN: ${{ github.token }}

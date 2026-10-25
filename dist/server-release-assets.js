@@ -30896,6 +30896,12 @@ var CARGO_TARGETS = [
   "x86_64-pc-windows-msvc",
   "x86_64-unknown-linux-gnu"
 ];
+var CARGO_RAW_TARGETS = [
+  "aarch64-apple-darwin",
+  "x86_64-apple-darwin",
+  "aarch64-unknown-linux-musl",
+  "x86_64-unknown-linux-musl"
+];
 var ReleaseSchema = discriminatedUnion("build_type", [
   strictObject({ build_type: literal("none") }),
   strictObject({ build_type: literal("js-action") }),
@@ -30903,6 +30909,11 @@ var ReleaseSchema = discriminatedUnion("build_type", [
   strictObject({
     build_type: literal("cargo"),
     targets: array(_enum(CARGO_TARGETS)).min(1).refine((targets) => new Set(targets).size === targets.length, "duplicate cargo target")
+  }),
+  strictObject({
+    build_type: literal("cargo-raw"),
+    binary: string2().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}(?![\s\S])/u, "binary must be a safe Cargo binary name of at most 64 characters"),
+    targets: array(_enum(CARGO_RAW_TARGETS)).min(1).refine((targets) => new Set(targets).size === targets.length, "duplicate cargo-raw target")
   })
 ]);
 var OPS = ["approve", "merge", "policy-check", "securefix", "release"];
@@ -31040,7 +31051,7 @@ var LabelEventSchema = object({
 });
 
 // src/release/assets.ts
-async function prepareAssets(directory) {
+async function prepareAssets(directory, release) {
   await mkdir2(directory, { recursive: true });
   const names = (await readdir2(directory)).sort();
   const sumsPath = join(directory, "SHA256SUMS");
@@ -31061,6 +31072,35 @@ async function prepareAssets(directory) {
     const content = await readFile(path);
     assets.push({ name, path, sha256: createHash("sha256").update(content).digest("hex") });
   }
+  if (release?.build_type === "cargo-raw") {
+    const binaries = release.targets.map((target) => `${release.binary}-${target}`);
+    const expected = new Set(binaries.flatMap((name) => [name, `${name}.sha256`]));
+    for (const asset of assets) {
+      if (!expected.has(asset.name))
+        throw new Rejection(`unexpected cargo-raw asset ${JSON.stringify(asset.name)}`);
+    }
+    const sidecars = [];
+    for (const name of binaries) {
+      const binary = assets.find((asset) => asset.name === name);
+      if (!binary)
+        throw new Rejection(`missing cargo-raw binary ${JSON.stringify(name)}`);
+      const sidecar = `${name}.sha256`;
+      const content = `${binary.sha256}  ${name}
+`;
+      if (assets.some((asset) => asset.name === sidecar)) {
+        if (await readFile(join(directory, sidecar), "utf8") !== content) {
+          throw new Rejection(`cargo-raw checksum ${JSON.stringify(sidecar)} does not match its binary`);
+        }
+      } else
+        sidecars.push({ name: sidecar, content });
+    }
+    for (const { name, content } of sidecars) {
+      const path = join(directory, name);
+      await writeFile2(path, content, { flag: "wx" });
+      assets.push({ name, path, sha256: createHash("sha256").update(content).digest("hex") });
+    }
+    assets.sort((a, b) => a.name.localeCompare(b.name, "en"));
+  }
   const sums = assets.map(({ name, sha256 }) => `${sha256}  ${name}`).join(`
 `);
   const content = `${sums}
@@ -31077,7 +31117,9 @@ async function prepareAssets(directory) {
 // src/server-release-assets/main.ts
 async function main() {
   const directory = getInput("directory", { required: true });
-  const assets = await prepareAssets(directory);
+  const releaseConfig = getInput("release-config");
+  const release = releaseConfig ? ReleaseSchema.parse(JSON.parse(releaseConfig)) : undefined;
+  const assets = await prepareAssets(directory, release);
   setOutput("subject-path", `${directory}/*`);
   setOutput("assets", JSON.stringify(assets.map(({ name, sha256 }) => ({ name, sha256 }))));
   info(`prepared ${assets.length} release asset${assets.length === 1 ? "" : "s"} including SHA256SUMS`);

@@ -8,7 +8,7 @@ import { parseSemVer } from "../release/semver.ts";
 const execFile = promisify(callbackExecFile);
 const VERSION_LINE = /^\s*"?version"?\s*[=:]/u;
 
-export async function prepareRelease(input: { workspace: string; version?: string; gitCliff?: string }): Promise<string> {
+export async function prepareRelease(input: { workspace: string; version?: string; gitCliff?: string; updateRootVersion?: boolean }): Promise<string> {
   const workspaceInfo = await lstat(input.workspace).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return undefined;
     throw error;
@@ -25,7 +25,7 @@ export async function prepareRelease(input: { workspace: string; version?: strin
 
   for (const path of [".release-version", "CHANGELOG.md"]) await assertWritableFile(input.workspace, path);
 
-  const paths = ["package.json", "Cargo.toml", "Cargo.lock", "pyproject.toml", "dbt_project.yml"];
+  const paths = input.updateRootVersion === false ? [] : ["package.json", "Cargo.toml", "Cargo.lock", "pyproject.toml", "dbt_project.yml"];
   const originals = new Map<string, string>();
   for (const path of paths) {
     const content = await readOptional(input.workspace, path);
