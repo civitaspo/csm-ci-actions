@@ -24933,6 +24933,9 @@ function setFailed(message) {
 function error(message, properties = {}) {
   issueCommand("error", toCommandProperties(properties), message instanceof Error ? message.toString() : message);
 }
+function notice(message, properties = {}) {
+  issueCommand("notice", toCommandProperties(properties), message instanceof Error ? message.toString() : message);
+}
 function info(message) {
   process.stdout.write(message + os4.EOL);
 }
@@ -35126,7 +35129,7 @@ function splitRepository(fullName) {
 async function createRequestLabel(gh, server, kind, repository, numbers) {
   const label = buildLabel(kind, repository, numbers);
   await gh.rest.issues.createLabel({ ...splitRepository(server), ...label, color: "1f6feb" });
-  return label.name;
+  return label;
 }
 
 // src/lib/securefix.ts
@@ -35165,13 +35168,18 @@ function securefixClientContext(input) {
     }
   })();
   if (input.eventName !== "pull_request")
-    return { headSha: input.sha, server };
+    return { kind: "ready", headSha: input.sha, server };
   const pull = object({ pull_request: object({ head: object({ sha: string2().regex(/^[0-9a-f]{40}$/u), repo: object({ full_name: string2() }).nullable() }) }) }).safeParse(input.event);
   if (!pull.success)
     throw new Rejection("securefix client could not read the pull request head from the event");
   if (pull.data.pull_request.head.repo?.full_name.toLowerCase() !== input.repository.toLowerCase())
-    throw new Rejection("securefix client does not accept pull requests from forks");
-  return { headSha: pull.data.pull_request.head.sha, server };
+    return { kind: "skip", reason: "securefix client skips pull requests from forks" };
+  return { kind: "ready", headSha: pull.data.pull_request.head.sha, server };
+}
+function assertWorkspaceAtHead(workspace, headSha) {
+  const actual = execFileSync("git", ["rev-parse", "HEAD"], { cwd: workspace }).toString("utf8").trim();
+  if (actual !== headSha)
+    throw new Rejection(`securefix workspace is at ${actual}, not the run head ${headSha}; check out the head commit`);
 }
 async function buildSecurefixArtifact(input) {
   const status = execFileSync("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"], { cwd: input.workspace });
@@ -35316,9 +35324,16 @@ async function packageChanges() {
     sha: env("GITHUB_SHA"),
     serverRepository: getInput("server_repository", { required: true })
   });
+  if (context.kind === "skip") {
+    notice(context.reason);
+    setOutput("has-changes", "false");
+    return;
+  }
+  const workspace = getInput("workspace") || env("GITHUB_WORKSPACE");
+  assertWorkspaceAtHead(workspace, context.headSha);
   const id = runId();
   const result = await buildSecurefixArtifact({
-    workspace: getInput("workspace") || env("GITHUB_WORKSPACE"),
+    workspace,
     repository: env("GITHUB_REPOSITORY"),
     runId: id,
     headSha: context.headSha,
@@ -35334,8 +35349,8 @@ async function packageChanges() {
 async function sendRequest() {
   const server = getInput("server_repository", { required: true });
   const label = await createRequestLabel(github(getInput("token", { required: true })), server, "securefix", env("GITHUB_REPOSITORY"), [runId()]);
-  setOutput("label", label);
-  info(`created label ${label} in ${server}`);
+  setOutput("label", label.name);
+  info(`created label ${label.name} (${label.description}) in ${server}`);
 }
 var step = process.env.CSM_CI_SECUREFIX_STEP;
 (step === "package" ? packageChanges() : step === "request" ? sendRequest() : Promise.reject(new Error(`unknown securefix client step ${step}`))).catch((error) => setFailed(error instanceof Error ? error.message : String(error)));

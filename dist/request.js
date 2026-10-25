@@ -35123,7 +35123,7 @@ function splitRepository(fullName) {
 async function createRequestLabel(gh, server, kind, repository, numbers) {
   const label = buildLabel(kind, repository, numbers);
   await gh.rest.issues.createLabel({ ...splitRepository(server), ...label, color: "1f6feb" });
-  return label.name;
+  return label;
 }
 
 // src/request/main.ts
@@ -35134,7 +35134,7 @@ async function main() {
   const server = getInput("server-repository", { required: true });
   const gh = github(getInput("github-token", { required: true }));
   const label = await createRequestLabel(gh, server, getInput("kind", { required: true }), repository, getInput("args", { required: true }).split("/"));
-  setOutput("label", label);
-  info(`created label ${label} in ${server}`);
+  setOutput("label", label.name);
+  info(`created label ${label.name} (${label.description}) in ${server}`);
 }
 main().catch((e) => setFailed(e instanceof Error ? e.message : String(e)));
