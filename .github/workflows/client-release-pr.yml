@@ -23,8 +23,6 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-    outputs:
-      has-changes: ${{ steps.package.outputs.has-changes }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -47,15 +45,10 @@ jobs:
         with:
           workspace: ${{ github.workspace }}/client
           version: ${{ inputs.version }}
-      - id: package
-        uses: ./.csm-ci-actions/actions/securefix-client
+      - uses: ./.csm-ci-actions/actions/client/securefix
         with:
+          client-id: ${{ vars.CSM_CI_CLIENT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}
+          server-repository: ${{ vars.CSM_CI_SERVER_REPOSITORY }}
           workspace: ${{ github.workspace }}/client
           message: "chore(release): v${{ steps.prepare.outputs.version }}"
-  request:
-    needs: generate
-    if: needs.generate.outputs.has-changes == 'true'
-    permissions: {}
-    uses: ./.github/workflows/client-securefix.yml
-    secrets:
-      CSM_CI_CLIENT_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}

@@ -33,7 +33,17 @@ jobs:
           path: securefix/
           if-no-files-found: error
           retention-days: 1
-  request:
-    needs: package
-    uses: civitaspo/csm-ci-actions/.github/workflows/client-securefix.yml@e2e
-    secrets: inherit
+      # The real client action refuses to build this artifact, so the request is sent directly.
+      - id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_CLIENT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}
+          repositories: ${{ vars.CSM_CI_SERVER_REPOSITORY }}
+          permission-issues: write
+      - uses: civitaspo/csm-ci-actions/actions/request@e2e
+        with:
+          github-token: ${{ steps.token.outputs.token }}
+          server-repository: ${{ vars.CSM_CI_SERVER_REPOSITORY }}
+          kind: securefix
+          args: ${{ github.run_id }}

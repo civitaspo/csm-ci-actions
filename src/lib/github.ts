@@ -2,7 +2,7 @@ import { Octokit as Core } from "@octokit/core";
 import { paginateRest } from "@octokit/plugin-paginate-rest";
 import { restEndpointMethods } from "@octokit/plugin-rest-endpoint-methods";
 import { type Config, parseConfig } from "./config.ts";
-import { Rejection } from "./request.ts";
+import { Rejection, buildLabel } from "./request.ts";
 
 const Octokit = Core.plugin(restEndpointMethods, paginateRest);
 export type GitHub = InstanceType<typeof Octokit>;
@@ -114,3 +114,15 @@ export async function verifyLiveLabel(gh: GitHub, serverRepository: string, name
   if ((live ?? "") !== description) throw new Rejection(`label ${name} description changed after the event`);
 }
 import { setTimeout as delay } from "node:timers/promises";
+
+// Creates the request label in the server repository with a Client App token.
+// e2e correlates client runs with server runs by this exact line.
+export function requestLogLine(label: { name: string; description: string }, server: string): string {
+  return `created label ${label.name} (${label.description}) in ${server}`;
+}
+
+export async function createRequestLabel(gh: GitHub, server: string, kind: string, repository: string, numbers: readonly (string | number)[]): Promise<{ name: string; description: string }> {
+  const label = buildLabel(kind, repository, numbers);
+  await gh.rest.issues.createLabel({ ...splitRepository(server), ...label, color: "1f6feb" });
+  return label;
+}

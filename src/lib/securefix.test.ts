@@ -6,7 +6,7 @@ import { renameSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, spyOn, test } from "bun:test";
-import { bindSecurefixPullRequest, buildSecurefixArtifact, findSecurefixRoute, parseSecurefixManifest, readSecurefixArtifact, validateEntries, validateRouteChanges, validateSecurefixPath, validateSecurefixRun, validateSecurefixRouteCommitFile, validateSecurefixRouteHead, type SecurefixManifest, type SecurefixRun } from "./securefix.ts";
+import { assertWorkspaceAtHead, bindSecurefixPullRequest, packageSecurefixChanges, buildSecurefixArtifact, securefixClientContext, findSecurefixRoute, parseSecurefixManifest, readSecurefixArtifact, validateEntries, validateRouteChanges, validateSecurefixPath, validateSecurefixRun, validateSecurefixRouteCommitFile, validateSecurefixRouteHead, type SecurefixManifest, type SecurefixRun } from "./securefix.ts";
 import type { SecurefixRoute } from "./config.ts";
 
 const sha = "a".repeat(40);
@@ -443,5 +443,57 @@ describe("securefix run and path bindings", () => {
     ["missing post-change content", { filename: "CHANGELOG.md", status: "modified" }, Buffer.from("before\n"), null, 'securefix route commit has no content for "CHANGELOG.md"'],
   ] as const)("rejects route commit file case: %s", (_name, file, before, after, message) => {
     expect(() => validateSecurefixRouteCommitFile(route, file, before, after)).toThrow(message);
+  });
+});
+
+describe("securefix client context", () => {
+  const head = "b".repeat(40);
+  const base = { repository: "owner/client", sha, serverRepository: "owner/server" };
+  const pull = (repo: { full_name: string } | null, headSha: string = head) => ({ pull_request: { head: { sha: headSha, repo } } });
+
+  test.each([
+    ["push", "push", {}, sha],
+    ["workflow_dispatch", "workflow_dispatch", {}, sha],
+    ["a same-repository pull_request", "pull_request", pull({ full_name: "owner/client" }), head],
+    ["a same-repository pull_request in another case", "pull_request", pull({ full_name: "Owner/Client" }), head],
+  ])("accepts %s and binds the right head", (_name, eventName, event, expected) => {
+    expect(securefixClientContext({ ...base, eventName, event })).toEqual({ kind: "ready", headSha: expected, server: { owner: "owner", repo: "server" } });
+  });
+
+  test.each([
+    ["a fork pull_request", pull({ full_name: "someone/client" })],
+    ["a pull_request whose head repository was deleted", pull(null)],
+  ])("skips %s instead of failing its checks", (_name, event) => {
+    expect(securefixClientContext({ ...base, eventName: "pull_request", event })).toEqual({ kind: "skip", reason: "securefix client skips pull requests from forks" });
+  });
+
+  test.each([
+    ["pull_request_target", { ...base, eventName: "pull_request_target", event: pull({ full_name: "owner/client" }) }, "securefix client runs only on pull_request, push or workflow_dispatch, not pull_request_target"],
+    ["issue_comment", { ...base, eventName: "issue_comment", event: {} }, "securefix client runs only on pull_request, push or workflow_dispatch, not issue_comment"],
+    ["a server repository without an owner", { ...base, eventName: "push", event: {}, serverRepository: "server" }, 'server-repository "server" is not owner/repo'],
+    ["a server repository with extra segments", { ...base, eventName: "push", event: {}, serverRepository: "owner/server/extra" }, 'server-repository "owner/server/extra" is not owner/repo'],
+    ["a pull_request event without a head", { ...base, eventName: "pull_request", event: {} }, "securefix client could not read the pull request head from the event"],
+    ["a pull_request head that is not a full SHA", { ...base, eventName: "pull_request", event: pull({ full_name: "owner/client" }, "abc") }, "securefix client could not read the pull request head from the event"],
+  ])("rejects %s", (_name, input, message) => {
+    expect(() => securefixClientContext(input)).toThrow(message);
+  });
+});
+
+describe("securefix workspace head", () => {
+  test("accepts a workspace at the run head and rejects any other commit", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "securefix-head-test-"));
+    try {
+      execFileSync("git", ["init", "-q"], { cwd: workspace });
+      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "one"], { cwd: workspace });
+      const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: workspace }).toString("utf8").trim();
+      expect(() => assertWorkspaceAtHead(workspace, head)).not.toThrow();
+      expect(() => assertWorkspaceAtHead(workspace, sha)).toThrow(`securefix workspace is at ${head}, not the run head ${sha}; check out the head commit`);
+      await writeFile(join(workspace, "changed.txt"), "changed\n");
+      await expect(packageSecurefixChanges({ workspace, repository: "owner/client", runId: 42, headSha: sha, message: "update" }))
+        .rejects.toThrow(`securefix workspace is at ${head}, not the run head ${sha}; check out the head commit`);
+      expect((await packageSecurefixChanges({ workspace, repository: "owner/client", runId: 42, headSha: head, message: "update" })).hasChanges).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
   });
 });

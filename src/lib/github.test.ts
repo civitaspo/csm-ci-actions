@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { type GitHub, github, loadConfig, loadCurrentServerConfig, splitRepository, verifyLiveLabel } from "./github.ts";
+import { type GitHub, createRequestLabel, github, requestLogLine, loadConfig, loadCurrentServerConfig, splitRepository, verifyLiveLabel } from "./github.ts";
 import { hasServerMarker, marker } from "./notify.ts";
 import { CONFIG_YAML, fakeFetch, SERVER_BOT_ID } from "./testing.ts";
 import { fetchCommitFacts } from "./trust.ts";
@@ -270,5 +270,29 @@ describe("hasServerMarker", () => {
   ];
   test.each(cases)("%s", (_, comments, expected) => {
     expect(hasServerMarker(comments, m, SERVER_BOT_ID)).toBe(expected);
+  });
+});
+
+describe("requestLogLine", () => {
+  test("keeps the exact line the e2e harness parses", () => {
+    const line = requestLogLine({ name: "csm-ci-securefix-0123456789abcdef", description: "owner/client/42" }, "owner/server");
+    expect(line).toBe("created label csm-ci-securefix-0123456789abcdef (owner/client/42) in owner/server");
+    expect(/created label (csm-ci-[^ ]+) \(/.exec(line)?.[1]).toBe("csm-ci-securefix-0123456789abcdef");
+  });
+});
+
+describe("createRequestLabel", () => {
+  test("creates a securefix request label in the server repository", async () => {
+    const fetch = fakeFetch([{ method: "POST", path: "/repos/owner/server/labels", status: 201, body: {} }]);
+    const label = await createRequestLabel(github("token", fetch), "owner/server", "securefix", "Owner/Client", [42]);
+    expect(label.name).toMatch(/^csm-ci-securefix-[0-9a-f]{16}$/u);
+    expect(label.description).toBe("owner/client/42");
+    const body = JSON.parse(fetch.requests[0]?.body ?? "{}") as { name: string; description: string; color: string };
+    expect(body).toEqual({ ...label, color: "1f6feb" });
+  });
+
+  test("propagates a failed label creation", async () => {
+    const fetch = fakeFetch([{ method: "POST", path: "/repos/owner/server/labels", status: 403, body: { message: "Resource not accessible by integration" } }]);
+    await expect(createRequestLabel(github("token", fetch), "owner/server", "securefix", "owner/client", [42])).rejects.toThrow("Resource not accessible by integration");
   });
 });

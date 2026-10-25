@@ -105,7 +105,7 @@ export const releasePr: Scenario[] = [
       assert(/not valid SemVer/.test(await jobLog(ctx, CLIENT, generate.id)), "invalid version failed for an unexpected reason");
       const artifacts = await ctx.gh.paginate(ctx.gh.rest.actions.listWorkflowRunArtifacts, { ...repo, run_id: run.id, per_page: 100 });
       assert(artifacts.length === 0, "invalid version uploaded an artifact");
-      assert([...byName.values()].every((job) => job === generate || job.conclusion === "skipped"), "invalid version ran a request job");
+      assert([...byName.values()].every((job) => job === generate || job.conclusion === "skipped"), "invalid version ran another release-pr job");
     },
   },
   {
@@ -126,7 +126,7 @@ export const releasePr: Scenario[] = [
         assert(run.conclusion === "skipped", "non-default dispatch did not skip");
         const byName = await until("completed non-default release-pr jobs", async () => {
           const found = await jobs(ctx, CLIENT, run.id);
-          return found.has("generate") && found.has("request") && [...found.values()].every((job) => job.conclusion !== null) ? found : undefined;
+          return found.has("generate") && [...found.values()].every((job) => job.conclusion !== null) ? found : undefined;
         });
         assert([...byName.values()].every((job) => job.conclusion === "skipped"), "non-default dispatch ran a release-pr job");
         const artifacts = await ctx.gh.paginate(ctx.gh.rest.actions.listWorkflowRunArtifacts, { ...repo, run_id: run.id, per_page: 100 });
