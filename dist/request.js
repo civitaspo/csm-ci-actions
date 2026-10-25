@@ -35120,6 +35120,11 @@ function splitRepository(fullName) {
     throw new Error(`${fullName} is not owner/repo`);
   return { owner, repo };
 }
+async function createRequestLabel(gh, server, kind, repository, numbers) {
+  const label = buildLabel(kind, repository, numbers);
+  await gh.rest.issues.createLabel({ ...splitRepository(server), ...label, color: "1f6feb" });
+  return label.name;
+}
 
 // src/request/main.ts
 async function main() {
@@ -35127,10 +35132,9 @@ async function main() {
   if (!repository)
     throw new Error("GITHUB_REPOSITORY is not set");
   const server = getInput("server-repository", { required: true });
-  const label = buildLabel(getInput("kind", { required: true }), repository, getInput("args", { required: true }).split("/"));
   const gh = github(getInput("github-token", { required: true }));
-  await gh.rest.issues.createLabel({ ...splitRepository(server), ...label, color: "1f6feb" });
-  setOutput("label", label.name);
-  info(`created label ${label.name} (${label.description}) in ${server}`);
+  const label = await createRequestLabel(gh, server, getInput("kind", { required: true }), repository, getInput("args", { required: true }).split("/"));
+  setOutput("label", label);
+  info(`created label ${label} in ${server}`);
 }
 main().catch((e) => setFailed(e instanceof Error ? e.message : String(e)));

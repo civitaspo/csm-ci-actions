@@ -1,6 +1,7 @@
 import * as core from "@actions/core";
 import { readFile } from "node:fs/promises";
-import { buildSecurefixArtifact } from "../lib/securefix.ts";
+import { createRequestLabel, github } from "../lib/github.ts";
+import { buildSecurefixArtifact, securefixClientContext } from "../lib/securefix.ts";
 
 function env(name: string): string {
   const value = process.env[name];
@@ -8,22 +9,44 @@ function env(name: string): string {
   return value;
 }
 
-async function main(): Promise<void> {
-  const runId = Number(env("GITHUB_RUN_ID"));
-  if (!Number.isSafeInteger(runId) || runId <= 0) throw new Error("GITHUB_RUN_ID must be a positive safe integer");
-  const event = JSON.parse(await readFile(env("GITHUB_EVENT_PATH"), "utf8")) as { pull_request?: { head?: { sha?: unknown } } };
-  const eventHead = event.pull_request?.head?.sha;
-  const headSha = typeof eventHead === "string" ? eventHead : env("GITHUB_SHA");
+function runId(): number {
+  const value = Number(env("GITHUB_RUN_ID"));
+  if (!Number.isSafeInteger(value) || value <= 0) throw new Error("GITHUB_RUN_ID must be a positive safe integer");
+  return value;
+}
+
+// The composite action calls this twice: once to package before the artifact upload, and once to
+// send the request after the upload and the Client App token step.
+async function packageChanges(): Promise<void> {
+  const context = securefixClientContext({
+    eventName: env("GITHUB_EVENT_NAME"),
+    event: JSON.parse(await readFile(env("GITHUB_EVENT_PATH"), "utf8")),
+    repository: env("GITHUB_REPOSITORY"),
+    sha: env("GITHUB_SHA"),
+    serverRepository: core.getInput("server_repository", { required: true }),
+  });
+  const id = runId();
   const result = await buildSecurefixArtifact({
     workspace: core.getInput("workspace") || env("GITHUB_WORKSPACE"),
     repository: env("GITHUB_REPOSITORY"),
-    runId,
-    headSha,
-    message: core.getInput("message") || `Apply securefix changes from workflow run ${runId}`,
+    runId: id,
+    headSha: context.headSha,
+    message: core.getInput("message") || `Apply securefix changes from workflow run ${id}`,
   });
   core.setOutput("has-changes", String(result.hasChanges));
+  core.setOutput("server-owner", context.server.owner);
+  core.setOutput("server-name", context.server.repo);
   if (result.hasChanges) core.setOutput("artifact-path", result.path);
-  core.info(result.hasChanges ? "Prepared the securefix artifact." : "No securefix changes to upload.");
+  core.info(result.hasChanges ? "Prepared the securefix artifact." : "No securefix changes; nothing will be requested.");
 }
 
-main().catch((error: unknown) => core.setFailed(error instanceof Error ? error.message : String(error)));
+async function sendRequest(): Promise<void> {
+  const server = core.getInput("server_repository", { required: true });
+  const label = await createRequestLabel(github(core.getInput("token", { required: true })), server, "securefix", env("GITHUB_REPOSITORY"), [runId()]);
+  core.setOutput("label", label);
+  core.info(`created label ${label} in ${server}`);
+}
+
+const step = process.env.CSM_CI_SECUREFIX_STEP;
+(step === "package" ? packageChanges() : step === "request" ? sendRequest() : Promise.reject(new Error(`unknown securefix client step ${step}`)))
+  .catch((error: unknown) => core.setFailed(error instanceof Error ? error.message : String(error)));

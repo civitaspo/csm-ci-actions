@@ -140,7 +140,7 @@ jobs:
 
 Each operation has a reusable client workflow. Pin it to a full commit SHA of csm-ci-actions.
 
-For securefix, configure its server-side routes and add the client packaging and request jobs as described in [securefix.md](securefix.md).
+securefix is the exception: the caller generates the changes itself, so it runs the `securefix-client` action as one step in that job. Configure its server-side routes and add the step as described in [securefix.md](securefix.md).
 
 `.github/workflows/csm-ci-approve.yml` asks for approvals ([approve.md](approve.md)):
 
