@@ -8,6 +8,8 @@ csm-ci-actions extends that approach with approval and policy checks, controlled
 
 Start with the request flow and setup order below, then use the [client](#client-actions) and [server](#server-workflows-and-actions) action references for individual inputs and examples.
 
+For selected dependency batches, see the [agent-assisted Renovate review recommendation](docs/renovate-review.md). It preserves the server approval and merge gates.
+
 Pin every action and reusable workflow to a reviewed full commit SHA. Replace `<sha>` in the examples before using them. Keep caller workflows on each repository's default branch.
 
 ## How a client request reaches the server
