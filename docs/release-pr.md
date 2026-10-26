@@ -45,3 +45,7 @@ If generation produces no file changes, no artifact or request is sent. This wor
 ## Client caller
 
 See [setup](setup.md) for the default-branch push and manual-dispatch caller. Pin its reusable workflow reference to a reviewed commit SHA.
+
+## Planned standard caller generation
+
+The [repo-settings generator](repo-settings.md#standard-client-workflows-planned) selects preparation through `securefix` and the canonical `release-pr` route, independently of publication permission. Its planned `repositories[].release_prepare.update_root_version` boolean defaults to `true` and passes the existing `update-root-version` input. It uses the actual default branch and retains release-commit push suppression. Manual `version` remains a dispatch input. This requires the separate generator deployment and a compatible intended stable release. Existing callers remain operator-maintained until their exact bytes are adopted through the reviewed migration.

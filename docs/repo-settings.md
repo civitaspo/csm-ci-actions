@@ -1,6 +1,6 @@
 # Repository settings
 
-The server reconciles repository settings, four fixed rulesets, immutable releases, and managed-file pull requests. Configuration is global. Repository entries select targets and retain only their existing operation and release settings.
+The server reconciles repository settings, four fixed rulesets, immutable releases, and managed-file pull requests. Configuration is global. Repository entries select targets and supply their operation and release settings. The planned standard caller generator also uses preparation and explicit adoption settings.
 
 ## Configuration
 
@@ -35,6 +35,118 @@ When `allow_squash_merge` is explicitly `true`, reconciliation also enforces `sq
 The currently deployed `managed_files` format maps literal relative paths to inline UTF-8 text. Its planned replacement and required migration are defined in [Additional managed files](#additional-managed-files-planned). Paths cannot contain traversal, Git metadata, glob syntax, or conflicting parent and child file names. Files use the securefix size limits. Removing a path from configuration stops managing it; it does not delete the file. If `csm-ci/repo-settings` still holds a commit that changed the removed path, a later run that needs to reuse it rejects the branch as changing an unmanaged path. Verify ownership before closing its pull request and deleting that owned branch. The next run starts it again from the default branch. An empty desired set or matching default content needs no branch reuse and does not prove ownership of an existing branch.
 
 Configuration comes from the triggering server commit, `GITHUB_SHA`. Discovery intersects the repositories of the Server App installation on the server's owner with `owners` and the first matching `repositories` entry. Repositories under another owner are not discovered. The actions repository is eligible when installed and configured, including when explicitly selected. It remains subject to its fixed all-paths-sensitive policy. An explicit repository selector limits the run to that repository. When the selected set includes the server, its job runs after the client jobs finish, even when one of them failed, so one broken repository cannot stall the server's own repair. Within a repository, settings, rulesets and immutable releases are applied before managed files, so a rejected `csm-ci/repo-settings` branch does not block them.
+
+## Standard client workflows, planned
+
+This is the planned contract for [issue #77](https://github.com/civitaspo/csm-ci-actions/issues/77). A separate runtime implementation and deployment are required. Do not add its new fields to configurations using older strict parser pins. It depends on the [explicit Secret contract](first-release-plan.md#explicit-secret-contract-and-staged-migration), not the separate additional-files implementation.
+
+### Caller selection
+
+Generation runs in both `reconcile` and `managed-files-only` whenever `repo_settings` is configured. Use the first matching `repositories` entry and the target's observed default branch. All destinations are under `.github/workflows/`. All reusable workflows are under `civitaspo/csm-ci-actions/.github/workflows/` and use the same resolved full commit SHA.
+
+| Selection | Destination | Reusable workflow | Events | Job inputs and permissions |
+|---|---|---|---|---|
+| `approve` | `csm-ci-approve.yml` | `client-approve.yml` | `pull_request_target`: opened, synchronize, reopened, ready_for_review; `issue_comment`: created | No inputs or job condition; empty permissions |
+| `policy-check` | `csm-ci-policy-check.yml` | `client-policy-check.yml` | `pull_request_target`: opened, synchronize, reopened, ready_for_review, edited | No inputs or job condition; empty permissions |
+| `merge` | `csm-ci-merge.yml` | `client-merge.yml` | `issue_comment`: created | No inputs or job condition; empty permissions |
+| `release` | `csm-ci-release.yml` | `client-release-publish.yml` | `pull_request`: closed | No inputs or job condition; empty permissions |
+| `securefix` and canonical `release-pr` route | `csm-ci-release-pr.yml` | `client-release-prepare.yml` | Push to the actual default branch; manual dispatch | `version`, `update-root-version`; `contents: read` |
+
+Workflow names are `csm-ci-approve`, `csm-ci-policy-check`, `csm-ci-merge`, `csm-ci-release`, and `csm-ci-release-pr`. Job names are `approve`, `policy-check`, `merge`, `release`, and `release-pr`. Every caller sets top-level `permissions: {}` and maps only `CSM_CI_CLIENT_APP_PRIVATE_KEY` to `${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}` under the same name. No generated caller uses inheritance. Existing Naming-list variables remain unchanged. Do not add request-cancelling concurrency or duplicate the reusable workflows' client prefilters.
+
+A canonical preparation route has name `release-pr`, `from: default`, `to: release/next`, and workflow `.github/workflows/csm-ci-release-pr.yml`. No route means no generated preparation caller. A named route with conflicting values fails configuration validation for a repository selecting `securefix`. Keep `.release-version: semver`, `CHANGELOG.md: any`, and the configured supported root version edits under securefix's existing authorization. Generation never broadens the route's path permissions.
+
+Preparation and publication remain independent:
+
+| Effective configuration | Generated release callers |
+|---|---|
+| `release`, without authorized preparation | Publish only |
+| `securefix` with canonical route, without `release` | Prepare only |
+| Both selections | Prepare and publish |
+| Neither selection | Neither |
+
+The optional strict repository object `release_prepare` has one optional boolean, `update_root_version`, defaulting to `true`. Omission of the object has the same default. Unknown keys, non-booleans, or an explicit object without selected preparation fail validation. It is independent of `release` build settings, so a prepare-only repository needs no publication configuration.
+
+```yaml
+repositories:
+  - name: owner/prepare-only
+    ops: [securefix]
+    release_prepare:
+      update_root_version: false
+```
+
+The prepare caller declares an optional string dispatch input `version`, default `""`, described as an optional semantic version without a `v` prefix. It passes `${{ inputs.version || '' }}` and the effective boolean to `version` and `update-root-version`. Version inference and generation remain in the reusable workflow. Do not persist a fixed version in Server configuration.
+
+The prepare job runs on manual dispatch or on pushes whose head commit message starts with neither `chore(release): v` nor `release-pr: chore(release): v`. This standardizes the existing release-commit push suppression and prevents the generator from removing it during takeover. Its job condition is:
+
+```yaml
+if: >-
+  github.event_name == 'workflow_dispatch' ||
+  (!startsWith(github.event.head_commit.message, 'chore(release): v') &&
+   !startsWith(github.event.head_commit.message, 'release-pr: chore(release): v'))
+```
+
+Repository-specific securefix CI remains operator-owned. This feature generates no server label or settings caller, general CI aggregation, arbitrary template, custom destination, or per-repository pin override.
+
+### Resolve one released revision
+
+Discovery resolves the latest published stable release of fixed `civitaspo/csm-ci-actions` once per distribution run. Exclude drafts and prereleases. Validate release metadata, resolve its tag reference, and dereference annotated tags with a finite bound and cycle rejection until a full commit SHA is obtained. Reject missing or malformed metadata, missing tags, non-commit targets, excessive tag depth, and API failures. Do not use `target_commitish` alone as the resolved commit proof.
+
+Validate every reusable workflow required by the union of selected repositories at that commit before workflow-file writes. Parse their `workflow_call` contracts, not just file existence. Require the selected input names and types, compatible defaults and required inputs, the exact required Client App Secret declaration without additional required credentials, compatible workflow permissions, and the defining action-lock support required by their local composite calls. The prepare contract must accept the string `version` and boolean `update-root-version`. An incompatible release fails the run. There is no fallback to main, a tag pin, an older release, or the currently installed caller SHA.
+
+Pass the validated version and full SHA through trusted discovery outputs to every target and both managed inspection and apply. Those stages consume the same result without independently resolving latest. Revalidate mutable target state before writes while retaining that resolved revision. A release published midway through a run affects only the next run. Include the version and full SHA in every proposed managed PR body and a deterministic generated comment in each caller. That comment makes first takeover visible but proves no ownership.
+
+Compose one desired set from selected callers, configured additional files, and generated funding content. Apply the existing combined path, parent/child, count, and byte limits before file writes. Reject any duplicate producer destination, even with identical bytes. Selected caller destinations and proven pending deletion destinations cannot be supplied by additional files. Inactive unowned standard names remain available to operator-controlled files. Keep sponsorship's existing conditional funding reservation. Administrative results and file-stage errors remain separate.
+
+### Authenticate ownership and preserve custom files
+
+Generated ownership is recorded in the original managed commit's body under `csm-ci-generated-workflows-v1`. The strict versioned record contains the immutable target repository ID, the resolved release version and full SHA, and a sorted map of generated standard destinations to lowercase SHA256 digests of their exact UTF-8 bytes. It contains only generated callers, not additional or funding files. The Server writes it through `createCommitOnBranch` with the workflow content. An empty generated map records removal of the last caller. A matching repeat must retain the existing commit and PR head.
+
+Recover prior ownership from the newest applicable merged managed PR, with complete API pagination. Require the configured Server bot's immutable creator ID, same target repository, head ref `csm-ci/repo-settings`, and a merge commit reachable from the observed default head. Order candidates by their merge commits' actual default ancestry. Do not order by PR number, update time, or mutable branch refs. Ambiguous ancestry, incomplete pages, and API errors fail with an actionable error.
+
+Read that PR's original head SHA and immutable commit object. Require the existing Server commit proof: configured Server bot author ID, `web-flow` committer, REST verified signature, and valid GitHub signature through GraphQL. Require the strict reserved record and verify its repository ID, paths, digest formats, and byte-for-byte tree bindings at that original head. Never authenticate a record from a target file, PR body, title, current branch tip, or default/squash commit message. Those messages can contain user-edited PR text. Existing securefix rejection of `csm-ci-` in client-supplied commit messages prevents securefix from minting this original-head record. Keep that boundary; no release or merge behavior change is needed to carry ownership metadata.
+
+The newest applicable candidate is authoritative. Missing or malformed records, unavailable original head objects, invalid signatures, or missing tree evidence must not cause fallback to an older valid record. Report the failed proof and preserve target files. Before first generator adoption, a candidate without a record establishes no ownership. It requires the explicit adoption procedure below rather than an older-record search. Deleted branch refs do not substitute for missing immutable head evidence. A force-moved ref never changes the recorded head SHA used for proof.
+
+For an active caller already recorded as generated, replacement requires current default bytes to match its authenticated prior digest. For a disabled caller, deletion requires the same match. A missing disabled file needs no deletion. A missing active file is repaired through the reviewed PR. A changed regular file, symlink, submodule, or conflicting tree fails without overwriting custom content. Identical filenames, reusable references, or generated headers cannot bypass these checks. Re-adding an operation after a verified deletion creates an absent caller normally. A rollback or manual restoration of old bytes still needs current ownership proof or explicit adoption.
+
+Only a prior merged record authorizes default-branch deletion. A pending PR record cannot grant itself deletion authority. Keep full S4 commit-chain, signature, changed-path, and expected-head validation for any pending managed branch before reuse. Historical ownership authentication does not apply today's additional-file allowlist to old merged PR history. This avoids making a removed additional file block legitimate caller removal. It also does not relax current pending-branch history validation.
+
+Represent desired writes, proven deletions, and unmanaged paths separately. Retain proven deletion paths through pending-history validation and expected-head writes, including an entirely empty desired content map. Never add all five standard paths permanently to the history allowlist. Reject collisions with a pending deletion. Revalidate ownership evidence, default head, current bytes, pending branch, and PR binding immediately before privileged writes. Preserve leases, signed commits, least-privilege workflow tokens, server-last ordering, and the normal review and protected merge path.
+
+### Adopt existing callers
+
+An absent selected destination needs no adoption entry. An existing destination without authenticated generated ownership requires explicit reviewed Server authorization:
+
+```yaml
+repositories:
+  - name: owner/client
+    ops: [approve, merge, policy-check]
+    workflow_adoption:
+      .github/workflows/csm-ci-approve.yml: <64-lowercase-hex-sha256>
+      .github/workflows/csm-ci-policy-check.yml: <64-lowercase-hex-sha256>
+      .github/workflows/csm-ci-merge.yml: <64-lowercase-hex-sha256>
+```
+
+`workflow_adoption` is an optional strict map with at most five entries. Keys must be exact standard destinations selected for that repository. Values are lowercase 64-character hexadecimal SHA256 digests of the observed current bytes. Reject other paths, unselected callers, malformed values, absent files, and stale digests. Existing authenticated ownership takes precedence, so an adoption entry cannot bypass a later custom-content mismatch. Missing or invalid newer ownership evidence also cannot be bypassed by adoption. A legacy candidate without a record permits first adoption only when complete applicable history contains no earlier generated record for that path. A valid newest record omitting a path permits adoption after a prior verified removal. An entry permits first replacement only. It never permits deletion, changes to other files, or a reset of an unverified branch.
+
+Inventory existing caller bytes, default heads, explicit release inputs, parser pins, and outstanding managed branches before rollout. Drain old configuration-writing runs. Upgrade all Server parser pins to a compatible verified runtime before adding new strict fields. Verify workflow merges are supported by the deployed merger; any bootstrap recovery follows its separate authorization.
+
+In one reviewed Server configuration PR, remove literal or additional entries that collide with selected callers and add adoption digests for those exact deployed bytes. Preserve `update_root_version: false` where required. Do not change pins during a separate #78 format migration. Both inline and source-file distribution can precede this generator, but the final runtime retains only its deployed additional-file schema.
+
+The generated PR replaces only the explicitly authorized bytes, includes its new ownership record and deterministic generated header, and follows normal review, CI, approval, and protected merge. Confirm the default content and merged original-head proof before removing adoption entries in a reviewed Server PR. A stale unused entry fails when no prior ownership exists and its target changed. It never grants permission to overwrite later custom changes.
+
+An outstanding branch whose full signed history still changes an unmanaged literal path is rejected. Verify the exact owned PR, branch, and stopped writers before closing that PR and deleting only its owned branch under the existing recovery procedure. Then regenerate from current default. Do not reset an unverified branch, allow every reserved path, delete arbitrary custom callers, or require unrelated managed PRs to merge. Recovery must not destroy the historical merged PR head objects needed for ownership.
+
+### Verify the implementation and release gate
+
+Implement table-driven cases for every selection combination, prepare-only and publish-only boundaries, route conflicts, true/false/default root-version inputs, non-main defaults, and release-commit suppression. Cover missing, malformed, incompatible, and annotated releases, tag cycles and depth bounds, read failures, one resolution across all targets and both stages, and a newer release appearing midway through a run.
+
+Cover producer collisions, exact-digest adoption and stale adoption, copied records and headers, wrong immutable IDs and signatures, unavailable original heads, pagination failures, ancestry ambiguity, newer invalid records without fallback, customized active and disabled files, rollback and re-add, last-caller deletion, pending-record self-authorization, old mixed merged PRs, rejected pending histories, recovery, and an unchanged second sync. Assert rejection messages and mutation-check every changed rule. Update fixtures, generated bundles, repo-settings, release, setup, and cutover instructions together.
+
+Run all required local gates and independent specification review. Run affected repo-settings and release-pr feature suites, affected client suites, and smoke at the signed pushed implementation SHA. After an authorized merge, run affected CI suites and smoke through the runner checkout on `main`. Record exact runtime and Server configuration SHAs, generated PRs, immutable head evidence, run URLs, skips, and restoration in `docs/handoff.md`.
+
+The latest stable release observed on 2026-10-26 is `v0.1.0`, whose prepare interface lacks the required root-version input and explicit Secret contracts. An intended compatible stable release is a deployment gate. Review its exact release PR and candidate under the normal checks and obtain publication authorization. Do not publish a throwaway release or choose an arbitrary version for this generator. The release need not contain the generator if the deployed runtime does, but its client interfaces must support every emitted caller and preserve deployed client behavior. Full-SHA tests cannot satisfy the published-stable acceptance case. Report that gap until an authorized intended release exists. This specification itself authorizes no publication, credential, App permission, or production configuration change and requires no live e2e.
 
 ## Additional managed files, planned
 

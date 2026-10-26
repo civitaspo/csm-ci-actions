@@ -75,3 +75,7 @@ jq -e 'any(.[].verificationResult.statement;
 ```
 
 After creating the protected annotated tag, verification tolerates short read-after-write visibility delays. A missing ref is read at most four times, waiting 250, 500 and 1,000 ms between reads. The same bounded verification applies to a 422 ref-creation race. Writes are not retried; unexpected API errors and tags with the wrong identity or target fail immediately.
+
+## Planned standard caller generation
+
+The [repo-settings generator](repo-settings.md#standard-client-workflows-planned) selects the publish caller only from `release`. Release preparation is independently selected by the canonical securefix route and does not grant publication permission. Generated callers use one validated published stable SHA per distribution run and the explicit minimal Client App Secret mapping. The generator has a separate implementation and deployment gate. It never publishes a release to obtain a compatible caller pin.
