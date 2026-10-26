@@ -26674,6 +26674,55 @@ function info(message) {
   process.stdout.write(message + os4.EOL);
 }
 
+// src/lib/config.ts
+var import_picomatch = __toESM(require_picomatch2(), 1);
+
+// node_modules/yaml/dist/index.js
+var composer = require_composer();
+var Document = require_Document();
+var Schema = require_Schema();
+var errors2 = require_errors2();
+var Alias = require_Alias();
+var identity = require_identity();
+var Pair = require_Pair();
+var Scalar = require_Scalar();
+var YAMLMap = require_YAMLMap();
+var YAMLSeq = require_YAMLSeq();
+var cst = require_cst();
+var lexer = require_lexer();
+var lineCounter = require_line_counter();
+var parser = require_parser();
+var publicApi = require_public_api();
+var visit = require_visit();
+var $Composer = composer.Composer;
+var $Document = Document.Document;
+var $Schema = Schema.Schema;
+var $YAMLError = errors2.YAMLError;
+var $YAMLParseError = errors2.YAMLParseError;
+var $YAMLWarning = errors2.YAMLWarning;
+var $Alias = Alias.Alias;
+var $isAlias = identity.isAlias;
+var $isCollection = identity.isCollection;
+var $isDocument = identity.isDocument;
+var $isMap = identity.isMap;
+var $isNode = identity.isNode;
+var $isPair = identity.isPair;
+var $isScalar = identity.isScalar;
+var $isSeq = identity.isSeq;
+var $Pair = Pair.Pair;
+var $Scalar = Scalar.Scalar;
+var $YAMLMap = YAMLMap.YAMLMap;
+var $YAMLSeq = YAMLSeq.YAMLSeq;
+var $Lexer = lexer.Lexer;
+var $LineCounter = lineCounter.LineCounter;
+var $Parser = parser.Parser;
+var $parse = publicApi.parse;
+var $parseAllDocuments = publicApi.parseAllDocuments;
+var $parseDocument = publicApi.parseDocument;
+var $stringify = publicApi.stringify;
+var $visit = visit.visit;
+var $visitAsync = visit.visitAsync;
+
 // node_modules/zod/v4/core/util.js
 function getEnumValues(entries) {
   const numericValues = Object.values(entries).filter((v) => typeof v === "number");
@@ -32570,55 +32619,6 @@ function superRefine(fn, params) {
   return _superRefine(fn, params);
 }
 // src/lib/config.ts
-var import_picomatch = __toESM(require_picomatch2(), 1);
-
-// node_modules/yaml/dist/index.js
-var composer = require_composer();
-var Document = require_Document();
-var Schema = require_Schema();
-var errors3 = require_errors2();
-var Alias = require_Alias();
-var identity = require_identity();
-var Pair = require_Pair();
-var Scalar = require_Scalar();
-var YAMLMap = require_YAMLMap();
-var YAMLSeq = require_YAMLSeq();
-var cst = require_cst();
-var lexer = require_lexer();
-var lineCounter = require_line_counter();
-var parser = require_parser();
-var publicApi = require_public_api();
-var visit = require_visit();
-var $Composer = composer.Composer;
-var $Document = Document.Document;
-var $Schema = Schema.Schema;
-var $YAMLError = errors3.YAMLError;
-var $YAMLParseError = errors3.YAMLParseError;
-var $YAMLWarning = errors3.YAMLWarning;
-var $Alias = Alias.Alias;
-var $isAlias = identity.isAlias;
-var $isCollection = identity.isCollection;
-var $isDocument = identity.isDocument;
-var $isMap = identity.isMap;
-var $isNode = identity.isNode;
-var $isPair = identity.isPair;
-var $isScalar = identity.isScalar;
-var $isSeq = identity.isSeq;
-var $Pair = Pair.Pair;
-var $Scalar = Scalar.Scalar;
-var $YAMLMap = YAMLMap.YAMLMap;
-var $YAMLSeq = YAMLSeq.YAMLSeq;
-var $Lexer = lexer.Lexer;
-var $LineCounter = lineCounter.LineCounter;
-var $Parser = parser.Parser;
-var $parse = publicApi.parse;
-var $parseAllDocuments = publicApi.parseAllDocuments;
-var $parseDocument = publicApi.parseDocument;
-var $stringify = publicApi.stringify;
-var $visit = visit.visit;
-var $visitAsync = visit.visitAsync;
-
-// src/lib/config.ts
 var Id = number2().int().positive();
 var Login = string2().min(1);
 var Principal = strictObject({ id: Id, login: Login });
@@ -32673,7 +32673,17 @@ var SecurefixSchema = strictObject({
   allow_workflow_changes: boolean2(),
   routes: array(SecurefixRoute).refine((routes) => new Set(routes.map((route) => route.name)).size === routes.length, "duplicate route name")
 });
+var Sponsorships = strictObject({
+  enabled: boolean2(),
+  github: array(string2().regex(/^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/u, "must be a GitHub recipient login").max(39).transform((login) => login.toLowerCase())).min(1).max(4).refine((logins) => new Set(logins).size === logins.length, "duplicate GitHub recipient login").optional()
+});
+function repoSettingsManagedFiles(settings) {
+  const recipients = settings?.sponsorships?.github;
+  return { ...settings?.managed_files, ...recipients ? { ".github/FUNDING.yml": `github: [${recipients.map((login) => JSON.stringify(login)).join(", ")}]
+` } : {} };
+}
 var RepoSettings = strictObject({
+  sponsorships: Sponsorships.optional(),
   settings: strictObject({
     delete_branch_on_merge: boolean2().optional(),
     allow_auto_merge: boolean2().optional(),
@@ -32686,12 +32696,16 @@ var RepoSettings = strictObject({
   }).optional(),
   managed_files: record(string2(), string2()).default({})
 }).superRefine((value, ctx) => {
-  const paths = Object.keys(value.managed_files);
+  if (value.sponsorships?.github && Object.hasOwn(value.managed_files, ".github/FUNDING.yml")) {
+    ctx.addIssue({ code: "custom", path: ["managed_files", ".github/FUNDING.yml"], message: "destination is reserved by sponsorships.github" });
+  }
+  const files = repoSettingsManagedFiles(value);
+  const paths = Object.keys(files);
   if (paths.length > 512)
     ctx.addIssue({ code: "custom", path: ["managed_files"], message: "must contain at most 512 files" });
   let totalBytes = 0;
   for (const path of paths) {
-    const content = value.managed_files[path] ?? "";
+    const content = files[path] ?? "";
     const bytes = new TextEncoder().encode(content).byteLength;
     totalBytes += bytes;
     if (!isSafeManagedFilePath(path)) {
@@ -37438,10 +37452,11 @@ async function inspectRepoSettings(args) {
   if (!repoSettings)
     throw new Rejection("repo_settings is not configured");
   const address = { ...splitRepository(args.target.name) };
-  const [repositoryResponse, ruleSets, immutableEnabled] = await Promise.all([
+  const [repositoryResponse, ruleSets, immutableEnabled, sponsorships] = await Promise.all([
     args.adminGH.rest.repos.get(address),
     args.adminGH.paginate("GET /repos/{owner}/{repo}/rulesets", { ...address, per_page: 100 }),
-    isImmutableReleasesEnabled(args.adminGH, address)
+    isImmutableReleasesEnabled(args.adminGH, address),
+    repoSettings.sponsorships ? readSponsorships(args.adminGH, args.target.name) : undefined
   ]);
   const definitions = repoSettingsRuleSets(args.config);
   const summaries = array(object({ id: number2().int().positive(), name: string2(), source_type: string2().optional() })).parse(ruleSets);
@@ -37479,7 +37494,7 @@ async function inspectRepoSettings(args) {
   }
   return {
     target: args.target,
-    changes: { settings: changedSettings(repositoryResponse.data, repoSettings.settings ?? {}), immutableReleases: !immutableEnabled, rulesets: rulesetsToChange },
+    changes: { settings: changedSettings(repositoryResponse.data, repoSettings.settings ?? {}), immutableReleases: !immutableEnabled, sponsorships: sponsorships !== undefined && sponsorships.hasSponsorshipsEnabled !== repoSettings.sponsorships?.enabled, rulesets: rulesetsToChange },
     activation,
     rulesetIds: ids,
     rulesetEnforcements: enforcements
@@ -37499,12 +37514,25 @@ async function applyRepoSettings(args) {
     throw new Rejection("repo_settings is not configured");
   const address = { ...splitRepository(args.target.name) };
   let settingsUpdated = 0;
+  let sponsorshipsUpdated = 0;
   let immutableReleasesEnabled = 0;
   let rulesetsUpdated = 0;
   let rulesetsCreated = 0;
   if (inspection.changes.settings.length > 0 && repoSettings.settings) {
     await args.adminGH.rest.repos.update({ ...address, ...desiredRepositorySettings(repoSettings.settings) });
     settingsUpdated = 1;
+  }
+  if (inspection.changes.sponsorships && repoSettings.sponsorships) {
+    const current = await readSponsorships(args.adminGH, args.target.name);
+    const enabled = repoSettings.sponsorships.enabled;
+    if (current.hasSponsorshipsEnabled !== enabled) {
+      const response = await args.adminGH.graphql("mutation($repositoryId:ID!,$enabled:Boolean!){updateRepository(input:{repositoryId:$repositoryId,hasSponsorshipsEnabled:$enabled}){repository{id hasSponsorshipsEnabled}}}", { repositoryId: current.id, enabled });
+      const result = object({ updateRepository: object({ repository: SponsorshipState }) }).safeParse(response);
+      if (!result.success || result.data.updateRepository.repository.id !== current.id || result.data.updateRepository.repository.hasSponsorshipsEnabled !== enabled) {
+        throw new Rejection("sponsorship mutation did not confirm the requested repository setting");
+      }
+      sponsorshipsUpdated = 1;
+    }
   }
   if (inspection.changes.immutableReleases) {
     await args.adminGH.request("PUT /repos/{owner}/{repo}/immutable-releases", address);
@@ -37531,7 +37559,7 @@ async function applyRepoSettings(args) {
       rulesetsUpdated++;
     }
   }
-  return { settingsUpdated, immutableReleasesEnabled, rulesetsUpdated, rulesetsCreated };
+  return { settingsUpdated, sponsorshipsUpdated, immutableReleasesEnabled, rulesetsUpdated, rulesetsCreated };
 }
 function validateDispatchPreflight(preflight) {
   const checks = [
@@ -37588,6 +37616,15 @@ async function isImmutableReleasesEnabled(gh, address) {
 }
 function status(error) {
   return typeof error === "object" && error !== null && "status" in error && typeof error.status === "number" ? error.status : undefined;
+}
+var SponsorshipState = object({ id: string2().min(1), hasSponsorshipsEnabled: boolean2() });
+async function readSponsorships(gh, repository) {
+  const { owner, repo } = splitRepository(repository);
+  const response = await gh.graphql("query($owner:String!,$name:String!){repository(owner:$owner,name:$name){id hasSponsorshipsEnabled}}", { owner, name: repo });
+  const result = object({ repository: SponsorshipState }).safeParse(response);
+  if (!result.success)
+    throw new Rejection("repository sponsorship setting is unavailable or invalid");
+  return result.data.repository;
 }
 
 // src/server-repo-settings/context.ts
@@ -37691,7 +37728,7 @@ async function main() {
     info(`drift for ${target.name}: ${JSON.stringify(result.changes)}; activation required: ${result.activation}`);
     setOutput("changes", JSON.stringify(result.changes));
     setOutput("activation-required", String(result.activation));
-    setOutput("has-changes", String(result.changes.settings.length > 0 || result.changes.immutableReleases || result.changes.rulesets.length > 0));
+    setOutput("has-changes", String(result.changes.settings.length > 0 || result.changes.immutableReleases || result.changes.sponsorships || result.changes.rulesets.length > 0));
     return;
   }
   const readGH = github(input("read-token", true));
@@ -37724,7 +37761,7 @@ async function main() {
   }
   if (mode === "managed-inspect" || mode === "managed-apply") {
     const { data: repo } = await readGH.rest.repos.get(address);
-    const files = config.repo_settings?.managed_files ?? {};
+    const files = repoSettingsManagedFiles(config.repo_settings);
     if (mode === "managed-inspect") {
       const result = await inspectManagedFiles(readGH, { repository: target.name, defaultBranch: repo.default_branch, serverBotId: config.apps.server_bot_id, files });
       setOutput("result", result.status);
