@@ -104,7 +104,7 @@ describe("inspectRepoSettings", () => {
       { method: "GET", path: "/repos/owner/client/immutable-releases", body: { enabled: true } },
     ]);
     const plan = await inspectRepoSettings({ adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "schedule" });
-    expect(plan.changes).toEqual({ settings: [], immutableReleases: false, rulesets: [] });
+    expect(plan.changes).toEqual({ settings: [], immutableReleases: false, sponsorships: false, rulesets: [] });
   });
 
   test("reports each drifted repository setting", async () => {
@@ -679,8 +679,8 @@ describe("repository feature settings", () => {
     const drifted = { [key]: !value, description: "unrelated" };
     const fetch = stateFetch(drifted, { then: [drifted, desired] });
     const options = args(fetch, desired);
-    expect((await inspectRepoSettings(options)).changes).toEqual({ settings: [key], rulesets: [], immutableReleases: false });
-    expect(await applyRepoSettings(options)).toEqual({ settingsUpdated: 1, immutableReleasesEnabled: 0, rulesetsUpdated: 0, rulesetsCreated: 0 });
+    expect((await inspectRepoSettings(options)).changes).toEqual({ settings: [key], rulesets: [], immutableReleases: false, sponsorships: false });
+    expect(await applyRepoSettings(options)).toEqual({ settingsUpdated: 1, sponsorshipsUpdated: 0, immutableReleasesEnabled: 0, rulesetsUpdated: 0, rulesetsCreated: 0 });
     expect((await applyRepoSettings(options)).settingsUpdated).toBe(0);
     const writes = fetch.requests.filter((request) => request.method !== "GET");
     expect(writes).toHaveLength(1);

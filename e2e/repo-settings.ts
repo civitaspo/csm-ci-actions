@@ -169,12 +169,12 @@ async function openManagedPull(gh: GitHub, repository = CLIENT): Promise<Managed
   return data.filter((pull) => pull.body?.includes(MANAGED_MARKER)).map((pull) => ({ number: pull.number, headSha: pull.head.sha }));
 }
 
-async function ownedManagedHead(ctx: Ctx, repository = CLIENT): Promise<{ sha: string; pull?: ManagedPull } | undefined> {
+export async function ownedManagedHead(ctx: Pick<Ctx, "gh">, repository = CLIENT, managedPaths: readonly string[] = ["e2e/repo-settings-managed.txt"]): Promise<{ sha: string; pull?: ManagedPull } | undefined> {
   const sha = await managedBranchHead(ctx.gh, repository);
   if (!sha) return undefined;
   const { data: commit } = await ctx.gh.rest.repos.getCommit({ ...splitRepository(repository), ref: sha });
   const changedPaths = commit.files?.map((file) => file.filename) ?? [];
-  if (commit.author?.id !== SERVER_BOT_ID || commit.commit.message !== "Sync managed files" || changedPaths.length !== 1 || changedPaths[0] !== "e2e/repo-settings-managed.txt") return undefined;
+  if (commit.author?.id !== SERVER_BOT_ID || commit.commit.message !== "Sync managed files" || changedPaths.length === 0 || changedPaths.some((path) => !managedPaths.includes(path))) return undefined;
   if (commit.commit.verification?.verified !== true || commit.commit.verification.reason !== "valid") return undefined;
   const pulls = await openManagedPull(ctx.gh, repository);
   if (pulls.length > 1) return undefined;
@@ -229,8 +229,8 @@ async function ensureNoPreviousManagedState(ctx: Ctx, repository = CLIENT): Prom
   assert((await openManagedPull(ctx.gh, repository)).length === 0, `an open managed-files pull request already exists in ${repository}`);
 }
 
-async function cleanupManagedState(ctx: Ctx, observedHead: string | undefined, pull: ManagedPull | undefined, repository = CLIENT): Promise<void> {
-  const owned = await ownedManagedHead(ctx, repository);
+async function cleanupManagedState(ctx: Ctx, observedHead: string | undefined, pull: ManagedPull | undefined, repository = CLIENT, managedPaths: readonly string[] = ["e2e/repo-settings-managed.txt"]): Promise<void> {
+  const owned = await ownedManagedHead(ctx, repository, managedPaths);
   if (!observedHead) {
     if (!owned) {
       assert((await managedBranchHead(ctx.gh, repository)) === undefined, `ref ${BRANCH} exists in ${repository}, but its ownership cannot be verified; refusing cleanup`);
@@ -341,7 +341,59 @@ async function rulesetUpdateTimes(gh: GitHub, repository = CLIENT): Promise<Map<
   return new Map((await listManagedRulesets(gh, repository)).map((ruleset) => [ruleset.id, ruleset.updated_at]));
 }
 
+const SponsorState = z.object({ repository: z.object({ id: z.string().min(1), hasSponsorshipsEnabled: z.boolean() }) });
+async function sponsorState(gh: GitHub) {
+  const { owner, repo } = splitRepository(CLIENT);
+  return SponsorState.parse(await gh.graphql<unknown>("query($owner:String!,$name:String!){repository(owner:$owner,name:$name){id hasSponsorshipsEnabled}}", { owner, name: repo })).repository;
+}
+
 export const repoSettings: Scenario[] = [
+  ...([true, false, "managed-files-only"] as const).map((setting): Scenario => ({
+    name: `sponsorship funding PR and repeat with ${setting}`,
+    serial: true,
+    run: async (ctx) => {
+      await ensureNoPreviousManagedState(ctx);
+      const snapshot = await snapshotRepository(ctx.gh, CLIENT);
+      const sponsorship = await sponsorState(ctx.gh);
+      const createdRulesetIds = new Set<number>();
+      const enabled = setting === "managed-files-only" ? !sponsorship.hasSponsorshipsEnabled : setting;
+      const operationMode = setting === "managed-files-only" ? setting : "reconcile";
+      await withCleanup(async () => {
+        if (operationMode === "reconcile") {
+          await ctx.gh.graphql("mutation($id:ID!,$enabled:Boolean!){updateRepository(input:{repositoryId:$id,hasSponsorshipsEnabled:$enabled}){repository{id}}}", { id: sponsorship.id, enabled: !enabled });
+        }
+        await withServerConfig(ctx, (text) => {
+          const changed = text.replace("repo_settings:\n", `repo_settings:\n  sponsorships: { enabled: ${enabled}, github: [civitaspo] }\n`);
+          assert(changed !== text, "could not add explicit sponsorship e2e configuration");
+          return changed;
+        }, async () => {
+          const first = await dispatchReconciliation(ctx, CLIENT, "dispatch", undefined, { createdRulesetIds, operationMode });
+          assert((await sponsorState(ctx.gh)).hasSponsorshipsEnabled === (operationMode === "reconcile" ? enabled : sponsorship.hasSponsorshipsEnabled), `incorrect Sponsor button setting (${first.url})`);
+          const head = await managedBranchHead(ctx.gh);
+          const pulls = await openManagedPull(ctx.gh);
+          assert(head && pulls.length === 1 && pulls[0]?.headSha === head, `missing funding PR (${first.url})`);
+          const funding = await ctx.gh.rest.repos.getContent({ ...splitRepository(CLIENT), path: ".github/FUNDING.yml", ref: head, mediaType: { format: "raw" } });
+          const fundingContent: unknown = funding.data;
+          assert(fundingContent === 'github: ["civitaspo"]\n', `incorrect generated funding content (${first.url})`);
+          const repeat = await dispatchReconciliation(ctx, CLIENT, "dispatch", undefined, { createdRulesetIds, operationMode });
+          const repeated = await openManagedPull(ctx.gh);
+          assert(await managedBranchHead(ctx.gh) === head && repeated.length === 1 && repeated[0]?.number === pulls[0]?.number, `funding replay changed its PR or head (${repeat.url})`);
+          for (const step of ["Apply repository settings", "Apply managed files"]) assert(repeat.stepConclusions.get(step) === "skipped", `funding repeat did not skip ${step} (${repeat.url})`);
+          if (operationMode === "managed-files-only") {
+            assert(first.stepConclusions.get("Mint administration write token") === "skipped", `funding-only minted an administration token (${first.url})`);
+          }
+        });
+      }, [
+        () => cleanupManagedState(ctx, undefined, undefined, CLIENT, ["e2e/repo-settings-managed.txt", ".github/FUNDING.yml"]),
+        () => restoreRepository(ctx.gh, CLIENT, snapshot, createdRulesetIds),
+        async () => {
+          const live = await sponsorState(ctx.gh);
+          if (live.hasSponsorshipsEnabled !== sponsorship.hasSponsorshipsEnabled) await ctx.gh.graphql("mutation($id:ID!,$enabled:Boolean!){updateRepository(input:{repositoryId:$id,hasSponsorshipsEnabled:$enabled}){repository{id}}}", { id: sponsorship.id, enabled: sponsorship.hasSponsorshipsEnabled });
+          assert((await sponsorState(ctx.gh)).hasSponsorshipsEnabled === sponsorship.hasSponsorshipsEnabled, "Sponsor button setting was not restored");
+        },
+      ]);
+    },
+  })),
   {
     name: "dispatch repairs settings and ruleset drift, managed files create one stable PR, and schedule preserves the disabled stop",
     serial: true,

@@ -74,7 +74,19 @@ const SecurefixSchema = z.strictObject({
 });
 export type SecurefixConfig = z.infer<typeof SecurefixSchema>;
 
+const Sponsorships = z.strictObject({
+  enabled: z.boolean(),
+  github: z.array(z.string().regex(/^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/u, "must be a GitHub recipient login").max(39).transform((login) => login.toLowerCase()))
+    .min(1).max(4).refine((logins) => new Set(logins).size === logins.length, "duplicate GitHub recipient login").optional(),
+});
+
+export function repoSettingsManagedFiles(settings: { managed_files: Record<string, string>; sponsorships?: z.infer<typeof Sponsorships> | undefined } | undefined): Record<string, string> {
+  const recipients = settings?.sponsorships?.github;
+  return { ...settings?.managed_files, ...(recipients ? { ".github/FUNDING.yml": `github: [${recipients.map((login) => JSON.stringify(login)).join(", ")}]\n` } : {}) };
+}
+
 const RepoSettings = z.strictObject({
+  sponsorships: Sponsorships.optional(),
   settings: z.strictObject({
     delete_branch_on_merge: z.boolean().optional(),
     allow_auto_merge: z.boolean().optional(),
@@ -87,11 +99,15 @@ const RepoSettings = z.strictObject({
   }).optional(),
   managed_files: z.record(z.string(), z.string()).default({}),
 }).superRefine((value, ctx) => {
-  const paths = Object.keys(value.managed_files);
+  if (value.sponsorships?.github && Object.hasOwn(value.managed_files, ".github/FUNDING.yml")) {
+    ctx.addIssue({ code: "custom", path: ["managed_files", ".github/FUNDING.yml"], message: "destination is reserved by sponsorships.github" });
+  }
+  const files = repoSettingsManagedFiles(value);
+  const paths = Object.keys(files);
   if (paths.length > 512) ctx.addIssue({ code: "custom", path: ["managed_files"], message: "must contain at most 512 files" });
   let totalBytes = 0;
   for (const path of paths) {
-    const content = value.managed_files[path] ?? "";
+    const content = files[path] ?? "";
     const bytes = new TextEncoder().encode(content).byteLength;
     totalBytes += bytes;
     if (!isSafeManagedFilePath(path)) {

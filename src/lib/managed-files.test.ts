@@ -2,6 +2,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 import * as gitRef from "./git-ref.ts";
 import { applyManagedFiles, inspectManagedFiles, validateManagedFiles } from "./managed-files.ts";
 import type { GitHub } from "./github.ts";
+import { repoSettingsManagedFiles } from "./config.ts";
 
 const defaultSha = "a".repeat(40);
 const targetSha = "b".repeat(40);
@@ -39,6 +40,7 @@ describe("validateManagedFiles", () => {
 });
 
 function githubFixture(options: {
+  funding?: boolean;
   targetContent?: string;
   sourceContent?: string;
   targetMode?: string;
@@ -55,7 +57,8 @@ function githubFixture(options: {
   pulls?: Array<{ number: number; title: string; body: string | null; base: { ref: string }; head: { sha: string } }>;
   history?: Array<{ sha: string; parent: string; filename: string; previousFilename?: string }>;
 } = {}): GitHub {
-  const history = options.history ?? [{ sha: targetSha, parent: defaultSha, filename: "managed.yml" }];
+  const managedPath = options.funding ? ".github/FUNDING.yml" : "managed.yml";
+  const history = options.history ?? [{ sha: targetSha, parent: defaultSha, filename: managedPath }];
   const commitFor = (ref: string) => {
     if (ref === defaultSha) return { parents: [], author: { id: 500 }, committer: { login: "owner" }, commit: { verification: { verified: true }, tree: { sha: defaultTreeSha } } };
     return {
@@ -84,7 +87,7 @@ function githubFixture(options: {
           if (options.targetMissing) throw Object.assign(new Error("Not Found"), { status: 404 });
           return { data: { object: { sha: targetSha } } };
         },
-        getTree: async ({ tree_sha }: { tree_sha: string }) => ({ data: { truncated: options.treeTruncated ?? false, tree: [options.treeEntry ?? { path: "managed.yml", type: "blob", mode: options.targetMode ?? "100644", sha: tree_sha === defaultTreeSha ? blobSha : targetBlobSha }] } }),
+        getTree: async ({ tree_sha }: { tree_sha: string }) => ({ data: { truncated: options.treeTruncated ?? false, tree: [options.funding && !tree_sha.startsWith("funding-tree") ? { path: ".github", type: "tree", mode: "040000", sha: `funding-tree-${tree_sha}` } : options.treeEntry ?? { path: options.funding ? "FUNDING.yml" : "managed.yml", type: "blob", mode: options.targetMode ?? "100644", sha: (tree_sha === defaultTreeSha || tree_sha === `funding-tree-${defaultTreeSha}`) ? blobSha : targetBlobSha }] } }),
         getBlob: async ({ file_sha }: { file_sha: string }) => ({ data: { encoding: options.blobEncoding ?? "base64", content: Buffer.from(file_sha === blobSha ? options.sourceContent ?? "old\n" : options.targetContent ?? "wanted\n").toString("base64") } }),
       },
       repos: {
@@ -205,8 +208,9 @@ describe("inspectManagedFiles", () => {
       .rejects.toThrow("managed files branch change list is incomplete");
   });
 
-  test("creates the managed branch from the current default head without calling the reset lease", async () => {
-    const read = githubFixture({ targetMissing: true });
+  test.each([false, true])("creates the managed branch and PR without resetting, generated funding=%s", async (funding) => {
+    const files = funding ? repoSettingsManagedFiles({ managed_files: {}, sponsorships: { enabled: false, github: ["user"] } }) : input.files;
+    const read = githubFixture({ targetMissing: true, funding });
     let createdRef = false;
     let createdPr = false;
     let branchSha = defaultSha;
@@ -226,7 +230,7 @@ describe("inspectManagedFiles", () => {
     } as unknown as GitHub;
     const reset = spyOn(gitRef, "resetBranchWithLease").mockImplementation(async () => { throw new Error("unexpected reset"); });
     try {
-      const result = await applyManagedFiles(read, { ...input, writeToken: "unused", writeClient });
+      const result = await applyManagedFiles(read, { ...input, files, writeToken: "unused", writeClient });
       expect(result).toEqual({ status: "applied", commit: targetSha, pullRequest: 73 });
       expect(createdRef).toBe(true);
       expect(createdPr).toBe(true);
@@ -234,6 +238,19 @@ describe("inspectManagedFiles", () => {
     } finally {
       reset.mockRestore();
     }
+  });
+
+  test("generated funding reuses an exact existing PR and needs no PR when default matches", async () => {
+    const files = repoSettingsManagedFiles({ managed_files: {}, sponsorships: { enabled: true, github: ["user"] } });
+    const content = files[".github/FUNDING.yml"] ?? "";
+    const existing = await inspectManagedFiles(githubFixture({ funding: true, targetContent: content }), { ...input, files });
+    expect(existing.changedPaths).toEqual([".github/FUNDING.yml"]);
+    expect(existing.branchNeedsWrite).toBe(false);
+    expect(existing.pullRequest).toBe(73);
+    const result = await applyManagedFiles(githubFixture({ funding: true, targetContent: content }), { ...input, files, writeToken: "unused" });
+    expect(result).toEqual({ status: "already-applied", commit: targetSha, pullRequest: 73 });
+    const matched = await inspectManagedFiles(githubFixture({ funding: true, sourceContent: content }), { ...input, files });
+    expect(matched.status).toBe("already-applied");
   });
 
   test("resets only the managed branch to the observed default SHA before a changed-content commit", async () => {
