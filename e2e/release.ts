@@ -4,6 +4,8 @@ import { CARGO_RAW_TARGETS } from "../src/lib/config.ts";
 
 const PREDICATE = "https://github.com/civitaspo/csm-ci-actions/attestation/release/v1";
 const SIGNER = "civitaspo/csm-ci-actions/.github/workflows/server.yml";
+// Public testing trust anchor; review rotations independently of the signing artifact.
+const TERRAFORM_TEST_FINGERPRINT = "539BD45AF62991F6AB8F931BA00D8967015E154E";
 type ReleasePr = Awaited<ReturnType<typeof openReleasePr>>;
 type ReleaseRun = { run: Run; jobRows: { name: string; id: number; conclusion: string | null }[]; label: string };
 
@@ -140,13 +142,11 @@ async function publishedRelease(ctx: Ctx, ver: string, mergeSha: string, type: R
   return tag;
 }
 
-async function verifyAttestations(ctx: Ctx, tag: string, mergeSha: string, terraformRun?: number): Promise<void> {
+export async function verifyAttestations(ctx: Ctx, tag: string, mergeSha: string, terraformRun?: number): Promise<void> {
   const inputs: Record<string, string> = { tag, merge_sha: mergeSha, client_repository: CLIENT, signer_workflow: SIGNER, predicate_type: PREDICATE };
   if (terraformRun) {
-    const { data: variable } = await ctx.gh.rest.actions.getEnvironmentVariable({ ...splitRepository(SERVER), environment_name: "csm-ci", name: "CSM_CI_TERRAFORM_PROVIDER_GPG_FINGERPRINT" });
-    assert(/^[A-F0-9]{40}$/.test(variable.value), "testing environment must have the separate RSA key's full primary fingerprint");
     inputs.terraform_signer_run = String(terraformRun);
-    inputs.terraform_fingerprint = variable.value;
+    inputs.terraform_fingerprint = TERRAFORM_TEST_FINGERPRINT;
   }
   const run = await dispatch(ctx, SERVER, "csm-ci-release-verify.yml", inputs);
   assert(run.conclusion === "success", `hosted attestation verification concluded ${run.conclusion} (${run.html_url})`);
