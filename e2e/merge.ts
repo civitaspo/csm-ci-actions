@@ -1,7 +1,7 @@
 import { marker } from "../src/lib/notify.ts";
 import { parseConfig } from "../src/lib/config.ts";
 import { splitRepository } from "../src/lib/github.ts";
-import { assert, CLIENT, closePr, dispatch, expectOp, openPr, type Pr, postComment, type Scenario, SERVER, SERVER_BOT_ID, serverComments, until } from "./harness.ts";
+import { approverReviews, assert, CLIENT, closePr, dispatch, expectOp, openPr, type Pr, postComment, type Scenario, SERVER, SERVER_BOT_ID, serverComments, until, withServerConfig } from "./harness.ts";
 
 const RULESET_ID = 25785295;
 const TEST_BOT_ID = 347402450;
@@ -165,6 +165,38 @@ export const merge: Scenario[] = [
       assert(merged.merged && merged.merge_commit_sha, `pull request #${pr.number} was not merged`);
       const receipts = (await serverComments(ctx, pr)).filter((body) => body.includes(marker("merge", comment.id)));
       assert(receipts.length === 1 && receipts[0]?.includes("merged as"), `expected one merge receipt, found ${receipts.length}`);
+    }),
+  },
+  {
+    name: "/merge squashes an explicitly approved workflow change at the pinned head",
+    serial: true,
+    run: (ctx) => withServerConfig(ctx, (text) => {
+      const current = 'exempt: [{ id: 4525500, login: civitaspo }]';
+      assert(text.includes(current), "could not find the expected sensitive-path exemption");
+      return text.replace(current, "exempt: []");
+    }, async () => {
+      const since = new Date(Date.now() - 2_000);
+      const path = `.github/workflows/e2e-merge-${crypto.randomUUID()}.yml`;
+      const content = "name: Merge permission fixture\non: workflow_dispatch\npermissions: {}\njobs:\n  fixture:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: 'true'\n";
+      const pr = await openPr(ctx, "signed", ctx.gh, undefined, ctx.gh, path, false, content);
+      try {
+        await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number } }, since, "success");
+        assert(!(await approverReviews(ctx, pr)).some((review) => review.state === "APPROVED" && review.commit_id === pr.head), "workflow change unexpectedly received automatic approval");
+        const approval = await postComment(ctx, pr, "/approve");
+        await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: approval.id } }, approval.since, "success");
+        assert((await approverReviews(ctx, pr)).some((review) => review.state === "APPROVED" && review.commit_id === pr.head), "trusted /approve did not approve the workflow change at its pinned head");
+        const comment = await postComment(ctx, pr, "/merge");
+        const requestInfo = fromComment(pr, comment);
+        await expectOp(ctx, requestInfo.match, requestInfo.since, "success");
+        const { data: merged } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
+        assert(merged.merged && merged.merge_commit_sha && merged.head.sha === pr.head, `workflow pull request #${pr.number} was not merged at its approved head`);
+        const { data: file } = await ctx.gh.rest.repos.getContent({ ...splitRepository(CLIENT), path, ref: merged.merge_commit_sha });
+        assert(!Array.isArray(file) && file.type === "file" && Buffer.from(file.content, "base64").toString("utf8") === content, "merged workflow content differs from the approved change");
+        const receipts = (await serverComments(ctx, pr)).filter((body) => body.includes(marker("merge", comment.id)));
+        assert(receipts.length === 1 && receipts[0]?.includes("merged as"), `expected one workflow merge receipt, found ${receipts.length}`);
+      } finally {
+        await closePr(ctx, pr);
+      }
     }),
   },
   {

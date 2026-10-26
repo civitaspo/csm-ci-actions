@@ -5,6 +5,7 @@ import { parse } from "yaml";
 import { z } from "zod";
 
 const stepSchema = z.object({
+  id: z.string().optional(),
   uses: z.string().optional(),
   if: z.string().optional(),
   run: z.string().optional(),
@@ -67,5 +68,37 @@ describe("release build boundary", () => {
     expect(job).not.toHaveProperty("environment");
     expect(job).not.toHaveProperty("secrets");
     expect(JSON.stringify(job)).not.toMatch(/secrets\.|id-token|actions\/cache/u);
+  });
+});
+
+
+describe("merge token boundary", () => {
+  const workflow = z.object({ jobs: z.object({ op: z.object({ steps: z.array(stepSchema) }) }) }).parse(readYaml(".github/workflows/server.yml"));
+  const steps = workflow.jobs.op.steps;
+
+  test("mints the final merge token only after readiness with target repository write permissions", () => {
+    const token = steps.find((step) => step.id === "merge-token");
+    expect(token?.uses).toMatch(/^actions\/create-github-app-token@/u);
+    expect(token?.if).toBe("needs.intake.outputs.kind == 'merge' && steps.merge-ready.outputs.ready == 'true'");
+    expect(token?.with).toEqual({
+      "client-id": "${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}",
+      "private-key": "${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}",
+      owner: "${{ needs.intake.outputs.owner }}",
+      repositories: "${{ needs.intake.outputs.name }}",
+      "permission-contents": "write",
+      "permission-pull-requests": "write",
+      "permission-workflows": "write",
+    });
+    expect(steps.findIndex((step) => step.id === "merge-token")).toBeGreaterThan(steps.findIndex((step) => step.id === "merge-ready"));
+    const merge = steps.find((step) => step.with?.mode === "merge");
+    expect(merge?.with?.["write-token"]).toBe("${{ steps.merge-token.outputs.token }}");
+    expect(merge?.with?.head).toBe("${{ steps.merge-ready.outputs.head }}");
+  });
+
+  test.each(["merge-read-token", "merge-notify-token", "merge-failure-notify-token", "merge-final-read-token", "merge-final-notify-token"])("keeps workflows permission off %s", (id) => {
+    const token = steps.find((step) => step.id === id);
+    expect(token).toBeDefined();
+    expect(token?.with).not.toHaveProperty("permission-workflows");
+    expect(token?.with?.["permission-contents"]).not.toBe("write");
   });
 });
