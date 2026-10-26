@@ -38,6 +38,8 @@ Configuration comes from the triggering server commit, `GITHUB_SHA`. Discovery i
 
 ## Sponsorships
 
+This section specifies the planned contract for issue #67. A separate runtime implementation and deployment are required before use. Do not add `sponsorships` to Server configuration pinned to a revision without that implementation; its configuration schema rejects the key.
+
 The optional global `repo_settings.sponsorships` block configures the Sponsor button separately from its funding content:
 
 ```yaml
