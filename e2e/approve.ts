@@ -1,3 +1,4 @@
+import { verifyReceipt } from "./notifications.ts";
 import { splitRepository } from "../src/lib/github.ts";
 import { marker } from "../src/lib/notify.ts";
 import { completedRequestRuns, matchesAcceptedRequest, runsForComments } from "./correlation.ts";
@@ -60,6 +61,7 @@ async function expectRejectedCommand(ctx: Ctx, pr: Pr, body: string, pattern: Re
   assert((await approverReviews(ctx, pr)).length === before, "a rejected command created a review");
   const receipts = (await serverComments(ctx, pr)).filter((b) => b.includes(marker("approve", c.id)));
   assert(receipts.length === (receipt ? 1 : 0), `expected ${receipt ? "one receipt" : "no receipt"}, found ${receipts.length}`);
+  if (receipt) await verifyReceipt(ctx, pr, c, "approve", pattern);
 }
 
 // The completed client runs determine how many labels must reach the server.
@@ -157,7 +159,8 @@ export const approve: Scenario[] = [
         const approvals = await approvedAt(ctx, pr);
         assert(approvals.length === 1 && approvals[0]?.body.includes(marker("approve:command", c.id)), "no /approve approval at the head");
         assert(await rocketFromServer(ctx, c.id), "the server did not react with a rocket");
-        assert((await receipts(ctx, pr, c.id)).some((b) => b.includes("approved")), "no success receipt");
+        assert((await receipts(ctx, pr, c.id)).some((b) => b.includes("Approved the requested head")), "no success receipt");
+        await verifyReceipt(ctx, pr, c, "approve", /\/approve succeeded/u);
       }),
   },
   {

@@ -1,13 +1,13 @@
 import { type CommentFacts, checkPullState, type PullFacts, requirePrincipal, validateComment } from "./command.ts";
 import type { Config } from "./config.ts";
 import { type GitHub, splitRepository } from "./github.ts";
-import { hasServerMarker, marker, postResult } from "./notify.ts";
+import { escapeHtml, hasServerMarker, marker, postResult, receiptFooter, type ServerRun } from "./notify.ts";
 import { evaluatePullPolicies, updatePolicyCheck } from "./policy-check.ts";
 import { Rejection } from "./request.ts";
 import { fetchComment } from "./github-comment.ts";
 export { fetchComment } from "./github-comment.ts";
 
-export type ApproveContext = { server: GitHub; approver: GitHub; config: Config; repository: string; now: () => Date };
+export type ApproveContext = { server: GitHub; approver: GitHub; config: Config; repository: string; serverRun: ServerRun; now: () => Date };
 export type ApproveOutcome = { result: "approved" | "already-approved" | "declined" | "dismissed"; head: string; problems: string[] };
 
 export async function fetchPull(gh: GitHub, repository: string, pullNumber: number): Promise<PullFacts> {
@@ -124,10 +124,13 @@ export async function runApprove(ctx: ApproveContext, args: { pull_number: numbe
   await react(ctx, comment.id);
   try {
     const outcome = await commandApprove(ctx, pull, comment);
-    await postResult(ctx.server, ctx.repository, pull.number, receipt, `csm-ci: /approve of \`${outcome.head}\`: ${outcome.result}.`);
+    const message = outcome.result === "dismissed"
+      ? `csm-ci: /approve was dismissed because ${escapeHtml(outcome.problems.join("; "))}. Review the current head and post a new exact \`/approve\` comment.`
+      : "csm-ci: /approve succeeded. Approved the requested head.";
+    await postResult(ctx.server, ctx.repository, pull.number, receipt, `${message}\n\n${receiptFooter({ repository: ctx.repository, pullNumber: pull.number, commentId: comment.id, head: outcome.head, serverRun: ctx.serverRun })}`);
     return outcome;
   } catch (e) {
-    await postResult(ctx.server, ctx.repository, pull.number, receipt, `csm-ci: /approve failed: ${e instanceof Error ? e.message : String(e)}`);
+    await postResult(ctx.server, ctx.repository, pull.number, receipt, `csm-ci: /approve ${e instanceof Rejection ? "was declined" : "failed"}: ${escapeHtml(e instanceof Error ? e.message : String(e))}\n\nResolve the failure, review the current head, and post a new exact \`/approve\` comment.\n\n${receiptFooter({ repository: ctx.repository, pullNumber: pull.number, commentId: comment.id, head: pull.headSha, serverRun: ctx.serverRun })}`);
     throw e;
   }
 }

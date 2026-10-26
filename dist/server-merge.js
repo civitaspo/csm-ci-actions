@@ -36941,6 +36941,21 @@ async function postResult(gh, repository, issueNumber, markerText, body) {
   await gh.rest.issues.createComment({ ...splitRepository(repository), issue_number: issueNumber, body: `${markerText}
 ${body}` });
 }
+function escapeHtml(text) {
+  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
+}
+function receiptFooter(input) {
+  const { repository, pullNumber, commentId, head, serverRun, mergeCommit } = input;
+  const link = (url, label) => `<a href="${escapeHtml(url)}">${escapeHtml(label)}</a>`;
+  const repoUrl = `${serverRun.serverUrl}/${repository}`;
+  const links = [
+    link(`${repoUrl}/pull/${pullNumber}#issuecomment-${commentId}`, "Request"),
+    link(`${repoUrl}/commit/${head}`, `Head ${head.slice(0, 7)}`),
+    ...mergeCommit ? [link(`${repoUrl}/commit/${mergeCommit}`, `Squash commit ${mergeCommit.slice(0, 7)}`)] : [],
+    link(`${serverRun.serverUrl}/${serverRun.repository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, `Server run ${serverRun.id}, attempt ${serverRun.attempt}`)
+  ];
+  return `<sub>${links.join(" · ")}</sub>`;
+}
 
 // src/lib/policies/signed-commits.ts
 function signedCommits(_, { trust }) {
@@ -37305,7 +37320,7 @@ async function waitForMerge(ctx, args) {
     throw new Error("notification token is required after accepting a merge command");
   try {
     await notify.rest.reactions.createForIssueComment({ ...splitRepository(ctx.repository), comment_id: args.comment_id, content: "rocket" });
-    ctx.onAccepted?.();
+    ctx.onAccepted?.(pull.headSha);
     const deadline = ctx.now().getTime() + ctx.config.merge.deadline_minutes * 60000;
     let last;
     while (ctx.now().getTime() <= deadline) {
@@ -37324,7 +37339,7 @@ async function waitForMerge(ctx, args) {
     }
     throw new Rejection(`merge readiness deadline passed: ${last instanceof Error ? last.message : "not ready"}`);
   } catch (error) {
-    await postFailureReceipt(ctx, pull.number, receipt, error);
+    await postFailureReceipt(ctx, args, pull.headSha, error);
     throw error;
   }
 }
@@ -37345,17 +37360,21 @@ async function postReceipt(ctx, issueNumber, receipt, body) {
       throw error;
   }
 }
-async function postFailureReceipt(ctx, issueNumber, receipt, failure) {
+async function postFailureReceipt(ctx, args, head, failure) {
   const reason = failure instanceof Error ? failure.message : String(failure);
   try {
-    await postReceipt(ctx, issueNumber, receipt, `csm-ci: /merge failed: ${reason}`);
+    await postMergeFailureReceipt(ctx, args, reason, head);
   } catch (receiptError) {
     const receiptReason = receiptError instanceof Error ? receiptError.message : String(receiptError);
     throw new AggregateError([failure, receiptError], `${reason}; additionally failed to post the merge failure receipt: ${receiptReason}`);
   }
 }
-async function postMergeFailureReceipt(ctx, args, message) {
-  await postReceipt(ctx, args.pull_number, marker("merge", args.comment_id), `csm-ci: /merge failed: ${message}`);
+async function postMergeFailureReceipt(ctx, args, message, head) {
+  await postReceipt(ctx, args.pull_number, marker("merge", args.comment_id), `csm-ci: /merge failed: ${escapeHtml(message)}
+
+Resolve the failure, confirm approval and checks for the current head, and post a new exact \`/merge\` comment.
+
+${receiptFooter({ repository: ctx.repository, pullNumber: args.pull_number, commentId: args.comment_id, head, serverRun: ctx.serverRun })}`);
 }
 async function runMerge(ctx, args, expected) {
   const receipt = marker("merge", args.comment_id);
@@ -37365,7 +37384,7 @@ async function runMerge(ctx, args, expected) {
   try {
     await refreshConfig(ctx);
   } catch (error) {
-    await postFailureReceipt(ctx, args.pull_number, receipt, error);
+    await postFailureReceipt(ctx, args, expected.head, error);
     throw error;
   }
   const existing = await ctx.server.paginate(ctx.server.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: args.pull_number, per_page: 100 });
@@ -37418,11 +37437,13 @@ async function runMerge(ctx, args, expected) {
       outcome = { result: "merged", head: expected.head, mergeCommit: data.sha };
       break;
     }
-    await postReceipt(ctx, pull.number, receipt, `csm-ci: /merge of \`${expected.head}\`: merged as \`${outcome.mergeCommit}\`.`);
+    await postReceipt(ctx, pull.number, receipt, `csm-ci: /merge succeeded. Squash-merged this pull request.
+
+${receiptFooter({ repository: ctx.repository, pullNumber: pull.number, commentId: args.comment_id, head: expected.head, serverRun: ctx.serverRun, mergeCommit: outcome.mergeCommit })}`);
     return outcome;
   } catch (error) {
     if (!outcome && !uncertain)
-      await postFailureReceipt(ctx, args.pull_number, receipt, error);
+      await postFailureReceipt(ctx, args, expected.head, error);
     throw error;
   }
 }
@@ -37448,6 +37469,7 @@ async function main() {
     config,
     reloadConfig: () => loadCurrentServerConfig(configReader, workflowRepository, configPath),
     repository: getInput("repository", { required: true }),
+    serverRun: { serverUrl: env("GITHUB_SERVER_URL"), repository: env("GITHUB_REPOSITORY"), id: env("GITHUB_RUN_ID"), attempt: env("GITHUB_RUN_ATTEMPT") },
     now: () => new Date,
     sleep: async (milliseconds) => {
       await sleep(milliseconds);
@@ -37455,7 +37477,10 @@ async function main() {
   };
   const mode = getInput("mode", { required: true });
   if (mode === "wait") {
-    ctx.onAccepted = () => setOutput("accepted", "true");
+    ctx.onAccepted = (head) => {
+      setOutput("accepted", "true");
+      setOutput("head", head);
+    };
     try {
       const ready = await waitForMerge(ctx, args);
       setOutput("ready", "true");
@@ -37468,7 +37493,7 @@ async function main() {
     return;
   }
   if (mode === "failure-receipt") {
-    await postMergeFailureReceipt(ctx, args, getInput("failure-message", { required: true }));
+    await postMergeFailureReceipt(ctx, args, getInput("failure-message", { required: true }), getInput("head", { required: true }));
     return;
   }
   if (mode !== "merge")

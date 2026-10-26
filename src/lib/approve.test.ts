@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { z } from "zod";
 import { type ApproveContext, runApprove } from "./approve.ts";
 import { github } from "./github.ts";
 import { marker } from "./notify.ts";
@@ -12,6 +13,20 @@ const P = "/repos/owner/repo";
 const NOW = new Date("2026-10-24T12:00:00Z");
 const alice = { id: 10, login: "alice", type: "User" };
 const mallory = { id: 66, login: "mallory", type: "User" };
+
+function receiptBody(fetch: ReturnType<typeof fakeFetch>): string {
+  const request = fetch.requests.find((request) => request.method === "POST" && request.path === `${P}/issues/12/comments`);
+  return z.object({ body: z.string() }).parse(JSON.parse(request?.body ?? "{}")).body;
+}
+function expectReceipt(body: string, operation: string): void {
+  expect(body.startsWith(`${marker(operation, 9)}\ncsm-ci: /${operation}`)).toBe(true);
+  expect(body.split("<sub>")).toHaveLength(2);
+  expect(body.endsWith("</sub>")).toBe(true);
+  expect(body).toContain(`<a href="https://github.com/owner/repo/pull/12#issuecomment-9">Request</a>`);
+  expect(body).toContain(`<a href="https://github.com/owner/repo/commit/${HEAD}">Head aaaaaaa</a>`);
+  expect(body).toContain(`<a href="https://github.com/owner/server/actions/runs/345/attempts/2">Server run 345, attempt 2</a>`);
+  expect(body.slice(0, body.indexOf("<sub>"))).not.toContain('<a href=');
+}
 
 function pull(over: Record<string, unknown> = {}) {
   return {
@@ -79,11 +94,22 @@ function context(s: Setup = {}) {
     { method: "POST", path: `${P}/pulls/12/reviews`, body: { id: 77, user: s.reviewer ?? { id: APPROVER_BOT_ID, login: "approver[bot]" } } },
     { method: "PUT", path: `${P}/pulls/12/reviews/77/dismissals`, body: { id: 77 } },
   ]);
-  const ctx: ApproveContext = { server: github("s", server), approver: github("a", approver), config: s.config ?? config(), repository: "owner/repo", now: () => NOW };
+  const ctx: ApproveContext = { server: github("s", server), approver: github("a", approver), config: s.config ?? config(), repository: "owner/repo", serverRun: { serverUrl: "https://github.com", repository: "owner/server", id: "345", attempt: "2" }, now: () => NOW };
   return { ctx, server, approver };
 }
 
 describe("runApprove automatic", () => {
+  test.each([
+    ["approved", {}],
+    ["declined", { commits: [commit(HEAD, { committer: mallory, author: mallory })] }],
+    ["already-approved", { reviews: [{ user: { id: APPROVER_BOT_ID }, state: "APPROVED", commit_id: HEAD }] }],
+    ["dismissed", { pullAfter: pull({ head: { sha: NEXT, repo: { full_name: "owner/repo" } } }) }],
+  ] satisfies [Awaited<ReturnType<typeof runApprove>>["result"], Setup][])("automatic %s does not emit a result comment", async (result, setup) => {
+    const { ctx, server } = context(setup);
+    expect((await runApprove(ctx, { pull_number: 12 })).result).toBe(result);
+    expect(server.calls).not.toContain(`POST ${P}/issues/12/comments`);
+  });
+
   test("approves a pull request whose commits are all trusted", async () => {
     const { ctx, approver } = context();
     expect(await runApprove(ctx, { pull_number: 12 })).toEqual({ result: "approved", head: HEAD, problems: [] });
@@ -154,8 +180,20 @@ describe("runApprove commands", () => {
     expect(server.calls).toContain(`POST ${P}/issues/comments/9/reactions`);
     expect(server.calls).toContain(`POST ${P}/issues/12/comments`);
     expect(approver.calls).toEqual([`POST ${P}/pulls/12/reviews`]);
+    const body = receiptBody(server);
+    expectReceipt(body, "approve");
+    expect(body.split("<sub>")[0]).toBe(`${marker("approve", 9)}\ncsm-ci: /approve succeeded. Approved the requested head.\n\n`);
   });
 
+
+  test("an operational approval failure reports its actual error and corrective command", async () => {
+    const { ctx, server } = context({ reviewer: { id: 5, login: 'other<sub>[bot]' } });
+    await expect(runApprove(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow(/approver token belongs/);
+    const body = receiptBody(server);
+    expectReceipt(body, "approve");
+    expect(body.split("<sub>")[0]).toContain('/approve failed: the approver token belongs to other&lt;sub&gt;[bot], not approver[bot]');
+    expect(body.split("<sub>")[0]).toContain("Resolve the failure, review the current head, and post a new exact `/approve` comment.");
+  });
   test("the review body carries the command marker", async () => {
     const seen: string[] = [];
     const { ctx } = context();
@@ -206,6 +244,14 @@ describe("runApprove commands", () => {
     await expect(run).rejects.toThrow(Rejection);
     expect(approver.calls).toEqual([]);
     expect(server.calls.includes(`POST ${P}/issues/12/comments`)).toBe(receipt);
+    if (receipt) {
+      const body = receiptBody(server);
+      expectReceipt(body, "approve");
+      const primary = body.split("<sub>")[0];
+      expect(primary).toContain("/approve was declined:");
+      expect(primary).toMatch(message);
+      expect(primary).toContain("Resolve the failure, review the current head, and post a new exact `/approve` comment.");
+    }
     // The rocket means accepted: only requests that got as far as a receipt were accepted.
     expect(server.calls.includes(`POST ${P}/issues/comments/9/reactions`)).toBe(receipt);
   });
@@ -216,9 +262,13 @@ describe("runApprove commands", () => {
   });
 
   test("an /approve approval is dismissed when the head moves while approving", async () => {
-    const { ctx, approver } = context({ pullAfter: pull({ head: { sha: NEXT, repo: { full_name: "owner/repo" } } }) });
+    const { ctx, server, approver } = context({ pullAfter: pull({ head: { sha: NEXT, repo: { full_name: "owner/repo" } } }) });
     expect((await runApprove(ctx, { pull_number: 12, comment_id: 9 })).result).toBe("dismissed");
     expect(approver.calls).toContain(`PUT ${P}/pulls/12/reviews/77/dismissals`);
+    const body = receiptBody(server);
+    expectReceipt(body, "approve");
+    expect(body.split("<sub>")[0]).toContain(`/approve was dismissed because head moved to ${NEXT}. Review the current head and post a new exact \`/approve\` comment.`);
+    expect(body).not.toContain("/approve succeeded");
   });
 });
 

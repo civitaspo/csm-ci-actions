@@ -16,6 +16,7 @@ async function main(): Promise<void> {
       approver: github(core.getInput("approver-token", { required: true })),
       config,
       repository: core.getInput("repository", { required: true }),
+      serverRun: { serverUrl: env("GITHUB_SERVER_URL"), repository: env("GITHUB_REPOSITORY"), id: env("GITHUB_RUN_ID"), attempt: env("GITHUB_RUN_ATTEMPT") },
       now: () => new Date(),
     },
     JSON.parse(core.getInput("args", { required: true })),
