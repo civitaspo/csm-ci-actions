@@ -122,7 +122,7 @@ The server matches rulesets by name and `source_type: Repository`. Duplicate nam
 
 A scheduled run does not create `controlled-merges` or activate a disabled ruleset. Every repair that does not activate it, scheduled or dispatched, omits its enforcement, so a stop set during the run is kept. Set its enforcement to `disabled` for an emergency stop. Manual dispatch activates it, creating it when absent, only after these checks pass:
 
-- The default branch contains a merge caller for newly created issue comments, with `secrets: inherit` and no job-level `if:`. The server also needs its label caller under the same rules.
+- The default branch contains a merge caller for newly created issue comments, with `secrets: inherit` and no job-level `if:`. The server also needs its label caller under the same rules. This describes the current runtime. The [approved explicit secret contract](first-release-plan.md#explicit-secret-contract-and-staged-migration) replaces inheritance with same-name mappings in a separate implementation. It preserves the caller triggers, unconditional jobs, and activation rejection messages.
 - The configured approver App can obtain a repository-scoped contents-write token, and its bot identity matches configuration.
 - No open pull request has auto-merge queued.
 - An existing `controlled-merges` ruleset has only the Server App's `pull_request` bypass.

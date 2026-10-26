@@ -88,6 +88,12 @@ repositories:
 
 The schema rejects unknown keys and puts the server bot in no trust list.
 
+## Explicit secret contract migration
+
+The [approved explicit secret contract](first-release-plan.md#explicit-secret-contract-and-staged-migration) replaces inherited secrets after its runtime implementation and deployment. The examples below describe the current runtime. Keep inheritance until the selected reusable pin and repo-settings activation preflight support named mappings.
+
+The target contract requires only `CSM_CI_CLIENT_APP_PRIVATE_KEY` in each client caller. Server callers name the Server App key and enabled feature credentials. Repo-settings forwards only the server and approver names at both nested target calls. Strong credentials remain in the server's `csm-ci` environment with the same deployment restriction. Follow the plan's table for required and feature-specific names. Upgrade callers, fixtures, templates, and action locks together, and verify bootstrap activation before production rollout. No new credential placement or App permission is needed.
+
 ## 4. Add the server workflows
 
 Pin both calls to a full commit SHA of csm-ci-actions.
@@ -104,7 +110,7 @@ on:
 permissions: {}
 jobs:
   server:
-    # Environment secrets reach the called job only through inherit.
+    # This caller uses inherit under the current runtime contract.
     # jactionlint ignore=secrets-inherit
     uses: civitaspo/csm-ci-actions/.github/workflows/server.yml@<sha>
     secrets: inherit
@@ -115,7 +121,7 @@ jobs:
       attestations: write
 ```
 
-`secrets: inherit` is required. Without it, the environment secrets are empty in the called job.
+`secrets: inherit` is required by the current runtime contract. Named mappings with environment secrets passed the [isolated probe](handoff.md#explicit-secret-contract-probe), but require the implementation described above.
 
 `.github/workflows/csm-ci-check.yml` validates `csm-ci.yaml` and lints the workflows on every change:
 
@@ -158,7 +164,7 @@ on:
 permissions: {}
 jobs:
   approve:
-    # The client App key reaches the called job only through inherit.
+    # This caller uses inherit under the current runtime contract.
     # jactionlint ignore=secrets-inherit
     uses: civitaspo/csm-ci-actions/.github/workflows/client-approve.yml@<sha>
     secrets: inherit
@@ -197,7 +203,7 @@ on:
 permissions: {}
 jobs:
   merge:
-    # The client App key reaches the called job only through inherit.
+    # This caller uses inherit under the current runtime contract.
     # jactionlint ignore=secrets-inherit
     uses: civitaspo/csm-ci-actions/.github/workflows/client-merge.yml@<sha>
     secrets: inherit
@@ -275,7 +281,7 @@ jobs:
     uses: civitaspo/csm-ci-actions/.github/workflows/server-repo-settings.yml@<sha>
     with:
       repository: ${{ inputs.repository || '' }}
-    # Environment secrets reach the reusable workflow only through inherit.
+    # This caller uses inherit under the current runtime contract.
     # jactionlint ignore=secrets-inherit
     secrets: inherit
 ```
