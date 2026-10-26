@@ -1,5 +1,7 @@
 import { withRepositoryPolicy } from "./repository-policy.ts";
 import { verifyReceipt } from "./notifications.ts";
+import { OWNER_IDENTITY } from "./pr-metadata.ts";
+import { prCase } from "./harness.ts";
 import { marker } from "../src/lib/notify.ts";
 import { parseConfig } from "../src/lib/config.ts";
 import { splitRepository } from "../src/lib/github.ts";
@@ -39,10 +41,10 @@ export async function withTestBotConfigured(ctx: Parameters<Scenario["run"]>[0],
   }, run);
 }
 
-async function openBotPr(ctx: Parameters<Scenario["run"]>[0]): Promise<{ pr: Pr; since: Date }> {
+async function openBotPr(ctx: Parameters<Scenario["run"]>[0], intent: import("./pr-metadata.ts").PrIntent): Promise<{ pr: Pr; since: Date }> {
   assert(ctx.untrusted, "the untrusted test token is not configured");
   const since = new Date(Date.now() - 2_000);
-  const pr = await openPr(ctx, "signed", ctx.untrusted, undefined, ctx.untrusted);
+  const pr = await openPr(ctx, { intent, kind: "signed", as: ctx.untrusted, prAs: ctx.untrusted });
   const { data } = await ctx.gh.rest.pulls.get({ owner: "civitaspo", repo: "testing-csm-ci-client", pull_number: pr.number });
   assert(data.user?.id === TEST_BOT_ID, `expected test bot #${TEST_BOT_ID} to author pull request #${pr.number}, found ${data.user?.id}`);
   return { pr, since };
@@ -54,9 +56,9 @@ async function postBotMergeRequest(ctx: Parameters<Scenario["run"]>[0], pr: Pr):
   return { comment, requestInfo: fromComment(pr, comment) };
 }
 
-async function withSignedPr(ctx: Parameters<Scenario["run"]>[0], fn: (pr: Pr) => Promise<void>): Promise<void> {
+async function withSignedPr(ctx: Parameters<Scenario["run"]>[0], fn: (pr: Pr) => Promise<void>, intent = prCase(ctx, "fixture")): Promise<void> {
   const since = new Date(Date.now() - 2_000);
-  const pr = await openPr(ctx, "signed");
+  const pr = await openPr(ctx, { intent, kind: "signed" });
   try {
     await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number } }, since, "success");
     await fn(pr);
@@ -128,6 +130,27 @@ async function withReviewRulesetDisabled(ctx: Parameters<Scenario["run"]>[0], ru
 
 export const merge: Scenario[] = [
   {
+    id: "merge.authorized",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "/merge by an authorized merger squashes the approved head and posts one receipt",
+        classification: "positive",
+        checks: [
+          "approval-policy",
+          "head-consistency"
+        ],
+        steps: [
+          {
+            "operation": "merge",
+            "outcome": "permitted",
+            "expected": "The authorized command squashes the approved head and posts one receipt"
+          }
+        ],
+        identity: OWNER_IDENTITY
+      }
+    },
     name: "/merge by an authorized merger squashes the approved head and posts one receipt",
     run: (ctx) => withSignedPr(ctx, async (pr) => {
       const comment = await postComment(ctx, pr, "/merge");
@@ -141,6 +164,28 @@ export const merge: Scenario[] = [
     }),
   },
   {
+    id: "merge.workflow-change",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "/merge squashes an explicitly approved workflow change at the pinned head",
+        classification: "positive",
+        checks: [
+          "approval-policy",
+          "path-safety",
+          "head-consistency"
+        ],
+        steps: [
+          {
+            "operation": "merge",
+            "outcome": "permitted",
+            "expected": "Explicit approval permits the workflow change and merge at its pinned head"
+          }
+        ],
+        identity: OWNER_IDENTITY
+      }
+    },
     name: "/merge squashes an explicitly approved workflow change at the pinned head",
     serial: true,
     run: (ctx) => withServerConfig(ctx, (text) => {
@@ -151,7 +196,7 @@ export const merge: Scenario[] = [
       const since = new Date(Date.now() - 2_000);
       const path = `.github/workflows/e2e-merge-${crypto.randomUUID()}.yml`;
       const content = "name: Merge permission fixture\non: workflow_dispatch\npermissions: {}\njobs:\n  fixture:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: 'true'\n";
-      const pr = await openPr(ctx, "signed", ctx.gh, undefined, ctx.gh, path, false, content);
+      const pr = await openPr(ctx, { intent: prCase(ctx, "fixture"), kind: "signed", filePath: path, fileContent: content });
       try {
         await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number } }, since, "success");
         assert(!(await approverReviews(ctx, pr)).some((review) => review.state === "APPROVED" && review.commit_id === pr.head), "workflow change unexpectedly received automatic approval");
@@ -174,6 +219,26 @@ export const merge: Scenario[] = [
     }),
   },
   {
+    id: "merge.notification-scope",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "the notification-only Server App token can react and comment but cannot merge an approved pull request",
+        classification: "negative",
+        checks: [
+          "identity-trust"
+        ],
+        steps: [
+          {
+            "operation": "merge",
+            "outcome": "rejected",
+            "expected": "The notification-only token reacts and comments but cannot merge the approved PR"
+          }
+        ],
+        identity: OWNER_IDENTITY
+      }
+    },
     name: "the notification-only Server App token can react and comment but cannot merge an approved pull request",
     serial: true,
     run: (ctx) => withSignedPr(ctx, async (pr) => {
@@ -192,6 +257,31 @@ export const merge: Scenario[] = [
     }),
   },
   {
+    id: "merge.non-merger",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "a non-merger's /merge request fails without a receipt and leaves the pull request open",
+        classification: "negative",
+        checks: [
+          "identity-trust",
+          "bot-ownership"
+        ],
+        steps: [
+          {
+            "operation": "merge",
+            "outcome": "rejected",
+            "expected": "The unconfigured Bot merger is rejected without a receipt and the PR remains open"
+          }
+        ],
+        identity: [
+          "PR author: civitaspo (ID 4525500).",
+          "Effective commit identity: civitaspo (ID 4525500); GitHub-signed commits use the owner as author and web-flow as committer.",
+          "Command requester: testing-csm-ci-untrusted-committer[bot] (ID 347402450). The Bot is not configured in trust.bot_mergers."
+        ]
+      }
+    },
     name: "a non-merger's /merge request fails without a receipt and leaves the pull request open",
     needsUntrusted: true,
     run: (ctx) => withSignedPr(ctx, async (pr) => {
@@ -205,6 +295,26 @@ export const merge: Scenario[] = [
     }),
   },
   {
+    id: "merge.disabled-review-rule",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "an unapproved /merge request is rejected even when the review ruleset is disabled",
+        classification: "negative",
+        checks: [
+          "approval-policy"
+        ],
+        steps: [
+          {
+            "operation": "merge",
+            "outcome": "rejected",
+            "expected": "Merge refuses an unapproved head even with the review ruleset disabled"
+          }
+        ],
+        identity: OWNER_IDENTITY
+      }
+    },
     name: "an unapproved /merge request is rejected even when the review ruleset is disabled",
     serial: true,
     run: (ctx) => withSignedPr(ctx, async (pr) => {
@@ -218,6 +328,26 @@ export const merge: Scenario[] = [
     }),
   },
   {
+    id: "merge.changed-head",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "a head change while /merge waits aborts the merge",
+        classification: "negative",
+        checks: [
+          "head-consistency"
+        ],
+        steps: [
+          {
+            "operation": "merge",
+            "outcome": "rejected",
+            "expected": "A head change while waiting aborts merge and leaves the PR open"
+          }
+        ],
+        identity: OWNER_IDENTITY
+      }
+    },
     name: "a head change while /merge waits aborts the merge",
     run: (ctx) => withSignedPr(ctx, async (pr) => {
       await dismissApproval(ctx, pr);
@@ -230,6 +360,26 @@ export const merge: Scenario[] = [
     }),
   },
   {
+    id: "merge.edited-command",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "an edited /merge comment while waiting aborts the merge",
+        classification: "negative",
+        checks: [
+          "command-evidence"
+        ],
+        steps: [
+          {
+            "operation": "merge",
+            "outcome": "rejected",
+            "expected": "Editing the command while waiting aborts merge and leaves the PR open"
+          }
+        ],
+        identity: OWNER_IDENTITY
+      }
+    },
     name: "an edited /merge comment while waiting aborts the merge",
     run: (ctx) => withSignedPr(ctx, async (pr) => {
       await dismissApproval(ctx, pr);
@@ -242,6 +392,26 @@ export const merge: Scenario[] = [
     }),
   },
   {
+    id: "merge.deleted-command",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "a deleted /merge comment while waiting aborts the merge",
+        classification: "negative",
+        checks: [
+          "command-evidence"
+        ],
+        steps: [
+          {
+            "operation": "merge",
+            "outcome": "rejected",
+            "expected": "Deleting the command while waiting aborts merge and leaves the PR open"
+          }
+        ],
+        identity: OWNER_IDENTITY
+      }
+    },
     name: "a deleted /merge comment while waiting aborts the merge",
     run: (ctx) => withSignedPr(ctx, async (pr) => {
       await dismissApproval(ctx, pr);
@@ -254,6 +424,27 @@ export const merge: Scenario[] = [
     }),
   },
   {
+    id: "merge.approval-timeout",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "/merge times out when the approver has not approved the current head",
+        classification: "negative",
+        checks: [
+          "approval-policy",
+          "replay"
+        ],
+        steps: [
+          {
+            "operation": "merge",
+            "outcome": "rejected",
+            "expected": "Merge times out without approval; replay is rejected without another receipt"
+          }
+        ],
+        identity: OWNER_IDENTITY
+      }
+    },
     name: "/merge times out when the approver has not approved the current head",
     run: (ctx) => withSignedPr(ctx, async (pr) => {
       await dismissApproval(ctx, pr);
@@ -271,6 +462,75 @@ export const merge: Scenario[] = [
     }),
   },
   {
+    id: "merge.configured-bot-ownership",
+    cases: {
+      "repository-denied": { id: "repository-denied", target: "client", title: "Repository override rejects configured Bot merge requests", classification: "negative", checks: ["identity-trust", "bot-ownership"], steps: [{ operation: "approve", outcome: "permitted", expected: "The signed configured Bot PR receives automatic approval" }, { operation: "merge", outcome: "rejected", expected: "The repository allow_bot_requests override rejects the Bot request and leaves this PR unmerged" }], identity: ["PR author, effective commit identity and command requester: testing-csm-ci-untrusted-committer[bot] (ID 347402450).", "Temporarily configured in trust.committers and trust.bot_mergers with sensitive-path exemptions; the nested repository override sets merge.allow_bot_requests to false. The harness attempts to restore both settings."] },
+      "other-author": {
+        id: "other-author",
+        target: "client",
+        title: "Configured Bot cannot merge another author PR",
+        classification: "negative",
+        checks: [
+          "bot-ownership",
+          "identity-trust"
+        ],
+        steps: [
+          {
+            "operation": "merge",
+            "outcome": "rejected",
+            "expected": "PR remains unmerged because its author is the owner, not the requesting Bot."
+          }
+        ],
+        identity: [
+          "PR author and effective commit identity: civitaspo (ID 4525500).",
+          "Command requester: testing-csm-ci-untrusted-committer[bot] (ID 347402450).",
+          "The test temporarily adds testing-csm-ci-untrusted-committer[bot] (ID 347402450) to trust.committers and trust.bot_mergers. The repository permits Bot requests and exempts the owner and this Bot from its all-path sensitivity. The harness attempts to restore the original configuration."
+        ]
+      },
+      "mixed-commits": {
+        id: "mixed-commits",
+        target: "client",
+        title: "Configured Bot cannot merge mixed commit identities",
+        classification: "negative",
+        checks: [
+          "bot-ownership",
+          "identity-trust"
+        ],
+        steps: [
+          {
+            "operation": "merge",
+            "outcome": "rejected",
+            "expected": "PR remains unmerged because an owner commit is added after the Bot commit."
+          }
+        ],
+        identity: [
+          "PR author and initial effective commit identity: testing-csm-ci-untrusted-committer[bot] (ID 347402450).",
+          "Later effective commit identity: civitaspo (ID 4525500). Command requester: testing-csm-ci-untrusted-committer[bot] (ID 347402450).",
+          "The test temporarily adds testing-csm-ci-untrusted-committer[bot] (ID 347402450) to trust.committers and trust.bot_mergers. The repository permits Bot requests and exempts the owner and this Bot from its all-path sensitivity. The harness attempts to restore the original configuration."
+        ]
+      },
+      "own-pr": {
+        id: "own-pr",
+        target: "client",
+        title: "Configured Bot merges its own PR",
+        classification: "positive",
+        checks: [
+          "bot-ownership",
+          "identity-trust"
+        ],
+        steps: [
+          {
+            "operation": "merge",
+            "outcome": "permitted",
+            "expected": "The configured Bot request succeeds and the Server App merges this PR."
+          }
+        ],
+        identity: [
+          "PR author, effective commit identity and command requester: testing-csm-ci-untrusted-committer[bot] (ID 347402450).",
+          "The test temporarily adds testing-csm-ci-untrusted-committer[bot] (ID 347402450) to trust.committers and trust.bot_mergers. The repository permits Bot requests and exempts the owner and this Bot from its all-path sensitivity. The harness attempts to restore the original configuration."
+        ]
+      }
+    },
     name: "a configured bot can merge its own pull request but not another author's pull request or commit",
     needsUntrusted: true,
     serial: true,
@@ -286,12 +546,12 @@ export const merge: Scenario[] = [
           await expectOp(ctx, requestInfo.match, requestInfo.since, "failure", /bot merger testing-csm-ci-untrusted-committer\[bot\] can merge only its own pull request/);
           await noMerge(ctx, pr);
           assert(!(await serverComments(ctx, pr)).some((body) => body.includes(marker("merge", comment.id))), "rejected bot ownership request posted a receipt");
-        });
+        }, prCase(ctx, "other-author"));
 
         await withRepositoryPolicy(ctx, { merge: { allow_bot_requests: false } }, async () => {
           let denied: Pr | undefined;
           try {
-            const opened = await openBotPr(ctx);
+            const opened = await openBotPr(ctx, prCase(ctx, "repository-denied"));
             denied = opened.pr;
             await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: denied.number } }, opened.since, "success");
             const { comment, requestInfo } = await postBotMergeRequest(ctx, denied);
@@ -303,7 +563,7 @@ export const merge: Scenario[] = [
 
         let mixedPr: Pr | undefined;
         try {
-          const opened = await openBotPr(ctx);
+          const opened = await openBotPr(ctx, prCase(ctx, "mixed-commits"));
           mixedPr = opened.pr;
           await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: mixedPr.number } }, opened.since, "success");
           await pushSignedCommit(ctx, mixedPr, mixedPr.head);
@@ -317,7 +577,7 @@ export const merge: Scenario[] = [
 
         let botPr: Pr | undefined;
         try {
-          const opened = await openBotPr(ctx);
+          const opened = await openBotPr(ctx, prCase(ctx, "own-pr"));
           botPr = opened.pr;
           await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: botPr.number } }, opened.since, "success");
           const { comment, requestInfo } = await postBotMergeRequest(ctx, botPr);

@@ -3,6 +3,8 @@ import { splitRepository } from "../src/lib/github.ts";
 
 export const smoke: Scenario[] = [
   {
+    id: "smoke.request-1",
+    cases: {},
     name: "server and approver apps are installed with the planned permissions",
     run: async (ctx) => {
       const run = await dispatch(ctx, SERVER, "csm-ci-probe.yml");
@@ -10,6 +12,8 @@ export const smoke: Scenario[] = [
     },
   },
   {
+    id: "smoke.request-2",
+    cases: {},
     name: "client app is installed only on the server repository",
     run: async (ctx) => {
       const run = await dispatch(ctx, CLIENT, "csm-ci-probe.yml");
@@ -17,6 +21,8 @@ export const smoke: Scenario[] = [
     },
   },
   {
+    id: "smoke.request-3",
+    cases: {},
     name: "the server check validates csm-ci.yaml and lints the server workflows",
     run: async (ctx) => {
       const run = await dispatch(ctx, SERVER, "csm-ci-check.yml");
@@ -24,6 +30,8 @@ export const smoke: Scenario[] = [
     },
   },
   {
+    id: "smoke.request-4",
+    cases: {},
     name: "a client app label passes intake and is deleted",
     run: async (ctx) => {
       const request = await smokeRequest(ctx, "policy-check", "1");
@@ -31,6 +39,8 @@ export const smoke: Scenario[] = [
     },
   },
   {
+    id: "smoke.request-5",
+    cases: {},
     name: "a request label created by a human skips intake and is deleted",
     run: async (ctx) => {
       const since = new Date(Date.now() - 2_000);

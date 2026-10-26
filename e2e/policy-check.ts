@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { POLICY_FAILURE_MARKER } from "../src/lib/policy-report.ts";
 import { withRepositoryPolicy } from "./repository-policy.ts";
+import { OWNER_IDENTITY } from "./pr-metadata.ts";
+import { prCase } from "./harness.ts";
 import { type GitHub, splitRepository } from "../src/lib/github.ts";
 import { marker } from "../src/lib/notify.ts";
 import {
@@ -61,15 +63,11 @@ async function requestPolicy(ctx: Ctx, pr: Pr): Promise<Date> {
 
 async function openPolicyPr(ctx: Ctx, kind: "signed" | "unsigned", sensitive = false, prAs?: Ctx["untrusted"], commitAs: Ctx["untrusted"] = ctx.gh, draft = false): Promise<{ pr: Pr; since: Date }> {
   const since = new Date(Date.now() - 2_000);
-  const pr = await openPr(
-    ctx,
-    kind,
-    commitAs,
-    kind === "signed" ? undefined : OWNER_REVIEWER,
-    prAs ?? ctx.gh,
-    sensitive ? SENSITIVE_FILE : undefined,
-    draft,
-  );
+  const pr = await openPr(ctx, {
+    intent: prCase(ctx, "fixture"), kind, as: commitAs,
+    author: kind === "signed" ? undefined : OWNER_REVIEWER,
+    prAs: prAs ?? ctx.gh, filePath: sensitive ? SENSITIVE_FILE : undefined, draft,
+  });
   return { pr, since };
 }
 
@@ -110,6 +108,8 @@ async function policyReports(ctx: Ctx, pr: Pr) {
 
 export const policyCheck: Scenario[] = [
   {
+    id: "policy-check.repository-sensitivity",
+    cases: { fixture: { id: "fixture", target: "client", title: "Repository sensitivity requires command approval and recovers", classification: "mixed", checks: ["path-safety", "approval-policy"], steps: [{ operation: "policy-check", outcome: "rejected", expected: "All-path repository sensitivity with no exemptions fails the policy" }, { operation: "approve", outcome: "permitted", expected: "Owner command approval restores a successful policy check" }], identity: OWNER_IDENTITY } },
     name: "repository sensitivity with empty exemptions requires command approval and recovers",
     serial: true,
     run: async (ctx) => withRepositoryPolicy(ctx, { sensitive_paths: { paths: ["**"], exempt: [] }, merge: { allow_bot_requests: false } }, async () => {
@@ -155,6 +155,28 @@ export const policyCheck: Scenario[] = [
   },
 
   {
+    id: "policy-check.trusted",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "signed, trusted commits and ordinary paths pass every policy",
+        classification: "positive",
+        checks: [
+          "identity-trust",
+          "signature",
+          "approval-policy"
+        ],
+        steps: [
+          {
+            "operation": "policy-check",
+            "outcome": "permitted",
+            "expected": "The policy check reports success on signed trusted ordinary changes"
+          }
+        ],
+        identity: OWNER_IDENTITY
+      }
+    },
     name: "signed, trusted commits and ordinary paths pass every policy",
     run: (ctx) => withPolicyPr(ctx, "signed", false, async (_pr, check) => {
       for (const policy of ["signed-commits", "trusted-committers", "sensitive-paths"]) {
@@ -163,6 +185,27 @@ export const policyCheck: Scenario[] = [
     }),
   },
   {
+    id: "policy-check.closed-shared-sha",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "a delayed request after resetting a PR to main and closing it leaves shared-SHA checks untouched",
+        classification: "negative",
+        checks: [
+          "head-consistency",
+          "request-validation"
+        ],
+        steps: [
+          {
+            "operation": "policy-check",
+            "outcome": "rejected",
+            "expected": "A delayed request for a reset closed PR leaves checks on the shared main SHA unchanged"
+          }
+        ],
+        identity: OWNER_IDENTITY
+      }
+    },
     name: "a delayed request after resetting a PR to main and closing it leaves shared-SHA checks untouched",
     run: async (ctx) => {
       const { pr, since } = await openPolicyPr(ctx, "signed");
@@ -211,6 +254,27 @@ export const policyCheck: Scenario[] = [
     },
   },
   {
+    id: "policy-check.unsigned",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "an unsigned commit fails the signed-commits policy",
+        classification: "negative",
+        checks: [
+          "signature",
+          "approval-policy"
+        ],
+        steps: [
+          {
+            "operation": "policy-check",
+            "outcome": "rejected",
+            "expected": "The server operation completes but the policy check reports signed-commits failure"
+          }
+        ],
+        identity: OWNER_IDENTITY
+      }
+    },
     name: "an unsigned commit fails the signed-commits policy",
     run: async (ctx) => {
       const { pr, since } = await openPolicyPr(ctx, "unsigned");
@@ -223,6 +287,31 @@ export const policyCheck: Scenario[] = [
     },
   },
   {
+    id: "policy-check.untrusted",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "a signed commit by an untrusted committer fails trusted-committers",
+        classification: "negative",
+        checks: [
+          "identity-trust",
+          "approval-policy"
+        ],
+        steps: [
+          {
+            "operation": "policy-check",
+            "outcome": "rejected",
+            "expected": "The server operation completes but the policy check reports trusted-committers failure"
+          }
+        ],
+        identity: [
+          "PR author: civitaspo (ID 4525500).",
+          "Effective commit identity: testing-csm-ci-untrusted-committer[bot] (ID 347402450) via a GitHub-signed App commit. The Bot is not a trusted committer.",
+          "Command requester: civitaspo (ID 4525500); automatic operations originate from the fixture workflow. Trust is configured by immutable IDs."
+        ]
+      }
+    },
     name: "a signed commit by an untrusted committer fails trusted-committers",
     needsUntrusted: true,
     run: async (ctx) => {
@@ -238,6 +327,36 @@ export const policyCheck: Scenario[] = [
     },
   },
   {
+    id: "policy-check.sensitive-approval",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "a sensitive file needs the marked approver review and /recheck refreshes the check",
+        classification: "mixed",
+        checks: [
+          "approval-policy",
+          "path-safety"
+        ],
+        steps: [
+          {
+            "operation": "policy-check",
+            "outcome": "rejected",
+            "expected": "Before the marked approval the policy check fails"
+          },
+          {
+            "operation": "policy-check",
+            "outcome": "permitted",
+            "expected": "A marked approver review permits the sensitive path and updates the head check"
+          }
+        ],
+        identity: [
+          "PR author: testing-csm-ci-untrusted-committer[bot] (ID 347402450).",
+          "Effective commit identity: civitaspo (ID 4525500); GitHub-signed commits use the owner as author and web-flow as committer.",
+          "Command requester and test review author: civitaspo (ID 4525500). Only the configured Approver App review can carry effective sensitive-path approval."
+        ]
+      }
+    },
     name: "a sensitive file needs the marked approver review and /recheck refreshes the check",
     needsUntrusted: true,
     run: async (ctx) => {
@@ -260,6 +379,27 @@ export const policyCheck: Scenario[] = [
     },
   },
   {
+    id: "policy-check.recheck",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "/recheck reevaluates policies and updates the current head check",
+        classification: "positive",
+        checks: [
+          "approval-policy",
+          "head-consistency"
+        ],
+        steps: [
+          {
+            "operation": "policy-check",
+            "outcome": "permitted",
+            "expected": "Recheck reevaluates policies and refreshes the current head check"
+          }
+        ],
+        identity: OWNER_IDENTITY
+      }
+    },
     name: "/recheck reevaluates policies and updates the current head check",
     run: (ctx) => withPolicyPr(ctx, "signed", false, async (pr, before) => {
       const recheck = await postComment(ctx, pr, "/recheck");
@@ -273,6 +413,31 @@ export const policyCheck: Scenario[] = [
     }),
   },
   {
+    id: "policy-check.non-approver-marker",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "a marker in a review by a non-approver cannot authorize sensitive paths",
+        classification: "negative",
+        checks: [
+          "approval-policy",
+          "identity-trust"
+        ],
+        steps: [
+          {
+            "operation": "policy-check",
+            "outcome": "rejected",
+            "expected": "A marker in a non-approver review does not authorize the sensitive path"
+          }
+        ],
+        identity: [
+          "PR author: testing-csm-ci-untrusted-committer[bot] (ID 347402450).",
+          "Effective commit identity: civitaspo (ID 4525500); GitHub-signed commits use the owner as author and web-flow as committer.",
+          "Command requester and test review author: civitaspo (ID 4525500). Only the configured Approver App review can carry effective sensitive-path approval."
+        ]
+      }
+    },
     name: "a marker in a review by a non-approver cannot authorize sensitive paths",
     needsUntrusted: true,
     run: async (ctx) => {
@@ -292,6 +457,31 @@ export const policyCheck: Scenario[] = [
     },
   },
   {
+    id: "policy-check.comment-marker",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "a COMMENT review carrying an approval marker cannot authorize sensitive paths",
+        classification: "negative",
+        checks: [
+          "approval-policy",
+          "command-evidence"
+        ],
+        steps: [
+          {
+            "operation": "policy-check",
+            "outcome": "rejected",
+            "expected": "A COMMENT review marker does not authorize the sensitive path"
+          }
+        ],
+        identity: [
+          "PR author: testing-csm-ci-untrusted-committer[bot] (ID 347402450).",
+          "Effective commit identity: civitaspo (ID 4525500); GitHub-signed commits use the owner as author and web-flow as committer.",
+          "Command requester and test review author: civitaspo (ID 4525500). Only the configured Approver App review can carry effective sensitive-path approval."
+        ]
+      }
+    },
     name: "a COMMENT review carrying an approval marker cannot authorize sensitive paths",
     needsUntrusted: true,
     run: async (ctx) => {

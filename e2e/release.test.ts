@@ -1,3 +1,4 @@
+import { testMetadata } from "./test-metadata.ts";
 import { expect, test } from "bun:test";
 import { github } from "../src/lib/github.ts";
 import { CLIENT, SERVER, type Ctx } from "./harness.ts";
@@ -26,7 +27,7 @@ test.each(["success", "failure"])("Terraform verification uses its public trust 
     if (url.pathname === `/repos/${SERVER}/actions/runs/456`) return Response.json(run);
     throw new Error(`unexpected request: ${url.pathname}`);
   }, { preconnect: () => undefined });
-  const ctx: Ctx = { gh: github("test", fetch), urls: [], untrusted: undefined };
+  const ctx: Ctx = { gh: github("test", fetch), urls: [], untrusted: undefined, ...testMetadata };
   const verification = verifyAttestations(ctx, tag, sha, 123);
   if (conclusion === "success") await verification;
   else await expect(verification).rejects.toThrow("hosted attestation verification concluded failure");

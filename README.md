@@ -257,6 +257,10 @@ GH_TOKEN=$(gh auth token) bun e2e/run.ts --ref <full-sha> --feature smoke
 
 Available features are `approve`, `merge`, `policy-check`, `securefix`, `release`, `release-pr`, `repo-settings`, and `smoke`. The feature name remains `release-pr` even though its client action is named `release-prepare`. Record run URLs and any skips in the PR.
 
+New fixture PRs describe their scenario, case, ordered expected behavior, identities, candidate SHA and harness checkout SHA. These expectations are declarations, not observed results; use receipts and execution links to assess the actual outcome. A negative release case may deliberately merge a setup PR before testing rejected publication. Local invocations show their invocation ID; CI descriptions include the workflow run and attempt.
+
+Display labels use the fixed catalog in [e2e/pr-metadata.ts](e2e/pr-metadata.ts): `e2e`, one `e2e:<feature>`, exactly one `case:positive`, `case:negative` or `case:mixed`, and relevant `check:*` categories. The harness provisions missing labels once under its lock, reuses operator-edited labels, and preserves unrelated PR labels. Labels never authorize an operation or identify cleanup ownership. Direct PRs receive a description when opened. Server-generated PRs retain their title and original body bytes; the harness appends its marked intent section after verifying generated output, and replaces only that section on repeated annotation. Historical and unrelated fixture PRs are excluded.
+
 The local runner skips scenarios that need `CSM_CI_UNTRUSTED_COMMITTER_TOKEN`. The [CI e2e workflow](.github/workflows/e2e.yml) supplies that second identity from its preconfigured `csm-ci-e2e` environment. After merge, dispatch the affected suites and smoke sequentially from `main`, testing the merged SHA:
 
 ```sh

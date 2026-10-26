@@ -6,6 +6,7 @@ import { join, relative } from "node:path";
 import { parseArgs } from "node:util";
 import { type GitHub, splitRepository } from "../src/lib/github.ts";
 import { CARGO_RAW_TARGETS, CARGO_TARGETS, type Release, parseConfig } from "../src/lib/config.ts";
+import { prBody, prTitle, labelPr, type PrIntent, type RunMetadata } from "./pr-metadata.ts";
 import { withCleanup } from "./cleanup.ts";
 import { findRecentRunByTitle, matchesAcceptedRequest, matchesCleanupLabel, recentItems } from "./correlation.ts";
 
@@ -18,8 +19,14 @@ const POLL_MS = 5_000;
 const TIMEOUT_MS = 10 * 60_000;
 
 export type Run = { id: number; html_url: string; status: string | null; conclusion: string | null; created_at: string; display_title: string };
-export type Ctx = { gh: GitHub; urls: string[]; untrusted: GitHub | undefined };
-export type Scenario = { name: string; needsUntrusted?: boolean; serial?: boolean; run: (ctx: Ctx) => Promise<void> };
+export type Ctx = { gh: GitHub; urls: string[]; untrusted: GitHub | undefined; run: RunMetadata; cases: Readonly<Record<string, PrIntent>> };
+export type Scenario = { id: string; cases: Readonly<Record<string, PrIntent>>; name: string; needsUntrusted?: boolean; serial?: boolean; run: (ctx: Ctx) => Promise<void> };
+
+export function prCase(ctx: Ctx, id: string): PrIntent {
+  const intent = ctx.cases[id];
+  assert(intent, `missing PR case ${id} for ${ctx.run.scenarioId}`);
+  return intent;
+}
 
 export function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -211,7 +218,8 @@ export type ReleaseBuildType = Release["build_type"];
 
 // signed: createCommitOnBranch, which GitHub signs as web-flow for the token's user.
 // Otherwise the REST contents API, whose commits GitHub leaves unsigned.
-export async function openPr(ctx: Ctx, kind: "signed" | "unsigned", as: GitHub = ctx.gh, author?: { name: string; email: string }, prAs: GitHub = ctx.gh, filePath?: string, draft = false, fileContent?: string): Promise<Pr> {
+export async function openPr(ctx: Ctx, options: { intent: PrIntent; kind: "signed" | "unsigned"; as?: GitHub; author?: { name: string; email: string } | undefined; prAs?: GitHub; filePath?: string | undefined; draft?: boolean; fileContent?: string }): Promise<Pr> {
+  const { intent, kind, as = ctx.gh, author, prAs = ctx.gh, filePath, draft = false, fileContent } = options;
   const repo = splitRepository(CLIENT);
   const base = (await ctx.gh.rest.repos.getBranch({ ...repo, branch: "main" })).data.commit.sha;
   const branch = `e2e-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
@@ -242,8 +250,12 @@ export async function openPr(ctx: Ctx, kind: "signed" | "unsigned", as: GitHub =
     });
     head = data.commit.sha ?? "";
   }
-  const { data: pr } = await prAs.rest.pulls.create({ ...repo, base: "main", head: branch, title: `e2e ${branch}`, ...(draft ? { draft: true } : {}) });
-  return { number: pr.number, head, branch };
+  const { data: pr } = await prAs.rest.pulls.create({ ...repo, base: "main", head: branch, title: prTitle(ctx.run, intent, branch), body: prBody(ctx.run, intent), ...(draft ? { draft: true } : {}) });
+  const owned = { number: pr.number, head, branch };
+  ctx.urls.push(pr.html_url);
+  try { await labelPr(ctx.gh, CLIENT, pr.number, ctx.run, intent); }
+  catch (error) { return withCleanup(async () => { throw error; }, [() => closePr(ctx, owned)]); }
+  return owned;
 }
 
 export async function withServerConfig<T>(ctx: Ctx, edit: (text: string) => string, run: () => Promise<T>): Promise<T> {
@@ -306,7 +318,9 @@ export const withoutReleaseOperation = (text: string): string => {
   return String(document);
 };
 
-export async function openReleasePr(ctx: Ctx, version: string, additions: Record<string, string | null> = {}): Promise<Pr & { openedAt: Date }> {
+export async function openReleasePr(ctx: Ctx, options: { intent: PrIntent; version: string; additions?: Record<string, string | null> }): Promise<Pr & { openedAt: Date }> {
+  const { intent, version, additions = {} } = options;
+  const title = prTitle(ctx.run, intent, version);
   const repo = splitRepository(CLIENT);
   try {
     await ctx.gh.rest.git.getRef({ ...repo, ref: "heads/release/next" });
@@ -340,20 +354,27 @@ export async function openReleasePr(ctx: Ctx, version: string, additions: Record
         } } },
     );
     ownedHead = data.createCommitOnBranch.commit.oid;
-    const { data: pr } = await ctx.gh.rest.pulls.create({ ...repo, base: "main", head: branch, title: `e2e release ${version}` });
+    const { data: pr } = await ctx.gh.rest.pulls.create({ ...repo, base: "main", head: branch, title, body: prBody(ctx.run, intent) });
+    ctx.urls.push(pr.html_url);
+    await labelPr(ctx.gh, CLIENT, pr.number, ctx.run, intent);
     return { number: pr.number, head: ownedHead, branch, openedAt: since };
   } catch (error) {
-    const { data: pulls } = await ctx.gh.rest.pulls.list({ ...repo, state: "open", head: `${OWNER}:release/next`, per_page: 100 });
-    for (const pr of pulls.filter((item) => item.title === `e2e release ${version}`)) {
-      await ctx.gh.rest.pulls.update({ ...repo, pull_number: pr.number, state: "closed" });
-    }
-    try {
-      const { data: ref } = await ctx.gh.rest.git.getRef({ ...repo, ref: "heads/release/next" });
-      if (ref.object.sha === ownedHead) await ctx.gh.rest.git.deleteRef({ ...repo, ref: "heads/release/next" });
-    } catch (cleanupError) {
-      if (!hasStatus(cleanupError, 404)) throw cleanupError;
-    }
-    throw error;
+    return withCleanup(async () => { throw error; }, [
+      async () => {
+        const { data: pulls } = await ctx.gh.rest.pulls.list({ ...repo, state: "open", head: `${OWNER}:release/next`, per_page: 100 });
+        for (const pr of pulls.filter((item) => item.title === title)) {
+          await ctx.gh.rest.pulls.update({ ...repo, pull_number: pr.number, state: "closed" });
+        }
+      },
+      async () => {
+        try {
+          const { data: ref } = await ctx.gh.rest.git.getRef({ ...repo, ref: "heads/release/next" });
+          if (ref.object.sha === ownedHead) await ctx.gh.rest.git.deleteRef({ ...repo, ref: "heads/release/next" });
+        } catch (cleanupError) {
+          if (!hasStatus(cleanupError, 404)) throw cleanupError;
+        }
+      },
+    ]);
   }
 }
 

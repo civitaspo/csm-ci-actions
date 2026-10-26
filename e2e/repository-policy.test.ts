@@ -1,3 +1,4 @@
+import { testMetadata } from "./test-metadata.ts";
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { z } from "zod";
@@ -24,7 +25,7 @@ function context(text = fixture) {
       file.sha = "changed";
     }
   });
-  return { ctx: { gh, urls: [], untrusted: undefined }, fetch };
+  return { ctx: { ...testMetadata, gh, urls: [], untrusted: undefined }, fetch };
 }
 
 test.each([

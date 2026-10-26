@@ -1,3 +1,4 @@
+import { testMetadata } from "./test-metadata.ts";
 import { expect, spyOn, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { fakeFetch } from "../src/lib/testing.ts";
@@ -42,7 +43,7 @@ function configApi(staleHeadReads: number | number[] = 0, onHeadRead: (written: 
     if (text === undefined) throw new Error(`unknown commit: ${ref}`);
     return Response.json({ type: "file", sha: `blob-${ref === "main" ? head : ref}`, content: Buffer.from(text).toString("base64") });
   }, { preconnect: () => undefined });
-  return { ctx: { gh: github("test", fetch, { backoffMs: [] }), urls: [], untrusted: undefined }, writes, contentRefs,
+  return { ctx: { gh: github("test", fetch, { backoffMs: [] }), urls: [], untrusted: undefined, ...testMetadata }, writes, contentRefs,
     visibleText: () => commits.get(visibleHead) };
 }
 
@@ -87,7 +88,7 @@ test.each([403, 404, 422])("server config propagates HTTP %i during pinned conte
     if (url.pathname.endsWith("/git/ref/heads%2Fmain")) return Response.json({ object: { sha: "head" } });
     return Response.json({ message: "config read failed" }, { status });
   }, { preconnect: () => undefined });
-  const ctx = { gh: github("test", fetch, { backoffMs: [] }), urls: [], untrusted: undefined };
+  const ctx = { gh: github("test", fetch, { backoffMs: [] }), urls: [], untrusted: undefined, ...testMetadata };
   await expect(withServerConfig(ctx, withoutReleaseOperation, async () => {})).rejects.toThrow("config read failed");
   expect(writes).toBe(0);
 });
@@ -100,7 +101,7 @@ test("server config rejects a write response without content identity and still 
     { method: "GET", path: `/repos/${SERVER}/contents/csm-ci.yaml`, body: file(original), then: [file(disabled), file(original)] },
     { method: "PUT", path: `/repos/${SERVER}/contents/csm-ci.yaml`, body: { content: null } },
   ]);
-  const ctx = { gh: github("test", fetch, { backoffMs: [] }), urls: [], untrusted: undefined };
+  const ctx = { gh: github("test", fetch, { backoffMs: [] }), urls: [], untrusted: undefined, ...testMetadata };
   await expect(withServerConfig(ctx, withoutReleaseOperation, async () => {})).rejects.toThrow("server fixture write returned no content SHA");
   expect(fetch.requests.filter((request) => request.method === "PUT")).toHaveLength(2);
 });

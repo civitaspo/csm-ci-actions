@@ -1,3 +1,4 @@
+import { testMetadata } from "./test-metadata.ts";
 import { expect, test } from "bun:test";
 import { completedRequestRuns, findRecentRunByTitle, findRunByTitle, matchesAcceptedRequest, matchesCleanupLabel, recentItems, runsForComments } from "./correlation.ts";
 import { type RequestMatch, serverRuns } from "./harness.ts";
@@ -95,7 +96,7 @@ test("correlates a skipped intake through cleanup without downloading a nonexist
     Object.defineProperty(response, "url", { value: typeof input === "string" ? input : input instanceof URL ? input.href : input.url });
     return response;
   }, { preconnect: () => undefined });
-  const ctx = { gh: github("t", fetchWithUrl), urls: [], untrusted: undefined };
+  const ctx = { gh: github("t", fetchWithUrl), urls: [], untrusted: undefined, ...testMetadata };
   const since = new Date("2026-10-25T00:00:00Z");
   expect((await serverRuns(ctx, { ...request, label: "csm-ci-approve-humanabc" }, since)).map((run) => run.id)).toEqual([10]);
   expect(await serverRuns(ctx, request, since)).toEqual([]);
@@ -117,7 +118,7 @@ test("does not inspect logs for an unfinished request or count it toward the exp
     Object.defineProperty(response, "url", { value: typeof input === "string" ? input : input instanceof URL ? input.href : input.url });
     return response;
   }, { preconnect: () => undefined });
-  const ctx = { gh: github("t", fetchWithUrl), urls: [], untrusted: undefined };
+  const ctx = { gh: github("t", fetchWithUrl), urls: [], untrusted: undefined, ...testMetadata };
   const since = new Date("2026-10-25T00:00:00Z");
   const found = await serverRuns(ctx, request, since);
   expect(found.map((run) => run.id)).toEqual([10]);
@@ -150,7 +151,7 @@ test("an explicit label selects its accepted run among competing requests for th
     Object.defineProperty(response, "url", { value: typeof input === "string" ? input : input instanceof URL ? input.href : input.url });
     return response;
   }, { preconnect: () => undefined });
-  const ctx = { gh: github("t", fetchWithUrl), urls: [], untrusted: undefined };
+  const ctx = { gh: github("t", fetchWithUrl), urls: [], untrusted: undefined, ...testMetadata };
   const since = new Date("2026-10-25T00:00:00Z");
   expect((await serverRuns(ctx, { ...request, label: "csm-ci-policy-check-explicit" }, since)).map(({ id }) => id)).toEqual([11]);
   expect((await serverRuns(ctx, request, since)).map(({ id }) => id)).toEqual([10, 11, 12]);
