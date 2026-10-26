@@ -127,3 +127,10 @@ After the last repository has moved and passed step 6.9:
 - The scheduled trigger itself was not observed in testing. Testing dispatched the schedule branch of the reusable workflow directly. Check the first scheduled run of `csm-ci-repo-settings` after step 5.
 - The isolated testing server did not exercise `controlled-merges` activation because its approver App is not installed there. Production activation and protected server PR #5 passed.
 - Server reconciliation runs after failed client jobs, provided discovery succeeded and the client wave was not cancelled. Cancellation still stops the server step.
+
+
+## Generated caller rollout gate
+
+The standard caller generator runtime requires the [reviewed adoption procedure](repo-settings.md#standard-client-workflows-planned). Upgrade every Server parser pin before adding `release_prepare` or `workflow_adoption`. Remove selected caller destinations from `additional_managed_files` in the same reviewed configuration change that adds their exact observed adoption digests. Keep `release_prepare.update_root_version: false` for repositories that preserve root manifest versions. After the generated PR merges, verify its original signed head and default bytes before removing adoption entries.
+
+Discovery resolves and validates one published stable release for all targets and both managed-file stages. The current stable `v0.1.0` lacks the required interfaces, so deployment is blocked until an intended compatible release is separately authorized and published. Do not select an older release, use a mutable ref, or publish a temporary version. Full-SHA local tests do not establish this published-stable gate. Run repo-settings, release-pr, affected client suites, then smoke at the signed pushed candidate after that prerequisite. Preserve the normal protected review and merge process and the owned-branch recovery procedure for incompatible pending managed PRs.

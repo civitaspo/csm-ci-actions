@@ -30,9 +30,13 @@ inputs:
   actions-repository:
     description: owner/repo where the reusable caller workflows are distributed.
     required: true
+  workflow-release:
+    description: Trusted discovery JSON containing the validated stable version and full SHA.
   approver-app-slug:
     description: App slug returned by the official create-github-app-token action.
 outputs:
+  workflow-release:
+    description: Stable release revision resolved and validated once for all targets.
   operation-mode:
     description: Validated operation mode, with an omitted or empty value normalized to reconcile.
   clients:

@@ -1,4 +1,7 @@
 import * as core from "@actions/core";
+import { repositoryEntry } from "../lib/config.ts";
+import { generateWorkflows, ReleasedRevision, selectedCallers } from "../lib/generated-workflows.ts";
+import { resolveWorkflowRelease } from "../lib/workflow-release.ts";
 import { loadAdditionalManagedFiles } from "../lib/additional-managed-files.ts";
 import { applyManagedFiles, inspectManagedFiles } from "../lib/managed-files.ts";
 import { applyRepoSettings, discoverRepoSettingsTargets, inspectRepoSettings, inspectRepoSettingsPreflight } from "../lib/repo-settings.ts";
@@ -37,6 +40,9 @@ async function main(): Promise<void> {
     const installed = await discoveryGH.paginate("GET /installation/repositories", { per_page: 100 });
     const requested = input("requested-repository");
     const targets = discoverRepoSettingsTargets({ config, installedRepositories: installed, serverRepository, ...(requested ? { requestedRepository: requested } : {}) });
+    const selected = [...targets.clients, ...(targets.server ? [targets.server] : [])];
+    const release = await resolveWorkflowRelease(configGH, selected.flatMap((target) => selectedCallers(config, target.name)));
+    core.setOutput("workflow-release", JSON.stringify(release));
     core.setOutput("clients", JSON.stringify(targets.clients));
     core.setOutput("client-count", String(targets.clients.length));
     core.setOutput("server", JSON.stringify(targets.server));
@@ -90,15 +96,17 @@ async function main(): Promise<void> {
   if (mode === "managed-inspect" || mode === "managed-apply") {
     const { data: repo } = await readGH.rest.repos.get(address);
     const files = await loadAdditionalManagedFiles(configGH, { repository: serverRepository, sha: env("GITHUB_SHA"), settings: config.repo_settings });
+    const release = ReleasedRevision.parse(JSON.parse(input("workflow-release", true)));
+    const generated = { release, files: generateWorkflows(config, target.name, repo.default_branch, release), adoption: repositoryEntry(config, target.name)?.workflow_adoption ?? {} };
     if (mode === "managed-inspect") {
-      const result = await inspectManagedFiles(readGH, { repository: target.name, defaultBranch: repo.default_branch, serverBotId: config.apps.server_bot_id, files });
+      const result = await inspectManagedFiles(readGH, { repository: target.name, defaultBranch: repo.default_branch, serverBotId: config.apps.server_bot_id, generated, files });
       core.setOutput("result", result.status);
       core.setOutput("requires-workflows-write", String(result.requiresWorkflowsWrite));
       core.setOutput("changed-paths", JSON.stringify(result.changedPaths));
       core.setOutput("has-changes", String(result.status === "ready"));
       return;
     }
-    const result = await applyManagedFiles(readGH, { repository: target.name, defaultBranch: repo.default_branch, serverBotId: config.apps.server_bot_id, files, writeToken: input("contents-token", true) });
+    const result = await applyManagedFiles(readGH, { repository: target.name, defaultBranch: repo.default_branch, serverBotId: config.apps.server_bot_id, generated, files, writeToken: input("contents-token", true) });
     core.setOutput("result", JSON.stringify(result));
     return;
   }

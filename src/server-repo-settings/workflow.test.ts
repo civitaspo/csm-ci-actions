@@ -121,3 +121,18 @@ describe("repo-settings reusable workflows", () => {
     expect(record(inputs.mode)).toHaveProperty("default", "reconcile");
   });
 });
+
+test("one trusted discovery revision reaches both targets and managed stages", async () => {
+  const entry = parse(await Bun.file(new URL("../../.github/workflows/server-repo-settings.yml", import.meta.url)).text());
+  const target = parse(await Bun.file(new URL("../../.github/workflows/server-repo-settings-target.yml", import.meta.url)).text());
+  expect(entry.jobs.discover.outputs["workflow-release"]).toBe("${{ steps.discover.outputs.workflow-release }}");
+  for (const name of ["clients", "server"]) expect(entry.jobs[name].with["workflow-release"]).toBe("${{ needs.discover.outputs.workflow-release }}");
+  expect(target.on.workflow_call.inputs["workflow-release"]).toMatchObject({ type: "string", required: true });
+  for (const stage of ["managed-inspect", "managed-apply"]) {
+    const step = target.jobs.reconcile.steps.find((step: { with?: { mode?: string } }) => step.with?.mode === stage);
+    expect(step.with["workflow-release"]).toBe("${{ inputs.workflow-release }}");
+  }
+  const adapter = await Bun.file(new URL("./main.ts", import.meta.url)).text();
+  expect(adapter.match(/await resolveWorkflowRelease\(/gu)).toHaveLength(1);
+  expect(adapter.indexOf("await resolveWorkflowRelease(")).toBeLessThan(adapter.indexOf('if (mode === "managed-inspect" ||'));
+});

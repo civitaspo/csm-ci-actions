@@ -311,3 +311,10 @@ jobs:
 Pin `<sha>` to the reviewed actions commit. The schedule repairs drift without creating or re-enabling `controlled-merges`. To activate it, first distribute the merge caller and clear the auto-merge queue, then dispatch for that repository. The server verifies these prerequisites before it changes anything, whenever a dispatch would activate the ruleset.
 
 Review managed-file pull requests from `csm-ci/repo-settings` and request `/merge` through the normal approval process. To stop controlled merging, set the ruleset's enforcement to `disabled`; the schedule preserves that state.
+
+
+## Generated caller rollout gate
+
+The standard caller generator runtime requires the [reviewed adoption procedure](repo-settings.md#standard-client-workflows-planned). Upgrade every Server parser pin before adding `release_prepare` or `workflow_adoption`. Remove selected caller destinations from `additional_managed_files` in the same reviewed configuration change that adds their exact observed adoption digests. Keep `release_prepare.update_root_version: false` for repositories that preserve root manifest versions. After the generated PR merges, verify its original signed head and default bytes before removing adoption entries.
+
+Discovery resolves and validates one published stable release for all targets and both managed-file stages. The current stable `v0.1.0` lacks the required interfaces, so deployment is blocked until an intended compatible release is separately authorized and published. Do not select an older release, use a mutable ref, or publish a temporary version. Full-SHA local tests do not establish this published-stable gate. Run repo-settings, release-pr, affected client suites, then smoke at the signed pushed candidate after that prerequisite. Preserve the normal protected review and merge process and the owned-branch recovery procedure for incompatible pending managed PRs.

@@ -1,0 +1,93 @@
+import { expect, test } from "bun:test";
+import { parse } from "yaml";
+import { ConfigSchema, type Op } from "./config.ts";
+import { config } from "./testing.ts";
+import { ReleasedRevision, callerPath, generateWorkflows, selectedCallers, STANDARD_CALLERS } from "./generated-workflows.ts";
+
+const revision = { version: "v1.2.3", sha: "a".repeat(40) };
+const route = { name: "release-pr", from: "default", to: "release/next", workflow: callerPath("release-pr"), paths: { ".release-version": "semver", "CHANGELOG.md": "any" } };
+function candidate(ops: Op[], extra: object = {}, routeExtra: object = {}) {
+  return ConfigSchema.parse({ ...config(), securefix: { allow_workflow_changes: false, routes: [{ ...route, ...routeExtra }] }, repositories: [{ name: "owner/client", ops, ...(ops.includes("release") ? { release: { build_type: "none" } } : {}), ...extra }] });
+}
+
+for (let mask = 0; mask < 32; mask++) {
+  const all: Op[] = ["approve", "policy-check", "merge", "release", "securefix"];
+  const ops = all.filter((_, index) => mask & (1 << index));
+  test(`generates the exact operation combination ${ops.join(",")}`, () => {
+    const settings = candidate(ops);
+    const files = generateWorkflows(settings, "owner/client", "trunk", revision);
+    expect(Object.keys(files)).toEqual(ops.map((op) => callerPath(op === "securefix" ? "release-pr" : op)));
+    for (const [caller] of Object.entries(STANDARD_CALLERS)) {
+      const text = files[`.github/workflows/csm-ci-${caller}.yml`];
+      if (!text) continue;
+      const workflow = parse(text);
+      expect(text).toContain(`v1.2.3 (${revision.sha})`);
+      expect(workflow.permissions).toEqual({});
+      expect(workflow.jobs[caller].uses).toContain(`@${revision.sha}`);
+      expect(workflow.jobs[caller].secrets).toEqual({ CSM_CI_CLIENT_APP_PRIVATE_KEY: "${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}" });
+      expect(workflow.concurrency).toBeUndefined();
+      if (caller === "release-pr") {
+        expect(workflow.on.push.branches).toEqual(["trunk"]);
+        expect(workflow.on.workflow_dispatch.inputs.version).toEqual({ description: "Optional semantic version without a v prefix.", type: "string", required: false, default: "" });
+        expect(workflow.jobs[caller].with).toEqual({ version: "${{ inputs.version || '' }}", "update-root-version": true });
+        expect(workflow.jobs[caller].permissions).toEqual({ contents: "read" });
+        expect(workflow.jobs[caller].if).toContain("!startsWith(github.event.head_commit.message, 'chore(release): v')");
+        expect(workflow.jobs[caller].if).toContain("!startsWith(github.event.head_commit.message, 'release-pr: chore(release): v')");
+      } else {
+        expect(workflow.jobs[caller].if).toBeUndefined();
+        expect(workflow.jobs[caller].with).toBeUndefined();
+        expect(workflow.jobs[caller].permissions).toEqual({});
+      }
+    }
+  });
+}
+
+test.each([true, false, undefined])("preserves root-version setting %s", (value) => {
+  const c = candidate(["securefix"], { release_prepare: { ...(value === undefined ? {} : { update_root_version: value }) } });
+  expect(parse(generateWorkflows(c, "owner/client", "release/default", revision)[callerPath("release-pr")]!).jobs["release-pr"].with["update-root-version"]).toBe(value ?? true);
+});
+
+test.each([
+  ["unselected preparation", [], { release_prepare: {} }, {}, "release_prepare requires selected release preparation"],
+  ["unknown preparation key", ["securefix"], { release_prepare: { version: "1" } }, {}, "Unrecognized key"],
+  ["nonboolean input", ["securefix"], { release_prepare: { update_root_version: "false" } }, {}, "expected boolean"],
+  ["conflicting branch", ["securefix"], {}, { to: "release/custom" }, "release-pr route must use release/next"],
+  ["conflicting workflow", ["securefix"], {}, { workflow: ".github/workflows/custom.yml" }, "release-pr route must use release/next"],
+  ["unselected adoption", [], { workflow_adoption: { [callerPath("merge")]: "a".repeat(64) } }, {}, "workflow_adoption destination must be a selected standard caller"],
+  ["arbitrary adoption", ["merge"], { workflow_adoption: { "custom.yml": "a".repeat(64) } }, {}, "workflow_adoption destination must be a selected standard caller"],
+  ["malformed digest", ["merge"], { workflow_adoption: { [callerPath("merge")]: "A".repeat(64) } }, {}, "must be a lowercase SHA256 digest"],
+] satisfies [string, Op[], object, object, string][]) ("rejects %s", (_name, ops, extra, routeExtra, message) => {
+  expect(() => candidate(ops, extra, routeExtra)).toThrow(message);
+});
+
+test("first matching entry and absent canonical route remain effective", () => {
+  const c = candidate(["securefix"]);
+  c.securefix!.routes = [];
+  expect(selectedCallers(c, "owner/client")).toEqual([]);
+  c.repositories.unshift({ name: "owner/client", ops: [] });
+  expect(generateWorkflows(c, "owner/client", "trunk", revision)).toEqual({});
+});
+
+test("emits exact event sets", () => {
+  const files = generateWorkflows(candidate(["approve", "policy-check", "merge", "release"]), "owner/client", "trunk", revision);
+  expect(parse(files[callerPath("approve")]!).on).toEqual({ pull_request_target: { types: ["opened", "synchronize", "reopened", "ready_for_review"] }, issue_comment: { types: ["created"] } });
+  expect(parse(files[callerPath("policy-check")]!).on).toEqual({ pull_request_target: { types: ["opened", "synchronize", "reopened", "ready_for_review", "edited"] } });
+  expect(parse(files[callerPath("merge")]!).on).toEqual({ issue_comment: { types: ["created"] } });
+  expect(parse(files[callerPath("release")]!).on).toEqual({ pull_request: { types: ["closed"] } });
+});
+
+test("testing adoption entries bind exactly the committed fixture callers", async () => {
+  const { parseConfig } = await import("./config.ts");
+  const { digest } = await import("./generated-workflows.ts");
+  const fixtureConfig = parseConfig(await Bun.file(new URL("../../e2e/fixtures/testing-csm-ci-server/csm-ci.yaml", import.meta.url)).text());
+  const entry = fixtureConfig.repositories.find((entry) => entry.name === "civitaspo/testing-csm-ci-client")!;
+  expect(Object.keys(entry.workflow_adoption ?? {})).toHaveLength(5);
+  for (const [path, expected] of Object.entries(entry.workflow_adoption ?? {})) {
+    expect(digest(await Bun.file(new URL(`../../e2e/fixtures/testing-csm-ci-client/${path}`, import.meta.url)).text())).toBe(expected);
+  }
+});
+
+
+test.each(["v0.0.0", "v1.2.3", "v1.2.3+build.01.a-b"])("accepts stable release version %s", (version) => {
+  expect(ReleasedRevision.parse({ version, sha: revision.sha }).version).toBe(version);
+});
