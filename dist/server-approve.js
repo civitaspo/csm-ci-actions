@@ -37135,6 +37135,132 @@ async function fetchCommitFacts(gh, repository, pullNumber) {
   return facts;
 }
 
+// src/lib/policy-report.ts
+import { createHash } from "node:crypto";
+var POLICY_FAILURE_MARKER = "<!-- csm-ci:policy-failure -->";
+var stateSchema = object({ node: object({
+  id: string2(),
+  databaseId: number2(),
+  body: string2(),
+  isMinimized: boolean2(),
+  minimizedReason: string2().nullable(),
+  author: object({ __typename: literal("Bot"), databaseId: number2() }),
+  issue: object({ number: number2(), repository: object({ nameWithOwner: string2() }) })
+}) });
+function escapeDetail(text, limit) {
+  let result = "";
+  for (const char of text) {
+    const encoded = /[\u0000-\u001f\u007f-\u009f]/.test(char) ? " " : /[\\`*_\[\]~!@|()#]/.test(char) ? `&#${char.codePointAt(0)};` : escapeHtml(char);
+    if (result.length + encoded.length > limit)
+      return `${result}… [truncated; see server run for full details]`;
+    result += encoded;
+  }
+  return result;
+}
+function policyFailureContent(results) {
+  const failures = [...new Set(results.filter((r) => !r.ok).map((r) => r.type))];
+  const rows = failures.map((type) => {
+    const details = results.filter((r) => !r.ok && r.type === type).flatMap((r) => r.problems).join("; ");
+    return `- ${type}: <code>${escapeDetail(details, Math.floor(5700 / Math.max(failures.length, 1)) - 100)}</code>`;
+  });
+  const guidance = failures.includes("sensitive-paths") ? "For sensitive changes, obtain the required trusted approver's `/approve` evidence for this head. " : "";
+  return `csm-ci: Policy check failed.
+
+${rows.join(`
+`)}
+
+Fix the reported violations. ${guidance}Trust restrictions must pass; approval cannot bypass them. Use \`/recheck\` after correcting the cause or a temporary issue.`;
+}
+function reportBody(ctx, content) {
+  const fingerprint = createHash("sha256").update(`${ctx.head}
+${content}`).digest("hex");
+  const prefix = `${POLICY_FAILURE_MARKER}
+<!-- csm-ci:policy-failure-content:${fingerprint} -->
+${content}`;
+  const { serverRun: run } = ctx;
+  const link = (url, label) => `<a href="${escapeHtml(url)}">${escapeHtml(label)}</a>`;
+  const repoUrl = `${run.serverUrl}/${ctx.repository}`;
+  const runUrl = `${run.serverUrl}/${run.repository}/actions/runs/${run.id}`;
+  const request = `${ctx.repository}/${ctx.pullNumber}${ctx.requestCommentId ? `/${ctx.requestCommentId}` : ""}`;
+  const footer = [
+    escapeHtml(`Request ${ctx.requestKind ?? "policy-check"} ${request}`),
+    ...ctx.requestCommentId ? [link(`${repoUrl}/pull/${ctx.pullNumber}#issuecomment-${ctx.requestCommentId}`, "Command")] : [],
+    link(`${repoUrl}/commit/${ctx.head}`, `Head ${ctx.head.slice(0, 7)}`),
+    link(runUrl, `Server run ${run.id}`),
+    link(`${runUrl}/attempts/${run.attempt}`, `Attempt ${run.attempt}`)
+  ];
+  return { prefix, body: `${prefix}
+
+<sub>${footer.join(" · ")}</sub>` };
+}
+async function current(ctx) {
+  const { data: pull } = await ctx.server.rest.pulls.get({ ...splitRepository(ctx.repository), pull_number: ctx.pullNumber });
+  return pull.state === "open" && pull.head.sha === ctx.head;
+}
+function owned(ctx, comment) {
+  return Number(comment.user?.id) === ctx.serverBotId && comment.user?.type === "Bot" && (comment.body ?? "").startsWith(`${POLICY_FAILURE_MARKER}
+`);
+}
+async function readReport(ctx, id) {
+  const { data: comment } = await ctx.server.rest.issues.getComment({ ...splitRepository(ctx.repository), comment_id: id });
+  const issueUrl = `https://api.github.com/repos/${ctx.repository}/issues/${ctx.pullNumber}`;
+  if (!owned(ctx, comment) || comment.issue_url.toLowerCase() !== issueUrl.toLowerCase() || !comment.node_id || Number(comment.id) !== id)
+    throw new Error(`cannot verify policy report ${id} ownership`);
+  const response = await ctx.server.graphql("query($id: ID!) { node(id: $id) { ... on IssueComment { id databaseId body isMinimized minimizedReason author { __typename ... on Bot { databaseId } } issue { number repository { nameWithOwner } } } } }", { id: comment.node_id });
+  const parsed = stateSchema.safeParse(response);
+  if (!parsed.success)
+    throw new Error(`cannot verify policy report ${id} node identity`);
+  const { node } = parsed.data;
+  if (node.id !== comment.node_id || node.databaseId !== id || node.author.databaseId !== ctx.serverBotId || node.issue.number !== ctx.pullNumber || node.issue.repository.nameWithOwner.toLowerCase() !== ctx.repository.toLowerCase() || node.body !== comment.body)
+    throw new Error(`cannot verify policy report ${id} node identity`);
+  return node;
+}
+async function publishPolicyReport(ctx, results) {
+  const list = () => ctx.server.paginate(ctx.server.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: ctx.pullNumber, per_page: 100 });
+  let comments = await list();
+  const passing = results.every((r) => r.ok);
+  const report = reportBody(ctx, policyFailureContent(results));
+  const active = async () => {
+    for (const comment of comments.filter((c) => owned(ctx, c))) {
+      const node = await readReport(ctx, Number(comment.id));
+      if (!node.isMinimized && node.body.startsWith(`${report.prefix}
+
+<sub>`))
+        return node.databaseId;
+    }
+    return;
+  };
+  let retained = passing ? undefined : await active();
+  if (!passing && retained === undefined) {
+    if (!await current(ctx))
+      return;
+    try {
+      const { data: created } = await ctx.server.rest.issues.createComment({ ...splitRepository(ctx.repository), issue_number: ctx.pullNumber, body: report.body });
+      retained = Number(created.id);
+    } catch (error) {
+      const status = typeof error === "object" && error !== null && "status" in error ? error.status : undefined;
+      if (!isNetworkFailure(error) && !(error instanceof Error && error.name === "TimeoutError") && status !== 502 && status !== 503 && status !== 504)
+        throw error;
+      comments = await list();
+      retained = await active();
+      if (retained === undefined)
+        throw error;
+    }
+  }
+  for (const comment of comments.filter((c) => owned(ctx, c) && Number(c.id) !== retained)) {
+    const node = await readReport(ctx, Number(comment.id));
+    const classifier = passing ? "RESOLVED" : "OUTDATED";
+    if (node.isMinimized && node.minimizedReason?.toUpperCase() === classifier)
+      continue;
+    if (!await current(ctx))
+      return;
+    const response = await ctx.server.graphql("mutation($id: ID!, $classifier: ReportedContentClassifiers!) { minimizeComment(input: {subjectId: $id, classifier: $classifier}) { minimizedComment { isMinimized minimizedReason } } }", { id: node.id, classifier });
+    const result = object({ minimizeComment: object({ minimizedComment: object({ isMinimized: literal(true), minimizedReason: string2() }) }) }).safeParse(response);
+    if (!result.success || result.data.minimizeComment.minimizedComment.minimizedReason.toUpperCase() !== classifier)
+      throw new Error(`policy report ${node.databaseId} was not minimized as ${classifier}`);
+  }
+}
+
 // src/lib/policy-check.ts
 var ALWAYS = [{ type: "signed-commits" }, { type: "trusted-committers" }];
 function effectivePolicies(config, repository) {
@@ -37191,6 +37317,7 @@ async function updatePolicyCheck(ctx) {
   } else {
     await ctx.server.rest.checks.create({ owner, repo, name: "csm-ci/policy", external_id: ctx.pull.headSha, head_sha: ctx.pull.headSha, status: "completed", completed_at: completedAt, conclusion: ok ? "success" : "failure", output });
   }
+  await publishPolicyReport({ server: ctx.server, repository: ctx.repository, pullNumber: ctx.pull.number, head: ctx.pull.headSha, serverBotId: ctx.config.apps.server_bot_id, serverRun: ctx.serverRun, requestKind: ctx.requestKind ?? "policy-check", ...ctx.requestCommentId === undefined ? {} : { requestCommentId: ctx.requestCommentId } }, results);
   return { result: "published", results };
 }
 
@@ -37236,7 +37363,7 @@ async function policyProblems(ctx, pull) {
   return results.flatMap((r) => r.problems.map((p) => `${r.type}: ${p}`));
 }
 async function refreshPolicy(ctx, pull) {
-  await updatePolicyCheck({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull });
+  await updatePolicyCheck({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, serverRun: ctx.serverRun, requestKind: "approve", ...ctx.requestCommentId === undefined ? {} : { requestCommentId: ctx.requestCommentId } });
 }
 async function autoApprove(ctx, pull) {
   const problems = await policyProblems(ctx, pull);
@@ -37278,6 +37405,7 @@ async function react(ctx, commentId) {
   await ctx.server.rest.reactions.createForIssueComment({ ...splitRepository(ctx.repository), comment_id: commentId, content: "rocket" });
 }
 async function runApprove(ctx, args) {
+  ctx = { ...ctx, ...args.comment_id === undefined ? {} : { requestCommentId: args.comment_id } };
   const pull = await fetchPull(ctx.server, ctx.repository, args.pull_number);
   if (args.comment_id === undefined) {
     checkPullState(pull);

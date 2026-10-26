@@ -56,7 +56,7 @@ Automatic approval, command approval, `/recheck`, standalone policy-check, and m
 
 ## Failure reports and recovery
 
-This section specifies the requested lifecycle from [issue #71](https://github.com/civitaspo/csm-ci-actions/issues/71). It requires a separate runtime implementation and live verification. The existing check name, head-bound `external_id`, summary, policy decisions, and approval requirements stay unchanged.
+The runtime implements the lifecycle from [issue #71](https://github.com/civitaspo/csm-ci-actions/issues/71). Live verification of comment rendering, minimization, and installed Server App capabilities remains required before deployment. The existing check name, head-bound `external_id`, summary, policy decisions, and approval requirements stay unchanged.
 
 The shared full check publication path manages the lifecycle for standalone policy-check, automatic approval, the final `/approve` refresh, and `/recheck`. It uses the same evaluated results for the check and the report. The evaluator itself has no comment side effects. Merge readiness evaluations and `/approve` preflight do not report failures or resolve them. A preflight that omits a policy or provisionally accepts command approval cannot establish recovery.
 
@@ -81,7 +81,7 @@ Before posting or minimizing, reread the PR state and confirm that the evaluated
 
 REST errors, GraphQL errors, unsuccessful mutation results, missing identity evidence, and reporting or cleanup failures must surface as errors. They cannot become a policy pass or a claim that publication completed. Follow [GitHub API](github-api.md) for bounded read retries and operation-specific recovery after an uncertain write response. Before retrying a lost comment creation response, reread owned reports to avoid duplicates.
 
-The standalone policy-check token currently requests pull-requests read access. Runtime implementation must request the narrowly scoped comment and minimization access needed by the full publication path and verify it with the existing Server App installation. This specification does not authorize App permission or credential changes. If existing capabilities are insufficient, report the exact failure and require the operator to handle any App permission change.
+The standalone policy-check token requests pull-requests write access for comments and minimization through the full publication path. Verify those capabilities with the existing Server App installation. This specification does not authorize App permission or credential changes. If existing capabilities are insufficient, report the exact failure and require the operator to handle any App permission change.
 
 ## Verification requirements for the implementation
 

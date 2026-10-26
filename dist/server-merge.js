@@ -37140,6 +37140,17 @@ async function fetchCommitFacts(gh, repository, pullNumber) {
   return facts;
 }
 
+// src/lib/policy-report.ts
+var stateSchema = object({ node: object({
+  id: string2(),
+  databaseId: number2(),
+  body: string2(),
+  isMinimized: boolean2(),
+  minimizedReason: string2().nullable(),
+  author: object({ __typename: literal("Bot"), databaseId: number2() }),
+  issue: object({ number: number2(), repository: object({ nameWithOwner: string2() }) })
+}) });
+
 // src/lib/policy-check.ts
 var ALWAYS = [{ type: "signed-commits" }, { type: "trusted-committers" }];
 function effectivePolicies(config, repository) {

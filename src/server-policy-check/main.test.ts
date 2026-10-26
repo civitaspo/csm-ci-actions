@@ -22,6 +22,7 @@ globalThis.fetch = fakeFetch([
       env: {
         PATH: process.env.PATH ?? "", GITHUB_REPOSITORY: "owner/server", GITHUB_SHA: "b".repeat(40),
         "INPUT_GITHUB-TOKEN": "fixture", "INPUT_SERVER-TOKEN": "fixture", "INPUT_CONFIG-PATH": "csm-ci.yaml",
+        GITHUB_SERVER_URL: "https://github.com", GITHUB_RUN_ID: "345", GITHUB_RUN_ATTEMPT: "2",
         INPUT_REPOSITORY: "owner/repo", "INPUT_PULL-NUMBER": "12",
       },
       stdout: "pipe", stderr: "pipe",

@@ -14,7 +14,7 @@ async function main(): Promise<void> {
   const server = github(core.getInput("server-token", { required: true }));
   const repository = core.getInput("repository", { required: true });
   const pull = await fetchPull(server, repository, Number(core.getInput("pull-number", { required: true })));
-  const outcome = await runPolicyCheck({ server, config, repository, pull });
+  const outcome = await runPolicyCheck({ server, config, repository, pull, serverRun: { serverUrl: env("GITHUB_SERVER_URL"), repository: env("GITHUB_REPOSITORY"), id: env("GITHUB_RUN_ID"), attempt: env("GITHUB_RUN_ATTEMPT") } });
   if (outcome.result === "skipped") {
     core.setOutput("result", "skipped");
     core.info(`Policy check skipped: ${outcome.reason}`);
