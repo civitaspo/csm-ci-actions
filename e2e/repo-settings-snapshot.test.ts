@@ -10,6 +10,9 @@ test.each(["baseline", "restored", "observed"] satisfies Parameters<typeof snaps
     allow_squash_merge: true,
     allow_merge_commit: true,
     allow_rebase_merge: true,
+    has_wiki: true,
+    has_projects: true,
+    allow_update_branch: false,
     squash_merge_commit_title: "COMMIT_OR_PR_TITLE",
     squash_merge_commit_message: "COMMIT_MESSAGES",
   } satisfies Awaited<ReturnType<typeof snapshotRepository>>["settings"];
@@ -40,6 +43,9 @@ test.each([
     allow_squash_merge: true,
     allow_merge_commit: true,
     allow_rebase_merge: true,
+    has_wiki: true,
+    has_projects: true,
+    allow_update_branch: false,
     squash_merge_commit_title: "COMMIT_OR_PR_TITLE",
     squash_merge_commit_message: "COMMIT_MESSAGES",
   };

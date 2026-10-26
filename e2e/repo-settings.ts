@@ -18,6 +18,9 @@ const SettingsSnapshotSchema = z.object({
   allow_squash_merge: z.boolean(),
   allow_merge_commit: z.boolean(),
   allow_rebase_merge: z.boolean(),
+  has_wiki: z.boolean(),
+  has_projects: z.boolean(),
+  allow_update_branch: z.boolean(),
   squash_merge_commit_title: z.enum(["PR_TITLE", "COMMIT_OR_PR_TITLE"]),
   squash_merge_commit_message: z.enum(["PR_BODY", "COMMIT_MESSAGES", "BLANK"]),
 });
@@ -263,7 +266,7 @@ async function makeSettingsDrift(ctx: Ctx): Promise<void> {
     allow_merge_commit: false,
     allow_rebase_merge: false,
   };
-  await ctx.gh.rest.repos.update({ ...address, delete_branch_on_merge: !desired.delete_branch_on_merge, allow_auto_merge: !desired.allow_auto_merge, allow_squash_merge: true, squash_merge_commit_title: "COMMIT_OR_PR_TITLE", squash_merge_commit_message: "COMMIT_MESSAGES" });
+  await ctx.gh.rest.repos.update({ ...address, delete_branch_on_merge: !desired.delete_branch_on_merge, allow_auto_merge: !desired.allow_auto_merge, allow_squash_merge: true, squash_merge_commit_title: "COMMIT_OR_PR_TITLE", squash_merge_commit_message: "COMMIT_MESSAGES", has_wiki: true, has_projects: true, allow_update_branch: false });
   const existing = (await listManagedRulesets(ctx.gh)).find((ruleset) => ruleset.name === "integrity");
   if (existing) {
     await ctx.gh.rest.repos.updateRepoRuleset({
@@ -296,6 +299,9 @@ export async function assertRepositorySettings(ctx: Ctx, repository: string): Pr
     allow_squash_merge: true,
     allow_merge_commit: false,
     allow_rebase_merge: false,
+    has_wiki: false,
+    has_projects: false,
+    allow_update_branch: true,
     squash_merge_commit_title: "PR_TITLE",
     squash_merge_commit_message: "PR_BODY",
   } satisfies SettingsSnapshot;
@@ -370,6 +376,20 @@ export const repoSettings: Scenario[] = [
         for (const name of ["Apply repository settings", "Apply managed files", "Mint approver contents token", "Mint managed contents token", "Mint managed workflows token"]) {
           assert(repeat.stepConclusions.get(name) === "skipped", `the repeated run did not skip ${name} (${repeat.url})`);
         }
+
+        await withServerConfig(ctx, (text) => {
+          const changed = text.replace("    has_wiki: false\n    has_projects: false\n    allow_update_branch: true\n", "");
+          assert(changed !== text, "could not omit feature settings for the unmanaged settings scenario");
+          return changed;
+        }, async () => {
+          await ctx.gh.rest.repos.update({ ...splitRepository(CLIENT), has_wiki: true, has_projects: true, allow_update_branch: false });
+          const omitted = await dispatchReconciliation(ctx, CLIENT, "dispatch", undefined, { createdRulesetIds });
+          assert(omitted.stepConclusions.get("Apply repository settings") === "skipped", `omitted feature settings caused a settings write (${omitted.url})`);
+          const { data } = await ctx.gh.rest.repos.get(splitRepository(CLIENT));
+          assert(data.has_wiki === true && data.has_projects === true && data.allow_update_branch === false, "omitted feature settings were changed");
+        });
+        await dispatchReconciliation(ctx, CLIENT, "dispatch", undefined, { createdRulesetIds });
+        await assertRepositorySettings(ctx, CLIENT);
 
         await withServerConfig(ctx, (text) => {
           const changed = text.replace("    allow_squash_merge: true\n", "");

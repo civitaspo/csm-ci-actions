@@ -646,3 +646,92 @@ function serverCallerPreflightFetch(filenames: readonly string[]) {
     { method: "POST", path: "/graphql", body: { data: { repository: { pullRequests: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } } },
   ]);
 }
+
+describe("repository feature settings", () => {
+  const target = { name: "owner/client", isServer: false };
+  const keys = ["has_wiki", "has_projects", "allow_update_branch"] as const;
+  const cases = keys.flatMap((key) => [true, false].map((value) => ({ key, value })));
+  const cfg = (settings: Record<string, unknown>) => parseConfig(`${CONFIG_YAML}\nrepo_settings: { settings: ${JSON.stringify(settings)} }\n`);
+  function stateFetch(repository: Record<string, unknown>, options: { then?: unknown[]; readStatus?: number; updateStatus?: number } = {}) {
+    const definitions = repoSettingsRuleSets(config());
+    const summaries = definitions.map((set, index) => ({ id: index + 1, name: set.name, source_type: "Repository" }));
+    return fakeFetch([
+      { method: "GET", path: "/repos/owner/client", body: options.readStatus ? { message: "feature read rejected" } : repository, status: options.readStatus ?? 200, ...(options.then ? { then: options.then } : {}) },
+      { method: "GET", path: "/repos/owner/client/rulesets", body: summaries },
+      ...summaries.map((summary, index) => ({ method: "GET", path: `/repos/owner/client/rulesets/${summary.id}`, body: { ...definitions[index], ...summary } })),
+      { method: "GET", path: "/repos/owner/client/immutable-releases", body: { enabled: true } },
+      { method: "PATCH", path: "/repos/owner/client", body: { message: "feature update rejected" }, status: options.updateStatus ?? 200 },
+    ]);
+  }
+  function args(fetch: ReturnType<typeof fakeFetch>, settings: Record<string, unknown>) {
+    return { adminGH: github("admin", fetch, { backoffMs: [] }), readGH: github("read", fakeFetch([])), config: cfg(settings), target, mode: "schedule" as const };
+  }
+
+  test.each(cases)("accepts $key=$value without defaulting other fields", ({ key, value }) => {
+    expect(cfg({ [key]: value }).repo_settings?.settings).toEqual({ [key]: value });
+  });
+  test.each(keys.flatMap((key) => ["false", 0, null, [], {}].map((value) => ({ key, value }))))("rejects non-boolean $key=$value", ({ key, value }) => {
+    expect(() => cfg({ [key]: value })).toThrow("Invalid input: expected boolean");
+  });
+
+  test.each(cases)("reports and repairs $key=$value drift and makes no write on replay", async ({ key, value }) => {
+    const desired = { [key]: value };
+    const drifted = { [key]: !value, description: "unrelated" };
+    const fetch = stateFetch(drifted, { then: [drifted, desired] });
+    const options = args(fetch, desired);
+    expect((await inspectRepoSettings(options)).changes).toEqual({ settings: [key], rulesets: [], immutableReleases: false });
+    expect(await applyRepoSettings(options)).toEqual({ settingsUpdated: 1, immutableReleasesEnabled: 0, rulesetsUpdated: 0, rulesetsCreated: 0 });
+    expect((await applyRepoSettings(options)).settingsUpdated).toBe(0);
+    const writes = fetch.requests.filter((request) => request.method !== "GET");
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.method).toBe("PATCH");
+    expect(JSON.parse(writes[0]?.body ?? "{}")).toEqual(desired);
+  });
+
+  test.each(keys)("rejects a missing configured %s before writes", async (key) => {
+    const fetch = stateFetch({});
+    const options = args(fetch, { [key]: false });
+    const message = `repository setting ${key} is not visible to the inspection token`;
+    await expect(inspectRepoSettings(options)).rejects.toThrow(message);
+    await expect(applyRepoSettings(options)).rejects.toThrow(message);
+    expect(fetch.requests.every((request) => request.method === "GET")).toBe(true);
+  });
+
+  test.each(keys)("revalidates %s before apply after an earlier successful inspection", async (key) => {
+    const fetch = stateFetch({ [key]: false }, { then: [{}] });
+    const options = args(fetch, { [key]: true });
+    expect((await inspectRepoSettings(options)).changes.settings).toEqual([key]);
+    await expect(applyRepoSettings(options)).rejects.toThrow(`repository setting ${key} is not visible to the inspection token`);
+    expect(fetch.requests.every((request) => request.method === "GET")).toBe(true);
+  });
+
+  test.each(keys)("fresh matching %s avoids a stale planned write", async (key) => {
+    const fetch = stateFetch({ [key]: false }, { then: [{ [key]: true }] });
+    const options = args(fetch, { [key]: true });
+    expect((await inspectRepoSettings(options)).changes.settings).toEqual([key]);
+    expect((await applyRepoSettings(options)).settingsUpdated).toBe(0);
+    expect(fetch.requests.every((request) => request.method === "GET")).toBe(true);
+  });
+
+  test.each([{}, { has_wiki: false, has_projects: true, allow_update_branch: false }])("omitted features remain unmanaged: %j", async (repository) => {
+    const fetch = stateFetch({ ...repository, delete_branch_on_merge: false });
+    const options = args(fetch, { delete_branch_on_merge: true });
+    expect((await inspectRepoSettings(options)).changes.settings).toEqual(["delete_branch_on_merge"]);
+    expect((await applyRepoSettings(options)).settingsUpdated).toBe(1);
+    const writes = fetch.requests.filter((request) => request.method === "PATCH");
+    expect(writes).toHaveLength(1);
+    expect(JSON.parse(writes[0]?.body ?? "{}")).toEqual({ delete_branch_on_merge: true });
+  });
+
+  test.each(keys.flatMap((key) => [403, 404, 422, 503].flatMap((status) => ["read", "update"].map((stage) => ({ key, status, stage })))))("surfaces $stage API failure $status for $key", async ({ key, status, stage }) => {
+    const fetch = stateFetch({ [key]: false }, stage === "read" ? { readStatus: status } : { updateStatus: status });
+    await expect(applyRepoSettings(args(fetch, { [key]: true }))).rejects.toThrow(stage === "read" ? "feature read rejected" : "feature update rejected");
+    expect(fetch.requests.filter((request) => request.method === "PATCH")).toHaveLength(stage === "read" ? 0 : 1);
+    expect(fetch.requests.filter((request) => request.method === "PUT" || request.method === "POST")).toHaveLength(0);
+  });
+
+  test("branch update suggestions do not require up-to-date branches", () => {
+    const rule = repoSettingsRuleSets(cfg({ allow_update_branch: true })).find((set) => set.name === "review-and-checks")?.rules.find((item) => item.type === "required_status_checks");
+    expect(rule).toHaveProperty("parameters.strict_required_status_checks_policy", false);
+  });
+});
