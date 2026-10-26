@@ -1,6 +1,6 @@
 # csm-ci release build
 
-Build release assets from an isolated source snapshot. This composite action supports `none`, `js-action`, `goreleaser`, `cargo`, and `cargo-raw`. It does not publish a release or create attestations. The trusted release build job in [server.yml](../../../.github/workflows/server.yml) runs it with no token permissions, secrets, environment, or cache.
+Build release assets from an isolated source snapshot. This composite action supports `none`, `js-action`, `goreleaser`, `cargo`, `cargo-raw`, and `terraform-provider`. It does not publish a release or create attestations. The trusted release build job in [server.yml](../../../.github/workflows/server.yml) runs it with no token permissions, secrets, environment, or cache.
 
 See [release publishing](../../../docs/release.md) for build behavior, Cargo target restrictions, and the build isolation boundary.
 
@@ -8,7 +8,7 @@ See [release publishing](../../../docs/release.md) for build behavior, Cargo tar
 
 | Input | Required | Value |
 |---|---:|---|
-| `build-type` | Yes | `none`, `js-action`, `goreleaser`, `cargo`, or `cargo-raw`. |
+| `build-type` | Yes | `none`, `js-action`, `goreleaser`, `cargo`, `cargo-raw`, or `terraform-provider`. |
 | `client-path` | Yes | Path to the isolated source snapshot. |
 | `repository` | No | Client `owner/repo`; required for `cargo` asset naming. |
 | `version` | No | Planned semantic version; required for `cargo` and `cargo-raw`. |
@@ -16,6 +16,8 @@ See [release publishing](../../../docs/release.md) for build behavior, Cargo tar
 | `binary` | No | Safe Cargo binary name; required for `cargo-raw`. |
 
 ## Outputs
+
+Terraform providers use pinned Go without a cache and the existing pinned GoReleaser, then collect only regular archives and the root Registry manifest. Signing happens later in the trusted publishing job.
 
 This action defines no outputs. It writes assets under `assets/` in the current working directory. The caller uploads the directory as a workflow artifact.
 

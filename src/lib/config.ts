@@ -34,6 +34,10 @@ export const ReleaseSchema = z.discriminatedUnion("build_type", [
   z.strictObject({ build_type: z.literal("js-action") }),
   z.strictObject({ build_type: z.literal("goreleaser") }),
   z.strictObject({
+    build_type: z.literal("terraform-provider"),
+    provider_name: z.string().max(64).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*(?![\s\S])/u, "provider_name must be lowercase alphanumeric with single internal hyphens"),
+  }),
+  z.strictObject({
     build_type: z.literal("cargo"),
     targets: z.array(z.enum(CARGO_TARGETS)).min(1).refine((targets) => new Set(targets).size === targets.length, "duplicate cargo target"),
   }),

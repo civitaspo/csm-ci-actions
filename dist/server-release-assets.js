@@ -24908,6 +24908,9 @@ var ExitCode;
   ExitCode[ExitCode["Success"] = 0] = "Success";
   ExitCode[ExitCode["Failure"] = 1] = "Failure";
 })(ExitCode || (ExitCode = {}));
+function setSecret(secret) {
+  issueCommand("add-mask", {}, secret);
+}
 function getInput(name, options) {
   const val = process.env[`INPUT_${name.replace(/ /g, "_").toUpperCase()}`] || "";
   if (options && options.required && !val) {
@@ -30907,6 +30910,10 @@ var ReleaseSchema = discriminatedUnion("build_type", [
   strictObject({ build_type: literal("js-action") }),
   strictObject({ build_type: literal("goreleaser") }),
   strictObject({
+    build_type: literal("terraform-provider"),
+    provider_name: string2().max(64).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*(?![\s\S])/u, "provider_name must be lowercase alphanumeric with single internal hyphens")
+  }),
+  strictObject({
     build_type: literal("cargo"),
     targets: array(_enum(CARGO_TARGETS)).min(1).refine((targets) => new Set(targets).size === targets.length, "duplicate cargo target")
   }),
@@ -31050,9 +31057,52 @@ var LabelEventSchema = object({
   sender: object({ id: number2(), type: string2() })
 });
 
+// src/release/terraform.ts
+import { spawn } from "node:child_process";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+async function terraformAssets(input) {
+  const root = import.meta.url.endsWith(".ts") ? "../../" : "../";
+  const helper = fileURLToPath(new URL(`${root}actions/server/release-assets/terraform.py`, import.meta.url));
+  const credentials = input.credentials.mode === "prepare" ? { key: input.credentials.privateKey, passphrase: input.credentials.passphrase } : { key: input.credentials.publicKey };
+  const output = await new Promise((accept, reject) => {
+    const child = spawn("python3", [
+      "-B",
+      helper,
+      input.credentials.mode,
+      resolve(input.directory),
+      input.providerName,
+      input.version,
+      input.sourceDateEpoch,
+      input.fingerprint
+    ], { env: { PATH: process.env.PATH, LANG: "C.UTF-8" } });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (data) => {
+      stdout += data;
+    });
+    child.stderr.setEncoding("utf8").on("data", (data) => {
+      stderr += data;
+    });
+    child.on("error", reject);
+    child.on("close", (code) => code === 0 ? accept(stdout) : reject(new Rejection(stderr.trim() || "Terraform asset validation failed")));
+    child.stdin.on("error", () => {});
+    child.stdin.end(JSON.stringify(credentials));
+  });
+  return strictObject({ publicKey: string2().min(1) }).parse(JSON.parse(output)).publicKey;
+}
+
 // src/release/assets.ts
 async function prepareAssets(directory, release) {
   await mkdir2(directory, { recursive: true });
+  if (release?.build_type === "terraform-provider") {
+    await terraformAssets({
+      directory,
+      providerName: release.provider_name,
+      ...release,
+      credentials: { mode: "verify", publicKey: release.publicKey }
+    });
+  }
   const names = (await readdir2(directory)).sort();
   const sumsPath = join(directory, "SHA256SUMS");
   const sumsInfo = names.includes("SHA256SUMS") ? await lstat2(sumsPath) : undefined;
@@ -31114,12 +31164,55 @@ async function prepareAssets(directory, release) {
   return assets;
 }
 
+// src/release/semver.ts
+var IDENTIFIER = "(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)";
+var VERSION = new RegExp(`^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(${IDENTIFIER}(?:\\.${IDENTIFIER})*))?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$`);
+function parseSemVer(value) {
+  const match = VERSION.exec(value);
+  if (!match)
+    return;
+  return { major: match[1] ?? "", minor: match[2] ?? "", patch: match[3] ?? "", prerelease: match[4]?.split(".") ?? [] };
+}
+
+// src/release/plan-schema.ts
+var ReleasePlanSchema = strictObject({
+  repository: string2().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/),
+  pullNumber: number2().int().positive(),
+  mergeSha: string2().regex(/^[a-f0-9]{40}$/i),
+  tag: string2().min(2),
+  version: string2().refine((version) => parseSemVer(version) !== undefined),
+  serverBotId: number2().int().positive(),
+  serverBotLogin: string2().min(1),
+  tagExists: boolean2(),
+  privateRepository: boolean2(),
+  release: ReleaseSchema,
+  prerelease: boolean2()
+}).refine((plan) => plan.release.build_type !== "terraform-provider" || !plan.version.includes("+"), "Terraform provider versions cannot contain SemVer build metadata");
+
 // src/server-release-assets/main.ts
 async function main() {
   const directory = getInput("directory", { required: true });
-  const releaseConfig = getInput("release-config");
-  const release = releaseConfig ? ReleaseSchema.parse(JSON.parse(releaseConfig)) : undefined;
-  const assets = await prepareAssets(directory, release);
+  const plan = ReleasePlanSchema.parse(JSON.parse(getInput("plan", { required: true })));
+  const release = plan.release;
+  const sourceDateEpoch = getInput("source-date-epoch");
+  const fingerprint = getInput("gpg-fingerprint");
+  let publicKey = "";
+  if (release.build_type === "terraform-provider") {
+    const privateKey = getInput("gpg-private-key", { required: true, trimWhitespace: false });
+    const passphrase = getInput("gpg-passphrase", { required: true, trimWhitespace: false });
+    setSecret(privateKey);
+    setSecret(passphrase);
+    publicKey = await terraformAssets({
+      directory,
+      providerName: release.provider_name,
+      version: plan.version,
+      sourceDateEpoch,
+      fingerprint,
+      credentials: { mode: "prepare", privateKey, passphrase }
+    });
+  }
+  const assets = await prepareAssets(directory, release.build_type === "terraform-provider" ? { ...release, version: plan.version, sourceDateEpoch, fingerprint, publicKey } : release);
+  setOutput("gpg-public-key", publicKey);
   setOutput("subject-path", `${directory}/*`);
   setOutput("assets", JSON.stringify(assets.map(({ name, sha256 }) => ({ name, sha256 }))));
   info(`prepared ${assets.length} release asset${assets.length === 1 ? "" : "s"} including SHA256SUMS`);

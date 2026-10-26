@@ -1,6 +1,15 @@
 name: csm-ci release publish
 description: Create or complete a draft release, then verify immutable assets and tag.
 inputs:
+  gpg-public-key:
+    description: Public key from the trusted Terraform asset preparation step.
+    required: false
+  gpg-fingerprint:
+    description: Full primary RSA fingerprint for Terraform signature verification.
+    required: false
+  source-date-epoch:
+    description: Merge timestamp used by the Terraform detached signature.
+    required: false
   github-token:
     description: Server App token with contents:write on the client repository.
     required: true

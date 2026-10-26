@@ -30902,6 +30902,10 @@ var ReleaseSchema = discriminatedUnion("build_type", [
   strictObject({ build_type: literal("js-action") }),
   strictObject({ build_type: literal("goreleaser") }),
   strictObject({
+    build_type: literal("terraform-provider"),
+    provider_name: string2().max(64).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*(?![\s\S])/u, "provider_name must be lowercase alphanumeric with single internal hyphens")
+  }),
+  strictObject({
     build_type: literal("cargo"),
     targets: array(_enum(CARGO_TARGETS)).min(1).refine((targets) => new Set(targets).size === targets.length, "duplicate cargo target")
   }),
@@ -35101,19 +35105,6 @@ function parseSemVer(value) {
 }
 
 // src/release/plan.ts
-var ReleasePlanSchema = strictObject({
-  repository: string2().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/),
-  pullNumber: number2().int().positive(),
-  mergeSha: string2().regex(/^[a-f0-9]{40}$/i),
-  tag: string2().min(2),
-  version: string2().refine((version) => parseSemVer(version) !== undefined),
-  serverBotId: number2().int().positive(),
-  serverBotLogin: string2().min(1),
-  tagExists: boolean2(),
-  privateRepository: boolean2(),
-  release: ReleaseSchema,
-  prerelease: boolean2()
-});
 async function planRelease(gh, input) {
   const repo = splitRepository(input.repository);
   const [{ data: repository }, { data: pull }] = await Promise.all([
@@ -35147,6 +35138,9 @@ async function planRelease(gh, input) {
   const semver = parseSemVer(version);
   if (!semver)
     throw new Rejection(`.release-version ${JSON.stringify(version)} is not semver`);
+  if (input.release.build_type === "terraform-provider" && version.includes("+")) {
+    throw new Rejection("Terraform provider versions cannot contain SemVer build metadata");
+  }
   const tag = `v${version}`;
   const existingTag = await verifyReleaseTag(gh, repo, tag, { id: input.serverBotId, login: mergedBy.login }, mergeSha);
   const existingRelease = await getReleaseByTag(gh, repo, tag);

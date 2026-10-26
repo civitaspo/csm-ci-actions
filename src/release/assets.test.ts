@@ -19,6 +19,14 @@ async function tempDirectory(): Promise<string> {
 }
 
 describe("prepareAssets", () => {
+  test("revalidates Terraform's exact asset contract before generating aggregate checksums", async () => {
+    const directory = await tempDirectory();
+    await expect(prepareAssets(directory, {
+      build_type: "terraform-provider", provider_name: "test", version: "1.2.3",
+      sourceDateEpoch: "1800000000", fingerprint: "A".repeat(40), publicKey: "fixture public key",
+    })).rejects.toThrow("Terraform assets must contain exactly one Registry manifest");
+    await expect(readFile(join(directory, "SHA256SUMS"))).rejects.toThrow();
+  });
   test("creates individual raw checksums and attestation subjects for all four targets", async () => {
     const directory = await tempDirectory();
     for (const target of CARGO_RAW_TARGETS) await writeFile(join(directory, `app-${target}`), "a");

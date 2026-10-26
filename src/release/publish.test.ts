@@ -55,6 +55,25 @@ const validTagRoutes = [
 ];
 
 describe("publishRelease", () => {
+  test("rejects Terraform publication without the verified public key before API writes", async () => {
+    const fetch = fakeFetch([]);
+    await expect(publishRelease(github("t", fetch), {
+      plan: { ...plan, release: { build_type: "terraform-provider", provider_name: "test" } },
+      expectedAssets: [], directory: ".",
+    })).rejects.toThrow("Terraform publication requires the verified public key and source timestamp");
+    expect(fetch.calls).toEqual([]);
+  });
+
+  test("revalidates Terraform assets with the public key before any GitHub call", async () => {
+    directory = await mkdtemp(join(tmpdir(), "csm-terraform-publish-"));
+    const fetch = fakeFetch([]);
+    await expect(publishRelease(github("t", fetch), {
+      plan: { ...plan, release: { build_type: "terraform-provider", provider_name: "test" } },
+      expectedAssets: [], directory,
+      terraform: { sourceDateEpoch: "1800000000", fingerprint: "A".repeat(40), publicKey: "fixture public key" },
+    })).rejects.toThrow("Terraform assets must contain exactly one Registry manifest");
+    expect(fetch.calls).toEqual([]);
+  });
   test.each([
     { name: "a manifest with too few entries", assets: (digest: string) => [{ name: "SHA256SUMS", sha256: digest }], message: "release asset manifest does not match the build outputs" },
     { name: "a same-length manifest with a different digest", assets: (digest: string) => [{ name: "app.txt", sha256: "0".repeat(64) }, { name: "SHA256SUMS", sha256: digest }], message: "release asset manifest does not match the build outputs" },

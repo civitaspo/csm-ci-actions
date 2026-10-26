@@ -22,9 +22,18 @@ on:
       predicate_type:
         required: true
         type: string
+      terraform_signer_run:
+        description: Server release run containing the public Terraform verification key.
+        required: false
+        type: string
+      terraform_fingerprint:
+        description: Human-provisioned testing RSA key's full primary fingerprint.
+        required: false
+        type: string
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   verify:
@@ -54,6 +63,34 @@ jobs:
           for sidecar in *.sha256; do
             sha256sum --check "$sidecar"
           done
+      - if: inputs.terraform_signer_run != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: civitaspo/csm-ci-actions
+          ref: e2e
+          persist-credentials: false
+      - if: inputs.terraform_signer_run != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: terraform-signing-public-key
+          run-id: ${{ inputs.terraform_signer_run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/terraform-public-key
+      - if: inputs.terraform_signer_run != ''
+        name: Verify Registry archives, manifest, checksums and RSA signature
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLIENT_REPOSITORY: ${{ inputs.client_repository }}
+          MERGE_SHA: ${{ inputs.merge_sha }}
+          TAG: ${{ inputs.tag }}
+          FINGERPRINT: ${{ inputs.terraform_fingerprint }}
+          RELEASE_DIR: ${{ runner.temp }}/release-assets
+        run: |
+          committed=$(gh api "repos/$CLIENT_REPOSITORY/commits/$MERGE_SHA" --jq '.commit.committer.date')
+          epoch=$(date -d "$committed" +%s)
+          jq -n --rawfile key "$RUNNER_TEMP/terraform-public-key/terraform-signing-public-key.asc" '{key:$key}' | \
+            python3 -B actions/server/release-assets/terraform.py verify \
+              "$RELEASE_DIR" csm-ci-test "${TAG#v}" "$epoch" "$FINGERPRINT" >/dev/null
       - name: Verify each signature and release predicate
         env:
           GH_TOKEN: ${{ github.token }}

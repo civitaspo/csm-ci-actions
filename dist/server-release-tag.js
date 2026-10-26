@@ -34825,6 +34825,10 @@ var ReleaseSchema = discriminatedUnion("build_type", [
   strictObject({ build_type: literal("js-action") }),
   strictObject({ build_type: literal("goreleaser") }),
   strictObject({
+    build_type: literal("terraform-provider"),
+    provider_name: string2().max(64).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*(?![\s\S])/u, "provider_name must be lowercase alphanumeric with single internal hyphens")
+  }),
+  strictObject({
     build_type: literal("cargo"),
     targets: array(_enum(CARGO_TARGETS)).min(1).refine((targets) => new Set(targets).size === targets.length, "duplicate cargo target")
   }),
@@ -35067,7 +35071,7 @@ function parseSemVer(value) {
   return { major: match[1] ?? "", minor: match[2] ?? "", patch: match[3] ?? "", prerelease: match[4]?.split(".") ?? [] };
 }
 
-// src/release/plan.ts
+// src/release/plan-schema.ts
 var ReleasePlanSchema = strictObject({
   repository: string2().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/),
   pullNumber: number2().int().positive(),
@@ -35080,7 +35084,9 @@ var ReleasePlanSchema = strictObject({
   privateRepository: boolean2(),
   release: ReleaseSchema,
   prerelease: boolean2()
-});
+}).refine((plan) => plan.release.build_type !== "terraform-provider" || !plan.version.includes("+"), "Terraform provider versions cannot contain SemVer build metadata");
+
+// src/release/plan.ts
 async function verifyReleaseTag(gh, repo, tagName, bot, mergeSha) {
   let ref;
   try {

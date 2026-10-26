@@ -7,6 +7,11 @@ async function main(): Promise<void> {
     plan: JSON.parse(core.getInput("plan", { required: true })),
     expectedAssets: JSON.parse(core.getInput("assets", { required: true })),
     directory: core.getInput("directory", { required: true }),
+    terraform: {
+      publicKey: core.getInput("gpg-public-key"),
+      fingerprint: core.getInput("gpg-fingerprint"),
+      sourceDateEpoch: core.getInput("source-date-epoch"),
+    },
   });
   core.info("published and verified the immutable release");
 }
