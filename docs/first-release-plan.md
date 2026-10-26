@@ -207,6 +207,9 @@ repositories:                                       # per repo, only ops and the
 ### S5. Comment commands (`/approve`, `/merge`)
 
 - **Client side**: only a comment that passes the body and commenter pre-filter mints a token. This prevents label spam by fork commenters.
+  - `/approve` requires OWNER, MEMBER, or COLLABORATOR association.
+  - `/merge` accepts those associations, or a Bot whose immutable comment-author ID equals the pull request author's ID in the issue event. Missing or malformed bot identity cannot qualify for this exception.
+  - Forwarding a bot request does not grant merge permission. The server requires `trust.bot_mergers` membership, ownership of the PR and every commit, current approval and checks, and the existing protected-repository restrictions. This permits Renovate's own-PR `/merge` comments even when GitHub reports CONTRIBUTOR association.
 - **Server-side acceptance conditions**
   - The comment belongs to the target PR.
   - The body matches the command regex exactly.
