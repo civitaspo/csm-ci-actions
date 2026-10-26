@@ -14,6 +14,9 @@ repo_settings:
     allow_squash_merge: true
     allow_merge_commit: false
     allow_rebase_merge: false
+    has_wiki: false
+    has_projects: false
+    allow_update_branch: true
   managed_files:
     .github/PULL_REQUEST_TEMPLATE.md: |
       ## Why
@@ -22,6 +25,10 @@ repo_settings:
 ```
 
 Omitted repository settings remain unchanged. The merge-method settings accept only the values shown above.
+
+`has_wiki`, `has_projects`, and `allow_update_branch` are optional booleans. Each accepts `true` or `false`. The example disables Wiki and Projects and enables GitHub's suggestion to update pull request branches. `allow_update_branch` does not update branches or require branches to be up to date before merging. Existing merge, approval, required-check, and ruleset behavior remains unchanged.
+
+Inspection reports drift for each configured field and fails if a configured field is missing from the API response. Sync repairs differing values without changing omitted fields or unrelated repository settings. A second sync with no settings drift makes no settings write. Read and update API errors fail the run, including errors for unsupported settings.
 
 When `allow_squash_merge` is explicitly `true`, reconciliation also enforces `squash_merge_commit_title: PR_TITLE` and `squash_merge_commit_message: PR_BODY`. These fixed values use the pull request title and description for both single-commit and multi-commit squash merges. Do not add these fields to `csm-ci.yaml`; they are implied by `allow_squash_merge: true`. Inspection reports drift in each field and fails if either field is missing. Sync repairs either field even when squash merging is already enabled. A repeat with no further settings drift makes no settings write. If `allow_squash_merge` or the entire `settings` block is omitted, both fields remain unchanged, even when the repository already allows squash merges. The fixed rulesets still apply.
 
