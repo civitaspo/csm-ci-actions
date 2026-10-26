@@ -74,9 +74,7 @@ securefix is the one exception on the client side. Its caller cannot be a reusab
   - Mint a write token only in a step that runs after validation has passed.
 - **How a reusable workflow calls an action**: a reusable workflow job first checks out csm-ci-actions itself with `actions/checkout` (`repository: ${{ job.workflow_repository }}`, `ref: ${{ job.workflow_sha }}`, `path: .csm-ci-actions`). Then it uses the action from the same commit with `uses: ./.csm-ci-actions/actions/<name>`. We confirmed that these two contexts exist in run 40099821184 of testing-csm-ci-client.
 - **Lockfile-enforced client callers**: the five reusable client workflows (`client-approve.yml`, `client-merge.yml`, `client-policy-check.yml`, `client-release-prepare.yml`, and `client-release-publish.yml`) may call their own composite through `uses: $/actions/client/<name>`, which resolves to the defining reusable workflow repository and revision. Onboard all five with the official `gh actions-lock` generator and commit `.github/workflows/actions.lock`; keep their external action SHA pins. This exposes composite dependencies to the defining repository's lockfile without relying on a runtime checkout. Other reusable workflows retain the checkout pattern above. Verify a real locked client can start all five client workflows before considering the migration complete.
-- **Caller secrets**: the caller sets `secrets: inherit`. The reusable workflow reads the variables and secrets in the "Naming list" under those exact names.
-  - Without `inherit`, an environment secret is empty in the called job (run 40099955263 of testing-csm-ci-server). With `inherit`, it arrives (run 40100014166).
-  - Variables are visible without `inherit`.
+- **Caller secrets**: reusable workflows declare named secrets and callers map each consumed or deliberately forwarded name to `${{ secrets.NAME }}` under the identical name. Supported production callers do not use `secrets: inherit`. The [explicit secret contract](#explicit-secret-contract-and-staged-migration) defines required names, feature-specific names, and rollout gates. Variables keep their Naming-list names.
 - **artifact**: only the securefix diff is passed with the official upload-artifact / download-artifact.
 - **External actions**: pin all of them to a full SHA.
 - **Static checks in CI**
@@ -85,6 +83,36 @@ securefix is the one exception on the client side. Its caller cannot be a reusab
   - Pass `${{ github.event.* }}` only through env.
   - **Server-side workflows use no cache at all**. CI checks this.
 - **License**: MIT.
+
+### Explicit secret contract and staged migration
+
+This is the approved specification for [issue #76](https://github.com/civitaspo/csm-ci-actions/issues/76). Runtime workflows, activation preflight, templates, and callers still require separate implementation and deployment. Do not replace inheritance on an existing pin using this specification alone. The environment-bound [availability probe](handoff.md#explicit-secret-contract-probe) establishes the GitHub boundary, not completed runtime migration.
+
+Each reusable workflow declares `on.workflow_call.secrets` as follows. Optional means feature-specific, not optional after that feature is selected.
+
+| Workflow | Secret | `required` | Use |
+|---|---|---|---|
+| All five `client-*.yml` | `CSM_CI_CLIENT_APP_PRIVATE_KEY` | `true` | Client request token |
+| `server.yml` | `CSM_CI_SERVER_APP_PRIVATE_KEY` | `true` | Server operation tokens |
+| `server.yml` | `CSM_CI_APPROVER_APP_PRIVATE_KEY` | `false` | Approval, including `/approve` and `/recheck` approval |
+| `server.yml` | `CSM_CI_TERRAFORM_PROVIDER_GPG_PRIVATE_KEY`, `CSM_CI_TERRAFORM_PROVIDER_GPG_PASSPHRASE` | `false` for each | Terraform provider publication only |
+| `server-repo-settings.yml` | `CSM_CI_SERVER_APP_PRIVATE_KEY` | `true` | Discovery and target jobs |
+| `server-repo-settings.yml` | `CSM_CI_APPROVER_APP_PRIVATE_KEY` | `false` | Forward to activation preflight |
+| `server-repo-settings-target.yml` | `CSM_CI_SERVER_APP_PRIVATE_KEY` | `true` | Every target mode |
+| `server-repo-settings-target.yml` | `CSM_CI_APPROVER_APP_PRIVATE_KEY` | `false` | Manual activation preflight only |
+| `server-check.yml` | None | Not applicable | No App credentials consumed |
+
+Client callers map only `CSM_CI_CLIENT_APP_PRIVATE_KEY`. The server label caller maps the Server App key and names for its enabled approval and provider publication features. The repo-settings caller maps the server and approver names. Both nested client-target and server-target edges forward those two names explicitly. Repo-settings never forwards provider signing credentials. No production caller forwards `csm-ci-e2e` credentials. The securefix composite keeps its existing single Client App private-key input.
+
+Every privileged job retains `environment: csm-ci` and the existing default-branch-only deployment restriction. Strong credentials stay in that server environment. Client repositories retain only the Client App key at repository level. An explicit mapping may evaluate to an empty string in the caller when the name exists only in the called job's environment. The environment provides that name to the called job. GitHub's required declaration validates presence of the mapping, not a nonempty credential value. Never pass credentials through workflow inputs, outputs, artifacts, logs, or command arguments.
+
+Keep selected-operation validation at the existing consuming steps. Approval and manual repo-settings activation must fail at the pinned App-token action when the approver key is empty. Its current message is `The 'private-key' input must be set to a non-empty string. If using a secret or variable, ensure it is available in this workflow context.` Terraform provider asset preparation must reject an empty key with `Input required and not supplied: gpg-private-key`, or an empty passphrase with `Input required and not supplied: gpg-passphrase`, before signing. Other release types do not require these inputs. Managed-files-only and repairs that do not activate controlled merges do not require approver capability. Do not add a PAT fallback, broaden token permissions, or change receipt, cleanup, replay, or final write revalidation.
+
+Activation preflight retains its existing caller path, created-event, no-job-condition, and referenced repository rules. Replace the inheritance requirement with a named secret map. A merge caller must map `CSM_CI_CLIENT_APP_PRIVATE_KEY` to the identical `secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY` expression. The server label caller must map `CSM_CI_SERVER_APP_PRIVATE_KEY` to its identical expression, plus each present feature-specific name to its identical expression. Optional feature presence is validated when the feature runs, not inferred from client configuration during caller discovery. Reject inheritance, a missing required mapping, a renamed mapping, a literal value, a mapping to another secret, or an extra undeclared credential name. Allow expression whitespace without changing the referenced secret name. Preserve `caller workflow has not been distributed` from dispatch validation and `caller workflow is not distributed on <repository>` from the earlier workflow preflight. Missing mappings declared required also fail GitHub workflow validation before any job starts.
+
+Implementation acceptance requires table-driven tests for valid explicit maps, omitted optional names, each missing or wrong mapping, extra names, and unchanged trigger and condition rejection messages. Test selected-feature missing credentials and non-feature paths. Mutation-check each changed rejection rule individually. Migrate reusable declarations, nested edges, supported callers, templates, fixtures, setup examples, and generated action locks together. Preserve the configured lockfile workflow list and the server checkout pattern.
+
+Run all mandatory local checks, then affected live feature suites and smoke at the signed, pushed full candidate SHA. Verify both client and server callers, every nested repo-settings edge, and bootstrap activation. Keep the e2e runner checkout on `main` and the privileged `csm-ci-e2e` environment separate. Roll out reviewed compatible pins and callers one repository at a time through normal protections. A workflow-change merge blocked by the old runtime needs the separately authorized bootstrap recovery in [merge.md](merge.md). This specification authorizes no credential, App permission, or environment policy changes.
 
 ### Layout
 
@@ -263,7 +291,7 @@ Run the affected approve, policy-check, and merge suites sequentially, then smok
 
 ### S6. Placement of secrets and permissions
 
-- **environment `csm-ci`** (deploys from the default branch only): holds the Server App key and the approver PAT.
+- **environment `csm-ci`** (deploys from the default branch only): holds the Server App key, the approver App key, and enabled provider signing credentials. Explicit workflow mappings do not change this placement.
 - The build job declares no environment.
 - **Client App** is installed only on the server repo. Its permission is `issues: write`.
 - **Server App** permissions
