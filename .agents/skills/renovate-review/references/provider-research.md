@@ -13,4 +13,3 @@ Official sources checked on 2026-10-26 support the comparison below. Prices can 
 | muse | The issue gives no product URL or deployment. Its intended provider, availability, and price remain unverified. A name match cannot resolve that ambiguity. | Obtain the exact product or existing installation and its official pricing and integration documentation before selection. Do not configure a similarly named product by inference. |
 
 Compare total cost per completed, verified update, including model usage, Actions minutes, hosting, retries after rebases, operator review time, and integration upkeep. No measured batch cost or review-accuracy evidence exists here. Choose the existing supervised workflow first because it avoids a second privileged service. Consider a small evidence-collection helper only after pilot records show repeated collection work. A new server operation offers no demonstrated benefit and would require a separate specification PR.
-
