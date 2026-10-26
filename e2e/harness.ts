@@ -247,24 +247,33 @@ export async function openPr(ctx: Ctx, kind: "signed" | "unsigned", as: GitHub =
 export async function withServerConfig<T>(ctx: Ctx, edit: (text: string) => string, run: () => Promise<T>): Promise<T> {
   const repository = splitRepository(SERVER);
   const read = async () => {
-    const { data } = await ctx.gh.rest.repos.getContent({ ...repository, path: "csm-ci.yaml", ref: "main" });
+    const { data: head } = await ctx.gh.rest.git.getRef({ ...repository, ref: "heads/main" });
+    const { data } = await ctx.gh.rest.repos.getContent({ ...repository, path: "csm-ci.yaml", ref: head.object.sha });
     assert(!Array.isArray(data) && data.type === "file", `expected ${SERVER}/csm-ci.yaml to be a file`);
     return { sha: data.sha, text: Buffer.from(data.content, "base64").toString("utf8") };
   };
   const write = async (sha: string, text: string, message: string) => ctx.gh.rest.repos.createOrUpdateFileContents({
     ...repository, path: "csm-ci.yaml", branch: "main", sha, message, content: Buffer.from(text).toString("base64"),
   });
+  const visible = (text: string) => until("server fixture content visibility", async () => (await read()).text === text ? true : undefined);
   const original = await read();
   const changed = edit(original.text);
   parseConfig(changed);
   if (changed === original.text) return run();
+  let pendingSha: string | undefined;
   try {
-    await write(original.sha, changed, "Temporarily configure e2e server fixture");
+    const { data } = await write(original.sha, changed, "Temporarily configure e2e server fixture");
+    pendingSha = data.content?.sha;
+    assert(pendingSha, "server fixture write returned no content SHA");
+    await visible(changed);
+    pendingSha = undefined;
     return await run();
   } finally {
     const latest = await read();
-    if (latest.text === changed) await write(latest.sha, original.text, "Restore e2e server fixture");
-    else if (latest.text !== original.text) throw new Error("server fixture changed unexpectedly during e2e; refusing to overwrite it");
+    if (latest.text === changed || (latest.text === original.text && pendingSha)) {
+      await write(pendingSha ?? latest.sha, original.text, "Restore e2e server fixture");
+      await visible(original.text);
+    } else if (latest.text !== original.text) throw new Error("server fixture changed unexpectedly during e2e; refusing to overwrite it");
   }
 }
 
