@@ -94,6 +94,8 @@ The 60-minute limit and a push that lands while approving are covered by unit te
 
 ## Repository policy overrides
 
-The [approved repository policy contract](first-release-plan.md#repository-policy-overrides-and-staged-migration) requires separate implementation and deployment. Automatic approval, `/approve`, and `/recheck` use the same effective sensitive paths and exemptions as policy-check and merge. An omitted repository list inherits its global value. An explicit list replaces it, including an empty list.
+The compatibility runtime implements the first stage of the [repository policy contract](first-release-plan.md#repository-policy-overrides-and-staged-migration). Deployment and removal of legacy protection remain separate gates. Automatic approval, `/approve`, and `/recheck` use the same effective sensitive paths and exemptions as policy-check and merge. An omitted repository list inherits its global value. An explicit list replaces it, including an empty list.
 
 An exemption requires the PR author and every commit to have the same effective identity. It does not bypass signature verification or trusted-committer checks. `/approve` retains its trusted human command and current-head evidence requirements. Permission for a Bot to request a merge remains a separate repository setting.
+
+During this stage, the configured server repository and `civitaspo/csm-ci-actions` still treat every path as sensitive and ignore exemptions, even when a repository override requests relaxation.

@@ -83,6 +83,9 @@ async function verifyMerger(ctx: MergeContext, pull: PullFacts, comment: Comment
     if (target === ctx.config.server_repository.toLowerCase() || target === "civitaspo/csm-ci-actions") {
       throw new Rejection(`bot mergers cannot merge pull requests in protected repository ${ctx.repository}`);
     }
+    if (repositoryEntry(ctx.config, ctx.repository)?.merge?.allow_bot_requests === false) {
+      throw new Rejection(`bot merge requests are disabled for repository ${ctx.repository}`);
+    }
     await checkBotMerger(ctx, pull, bot);
   } else if (author.type === "User") {
     principal(author, ctx.config.trust.mergers, "mergers");

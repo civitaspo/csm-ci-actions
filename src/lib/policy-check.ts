@@ -1,4 +1,4 @@
-import type { Config, Policy } from "./config.ts";
+import { repositoryEntry, type Config, type Policy } from "./config.ts";
 import { type GitHub, splitRepository } from "./github.ts";
 import { evaluatePolicies, type PolicyResult } from "./policies/index.ts";
 import { evaluateTrust, fetchCommitFacts } from "./trust.ts";
@@ -7,13 +7,22 @@ import type { PullFacts } from "./command.ts";
 const ALWAYS: Policy[] = [{ type: "signed-commits" }, { type: "trusted-committers" }];
 export type PolicyCheckContext = { server: GitHub; config: Config; repository: string; pull: PullFacts };
 
+export function effectivePolicies(config: Config, repository: string): Policy[] {
+  const override = repositoryEntry(config, repository)?.sensitive_paths;
+  const protectedRepository = repository.toLowerCase() === config.server_repository || repository.toLowerCase() === "civitaspo/csm-ci-actions";
+  const configured = config.policies.filter((policy) => !ALWAYS.some((always) => always.type === policy.type)).map((policy): Policy => {
+    if (policy.type !== "sensitive-paths") return policy;
+    return { type: "sensitive-paths", paths: override?.paths ?? policy.paths, exempt: override?.exempt ?? policy.exempt };
+  });
+  if (!configured.some((policy) => policy.type === "sensitive-paths") && (override !== undefined || protectedRepository)) {
+    configured.push({ type: "sensitive-paths", paths: override?.paths ?? [], exempt: override?.exempt ?? [] });
+  }
+  return [...ALWAYS, ...configured];
+}
+
 export async function evaluatePullPolicies(ctx: PolicyCheckContext, commandApproval?: { commentId: number; authorId: number; head: string }): Promise<PolicyResult[]> {
   const trust = evaluateTrust(await fetchCommitFacts(ctx.server, ctx.repository, ctx.pull.number), ctx.pull.headSha, ctx.config);
-  const protectedRepository = ctx.repository.toLowerCase() === ctx.config.server_repository || ctx.repository.toLowerCase() === "civitaspo/csm-ci-actions";
-  const hasSensitivePaths = ctx.config.policies.some((p) => p.type === "sensitive-paths");
-  const configured = [...ctx.config.policies.filter((p) => !ALWAYS.some((a) => a.type === p.type))];
-  if (protectedRepository && !hasSensitivePaths) configured.push({ type: "sensitive-paths", paths: ["**"], exempt: [] });
-  const policies = [...ALWAYS, ...configured];
+  const policies = effectivePolicies(ctx.config, ctx.repository);
   return evaluatePolicies(policies, {
     trust, gh: ctx.server, config: ctx.config, repository: ctx.repository,
     pullNumber: ctx.pull.number, head: ctx.pull.headSha, authorId: ctx.pull.authorId,

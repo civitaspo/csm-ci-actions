@@ -155,3 +155,35 @@ describe("repositoryEntry", () => {
     expect(repositoryEntry(parsed, "owner/repo")?.release).toEqual(release);
   });
 });
+
+
+describe("repository policy configuration", () => {
+  const document = (fields: string) => CONFIG_YAML.replace("name: owner/no-ops, ops: []", `name: owner/no-ops, ops: [], ${fields}`);
+  test.each([
+    ["empty objects", "sensitive_paths: {}, merge: {}", { sensitive_paths: {}, merge: {} }],
+    ["empty lists", "sensitive_paths: { paths: [], exempt: [] }, merge: { allow_bot_requests: false }", { sensitive_paths: { paths: [], exempt: [] }, merge: { allow_bot_requests: false } }],
+    ["patterns and principals", 'sensitive_paths: { paths: [".github/**"], exempt: [{ id: 20, login: "renovate[bot]" }] }, merge: { allow_bot_requests: true }', { sensitive_paths: { paths: [".github/**"], exempt: [{ id: 20, login: "renovate[bot]" }] }, merge: { allow_bot_requests: true } }],
+  ])("accepts %s without introducing inherited defaults", (_name, fields, expected) => {
+    expect(parseConfig(document(String(fields))).repositories[0]).toEqual({ name: "owner/no-ops", ops: [], ...expected });
+  });
+  test("omitted objects remain absent", () => {
+    expect(config().repositories[0]).toEqual({ name: "owner/no-ops", ops: [] });
+  });
+  test.each([
+    ["unknown sensitive key", "sensitive_paths: { extra: [] }", /Unrecognized key:.*extra/],
+    ["unknown merge key", "merge: { extra: true }", /Unrecognized key:.*extra/],
+    ["nonboolean permission", "merge: { allow_bot_requests: yes }", /expected boolean/],
+    ["empty pattern", 'sensitive_paths: { paths: [""] }', /Too small/],
+    ["nonstring pattern", "sensitive_paths: { paths: [1] }", /expected string/],
+    ["nonarray paths", 'sensitive_paths: { paths: "**" }', /expected array/],
+    ["nonarray exemptions", "sensitive_paths: { exempt: {} }", /expected array/],
+    ["invalid principal id", "sensitive_paths: { exempt: [{ id: 0, login: alice }] }", /Too small/],
+    ["invalid principal login", 'sensitive_paths: { exempt: [{ id: 10, login: "" }] }', /Too small/],
+    ["unknown principal field", "sensitive_paths: { exempt: [{ id: 10, login: alice, type: User }] }", /Unrecognized key:.*type/],
+    ["missing principal id", "sensitive_paths: { exempt: [{ login: alice }] }", /expected number/],
+    ["null sensitive object", "sensitive_paths: null", /expected object/],
+    ["null merge object", "merge: null", /expected object/],
+  ])("rejects %s", (_name, fields, message) => {
+    expect(() => parseConfig(document(String(fields)))).toThrow(message);
+  });
+});

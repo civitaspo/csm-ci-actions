@@ -90,3 +90,11 @@ Cover every lifecycle row above, multiple pages of comments, and recovery of alr
 Test forged markers, wrong PRs, wrong author IDs or types, missing or inconsistent node identity, moved heads, changed PR state, out-of-order evaluations, and REST or GraphQL failures. Assert the rejection messages and mutation results. Mutation-check every new or changed rejection rule individually in bounded isolated copies.
 
 Run the affected policy-check and approve suites, then smoke, at the signed pushed implementation SHA. In the testing repositories, inspect a real first failure, identical retry, changed failure, and passing recovery. Verify rendered `<sub>` metadata, escaped content, minimization classifiers, and recovery of outdated reports with the existing Server App permissions. Record exact run URLs and any skipped or unverified cases in `docs/handoff.md`. Complete CI-only identity cases after an authorized merge, using the runner checkout on `main`.
+
+## Effective repository policy resolution
+
+The first matching `repositories[]` entry supplies the complete override; later entries contribute nothing. Optional `sensitive_paths.paths` and `sensitive_paths.exempt` inherit their corresponding global values independently. Explicit lists replace global lists, including `[]`. The parser preserves omission rather than inserting defaults into these fields.
+
+Every global sensitive-path policy receives those component replacements. Without a global sensitive-path policy, an absent override leaves it disabled; a supplied `sensitive_paths` object enables one with empty lists for missing components. Signature and trusted-committer checks always run. Exemptions still require the PR author and every effective commit identity to match, and sensitivity still checks renamed paths and rejects the 3,000-file listing limit.
+
+Automatic approval, `/approve`, `/recheck`, standalone policy-check, and merge readiness call this same resolver. The compatibility stage retains all-path sensitivity and ignored exemptions for the configured server repository and `civitaspo/csm-ci-actions`. Deploy explicit protection and compatible configuration consumers before the separately reviewed removal of those restrictions.

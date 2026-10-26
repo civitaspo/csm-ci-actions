@@ -1,3 +1,4 @@
+import { withRepositoryPolicy } from "./repository-policy.ts";
 import { type GitHub, splitRepository } from "../src/lib/github.ts";
 import { marker } from "../src/lib/notify.ts";
 import {
@@ -91,6 +92,21 @@ function untrusted(ctx: Ctx) {
 }
 
 export const policyCheck: Scenario[] = [
+  {
+    name: "repository sensitivity with empty exemptions requires command approval and recovers",
+    serial: true,
+    run: async (ctx) => withRepositoryPolicy(ctx, { sensitive_paths: { paths: ["**"], exempt: [] }, merge: { allow_bot_requests: false } }, async () => {
+      const { pr, since } = await openPolicyPr(ctx, "signed");
+      try {
+        await expectPolicy(ctx, pr, since, "failure", "sensitive-paths");
+        const command = await postComment(ctx, pr, "/approve");
+        await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: command.id } }, command.since, "success");
+        const refreshed = await checkForHead(ctx, pr);
+        assert(refreshed.conclusion === "success", `command approval left policy ${refreshed.conclusion}`);
+      } finally { await closePolicyPr(ctx, pr); }
+    }),
+  },
+
   {
     name: "signed, trusted commits and ordinary paths pass every policy",
     run: (ctx) => withPolicyPr(ctx, "signed", false, async (_pr, check) => {

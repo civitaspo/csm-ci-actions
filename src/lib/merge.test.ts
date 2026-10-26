@@ -178,6 +178,41 @@ describe("waitForMerge", () => {
     expect(await waitForMerge(ctx, { pull_number: 12, comment_id: 9 })).toEqual({ head: HEAD });
   });
 
+  test.each([undefined, {}, { allow_bot_requests: true }, { allow_bot_requests: false }] satisfies Array<Config["repositories"][number]["merge"]>)("repository Bot permission %j is independent of trust", async (merge) => {
+    const bot = { id: 20, login: "renovate[bot]", type: "Bot" };
+    const { ctx, notify } = context({ pull: pull({ user: bot }), comment: comment({ user: bot }), commits: [{ sha: HEAD, commit: { verification: { verified: true } }, author: bot, committer: bot }] });
+    ctx.config.repositories = [{ name: "owner/repo", ops: ["merge"], ...(merge === undefined ? {} : { merge }) }, { name: "owner/*", ops: ["merge"], merge: { allow_bot_requests: false } }];
+    if (merge?.allow_bot_requests === false) {
+      await expect(waitForMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow("bot merge requests are disabled for repository owner/repo");
+      expect(notify.calls).toEqual([]);
+    } else expect(await waitForMerge(ctx, { pull_number: 12, comment_id: 9 })).toEqual({ head: HEAD });
+  });
+
+  test.each(["owner/server", "civitaspo/csm-ci-actions"])("legacy protection rejects explicit Bot permission for %s", async (repository) => {
+    const bot = { id: 20, login: "renovate[bot]", type: "Bot" };
+    const { ctx, notify } = context({ repository, pull: pull({ user: bot }, repository), comment: comment({ user: bot }, repository) });
+    ctx.config.owners.push("civitaspo");
+    ctx.config.repositories = [{ name: repository, ops: ["merge"], merge: { allow_bot_requests: true }, sensitive_paths: { paths: [], exempt: [bot] } }];
+    await expect(waitForMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow(`bot mergers cannot merge pull requests in protected repository ${repository}`);
+    expect(notify.calls).toEqual([]);
+  });
+
+  test("repository Bot restriction does not reject an authorized human", async () => {
+    const { ctx } = context();
+    ctx.config.repositories = [{ name: "owner/repo", ops: ["merge"], merge: { allow_bot_requests: false } }];
+    expect(await waitForMerge(ctx, { pull_number: 12, comment_id: 9 })).toEqual({ head: HEAD });
+  });
+
+  test("revoking Bot permission during a readiness wait aborts the request", async () => {
+    const bot = { id: 20, login: "renovate[bot]", type: "Bot" };
+    const { ctx } = context({ pull: pull({ user: bot }), comment: comment({ user: bot }), commits: [{ sha: HEAD, commit: { verification: { verified: true } }, author: bot, committer: bot }], reviews: [] });
+    const original = ctx.config;
+    const sleep = ctx.sleep;
+    ctx.sleep = async (ms) => { await sleep(ms); ctx.config = { ...original, repositories: [{ name: "owner/repo", ops: ["merge"], merge: { allow_bot_requests: false } }] }; };
+    ctx.reloadConfig = async () => ctx.config;
+    await expect(waitForMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow("bot merge requests are disabled for repository owner/repo");
+  });
+
   const rejects: [string, Setup, RegExp][] = [
     ["a commenter outside the merger allowlist", { comment: comment({ user: { id: 66, login: "mallory", type: "User" } }) }, /mallory is not one of the mergers/],
     ["a non-command comment", { comment: comment({ body: "LGTM" }) }, /not exactly/],
@@ -239,6 +274,16 @@ describe("runMerge", () => {
     base.ctx.write = github("w", write);
     return { ...base, write, notify: base.notify };
   }
+
+  test.each(["Bot permission", "sensitive paths"])("final revalidation applies revoked %s without a merge write", async (rule) => {
+    const bot = { id: 20, login: "renovate[bot]", type: "Bot" };
+    const { ctx, write } = writableContext(200, undefined, { pull: pull({ user: bot }), comment: comment({ user: bot }), commits: [{ sha: HEAD, commit: { verification: { verified: true } }, author: bot, committer: bot }], files: [{ filename: "sensitive.txt" }] });
+    ctx.config.repositories = [{ name: "owner/repo", ops: ["merge"], sensitive_paths: { paths: [] } }];
+    const ready = await waitForMerge(ctx, { pull_number: 12, comment_id: 9 });
+    ctx.reloadConfig = async () => ({ ...ctx.config, repositories: [{ name: "owner/repo", ops: ["merge"], ...(rule === "Bot permission" ? { merge: { allow_bot_requests: false } } : { sensitive_paths: { paths: ["**"], exempt: [] } }) }] });
+    await expect(runMerge(ctx, { pull_number: 12, comment_id: 9 }, ready)).rejects.toThrow(rule === "Bot permission" ? "bot merge requests are disabled for repository owner/repo" : "policies failed: sensitive-paths: sensitive paths need a trusted approver's /approve: sensitive.txt");
+    expect(write.calls).toEqual([]);
+  });
 
   test("squash merges the pinned head and posts one receipt", async () => {
     const { ctx, write, notify } = writableContext(200);

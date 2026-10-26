@@ -36,7 +36,7 @@ securefix:
       paths: { e2e/securefix-route-result.txt: any, e2e/securefix-version.json: version-only }
 repositories:
   - { name: civitaspo/testing-csm-ci-client, ops: [approve, merge, policy-check, securefix, release], release: { build_type: none } }
-  - { name: civitaspo/testing-csm-ci-server, ops: [] }
+  - { name: civitaspo/testing-csm-ci-server, ops: [], sensitive_paths: { paths: ["**"], exempt: [] }, merge: { allow_bot_requests: false } }
 repo_settings:
   settings:
     delete_branch_on_merge: true

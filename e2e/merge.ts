@@ -1,3 +1,4 @@
+import { withRepositoryPolicy } from "./repository-policy.ts";
 import { verifyReceipt } from "./notifications.ts";
 import { marker } from "../src/lib/notify.ts";
 import { parseConfig } from "../src/lib/config.ts";
@@ -22,43 +23,20 @@ function fromComment(pr: Pr, comment: { id: number; since: Date }): MergeRequest
   return { since: comment.since, match: { kind: "merge", repository: CLIENT, args: { pull_number: pr.number, comment_id: comment.id } } };
 }
 
-async function withTestBotConfigured(ctx: Parameters<Scenario["run"]>[0], run: () => Promise<void>): Promise<void> {
-  const repository = splitRepository(SERVER);
-  const readConfig = async () => {
-    const { data } = await ctx.gh.rest.repos.getContent({ ...repository, path: SERVER_CONFIG, ref: "main" });
-    assert(!Array.isArray(data) && data.type === "file", `expected ${SERVER}/${SERVER_CONFIG} to be a file`);
-    return { sha: data.sha, text: Buffer.from(data.content, "base64").toString("utf8") };
-  };
-  const writeConfig = async (sha: string, text: string, message: string): Promise<void> => {
-    await ctx.gh.rest.repos.createOrUpdateFileContents({
-      ...repository,
-      path: SERVER_CONFIG,
-      branch: "main",
-      sha,
-      message,
-      content: Buffer.from(text).toString("base64"),
-    });
-  };
-  const original = await readConfig();
-  const botCommitter = `    - { id: ${TEST_BOT_ID}, login: "${TEST_BOT_LOGIN}" }`;
-  const botMerger = `    - { id: ${TEST_BOT_ID}, login: "${TEST_BOT_LOGIN}" }`;
-  assert(!original.text.includes(String(TEST_BOT_ID)), `test bot ${TEST_BOT_ID} is already present in ${SERVER_CONFIG}`);
-  assert(original.text.includes("  committers:\n    - { id: 4525500, login: civitaspo }"), "could not find the expected committers fixture entry");
-  assert(original.text.includes("  bot_mergers: []"), "could not find the empty bot_mergers fixture entry");
-  const configured = original.text
-    .replace("  committers:\n    - { id: 4525500, login: civitaspo }", `  committers:\n    - { id: 4525500, login: civitaspo }\n${botCommitter}`)
-    .replace("  bot_mergers: []", `  bot_mergers:\n${botMerger}`);
-  const parsed = parseConfig(configured);
-  assert(configured !== original.text && parsed.trust.committers.some((entry) => entry.id === TEST_BOT_ID && entry.login === TEST_BOT_LOGIN), "could not add the isolated test bot as a trusted committer");
-  assert(parsed.trust.bot_mergers.some((entry) => entry.id === TEST_BOT_ID && entry.login === TEST_BOT_LOGIN), "could not add the isolated test bot as a merger");
-  try {
-    await writeConfig(original.sha, configured, "Temporarily configure the merge e2e bot");
-    await run();
-  } finally {
-    const latest = await readConfig();
-    if (latest.text === configured) await writeConfig(latest.sha, original.text, "Restore the merge e2e server fixture");
-    else if (latest.text !== original.text) throw new Error(`server fixture changed unexpectedly during merge e2e; refusing to overwrite ${SERVER_CONFIG}`);
-  }
+export async function withTestBotConfigured(ctx: Parameters<Scenario["run"]>[0], run: () => Promise<void>): Promise<void> {
+  await withServerConfig(ctx, (text) => {
+    const botEntry = `    - { id: ${TEST_BOT_ID}, login: "${TEST_BOT_LOGIN}" }`;
+    assert(!text.includes(String(TEST_BOT_ID)), `test bot ${TEST_BOT_ID} is already present in ${SERVER_CONFIG}`);
+    assert(text.includes("  committers:\n    - { id: 4525500, login: civitaspo }"), "could not find the expected committers fixture entry");
+    assert(text.includes("  bot_mergers: []"), "could not find the empty bot_mergers fixture entry");
+    const configured = text
+      .replace("  committers:\n    - { id: 4525500, login: civitaspo }", `  committers:\n    - { id: 4525500, login: civitaspo }\n${botEntry}`)
+      .replace("  bot_mergers: []", `  bot_mergers:\n${botEntry}`);
+    const parsed = parseConfig(configured);
+    assert(configured !== text && parsed.trust.committers.some((entry) => entry.id === TEST_BOT_ID && entry.login === TEST_BOT_LOGIN), "could not add the isolated test bot as a trusted committer");
+    assert(parsed.trust.bot_mergers.some((entry) => entry.id === TEST_BOT_ID && entry.login === TEST_BOT_LOGIN), "could not add the isolated test bot as a merger");
+    return configured;
+  }, run);
 }
 
 async function openBotPr(ctx: Parameters<Scenario["run"]>[0]): Promise<{ pr: Pr; since: Date }> {
@@ -298,7 +276,7 @@ export const merge: Scenario[] = [
     serial: true,
     run: async (ctx) => {
       assert(ctx.untrusted, "the untrusted test token is not configured");
-      await withTestBotConfigured(ctx, async () => {
+      await withTestBotConfigured(ctx, async () => withRepositoryPolicy(ctx, { sensitive_paths: { paths: ["**"], exempt: [{ id: TEST_BOT_ID, login: TEST_BOT_LOGIN }, { id: 4525500, login: "civitaspo" }] }, merge: { allow_bot_requests: true } }, async () => {
         await withSignedPr(ctx, async (pr) => {
           const { comment, requestInfo: commentRequest } = await postBotMergeRequest(ctx, pr);
           // Exercise the server's ownership check independently of the client prefilter.
@@ -308,6 +286,19 @@ export const merge: Scenario[] = [
           await expectOp(ctx, requestInfo.match, requestInfo.since, "failure", /bot merger testing-csm-ci-untrusted-committer\[bot\] can merge only its own pull request/);
           await noMerge(ctx, pr);
           assert(!(await serverComments(ctx, pr)).some((body) => body.includes(marker("merge", comment.id))), "rejected bot ownership request posted a receipt");
+        });
+
+        await withRepositoryPolicy(ctx, { merge: { allow_bot_requests: false } }, async () => {
+          let denied: Pr | undefined;
+          try {
+            const opened = await openBotPr(ctx);
+            denied = opened.pr;
+            await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: denied.number } }, opened.since, "success");
+            const { comment, requestInfo } = await postBotMergeRequest(ctx, denied);
+            await expectOp(ctx, requestInfo.match, requestInfo.since, "failure", /bot merge requests are disabled for repository/);
+            await noMerge(ctx, denied);
+            assert(!(await serverComments(ctx, denied)).some((body) => body.includes(marker("merge", comment.id))), "disabled bot request posted a receipt");
+          } finally { if (denied) await closePr(ctx, denied); }
         });
 
         let mixedPr: Pr | undefined;
@@ -337,7 +328,7 @@ export const merge: Scenario[] = [
         } finally {
           if (botPr) await closePr(ctx, botPr);
         }
-      });
+      }));
     },
   },
 ];
