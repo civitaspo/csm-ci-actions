@@ -289,15 +289,24 @@ async function assertSettingsReconciled(ctx: Ctx, repository = CLIENT): Promise<
   }
 }
 
-async function assertRepositorySettings(ctx: Ctx, repository: string): Promise<void> {
-  const { data } = await ctx.gh.rest.repos.get(splitRepository(repository));
-  assert(data.delete_branch_on_merge === true, "delete_branch_on_merge drift was not repaired");
-  assert(data.allow_auto_merge === true, "allow_auto_merge drift was not repaired");
-  assert(data.allow_squash_merge === true, "allow_squash_merge was not reconciled");
-  assert(data.squash_merge_commit_title === "PR_TITLE", "squash_merge_commit_title drift was not repaired");
-  assert(data.squash_merge_commit_message === "PR_BODY", "squash_merge_commit_message drift was not repaired");
-  assert(data.allow_merge_commit === false, "allow_merge_commit was not reconciled");
-  assert(data.allow_rebase_merge === false, "allow_rebase_merge was not reconciled");
+export async function assertRepositorySettings(ctx: Ctx, repository: string): Promise<void> {
+  const expected = {
+    delete_branch_on_merge: true,
+    allow_auto_merge: true,
+    allow_squash_merge: true,
+    allow_merge_commit: false,
+    allow_rebase_merge: false,
+    squash_merge_commit_title: "PR_TITLE",
+    squash_merge_commit_message: "PR_BODY",
+  } satisfies SettingsSnapshot;
+  await until(`reconciled repository settings in ${repository}`, async () => {
+    const { data } = await ctx.gh.rest.repos.get(splitRepository(repository));
+    const actual = SettingsSnapshotSchema.parse(data);
+    const mismatches = SettingsSnapshotSchema.keyof().options.filter((key) => actual[key] !== expected[key])
+      .map((key) => ({ key, expected: expected[key], actual: actual[key] }));
+    console.log(`repo-settings-observation ${JSON.stringify({ repository, mismatches })}`);
+    return mismatches.length === 0 ? true : undefined;
+  });
 }
 
 // Stops controlled-merges and drifts its bypass, so the schedule must repair it without reactivating it.
@@ -378,6 +387,7 @@ export const repoSettings: Scenario[] = [
 
         await disableControlledMerges(ctx);
         await dispatchReconciliation(ctx, CLIENT, "schedule", undefined, { createdRulesetIds });
+        await assertRepositorySettings(ctx, CLIENT);
         await assertControlledMergesDisabled(ctx);
       }, [
         () => cleanupManagedState(ctx, observedHead, managedPull),
