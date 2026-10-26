@@ -243,7 +243,7 @@ repositories:                                       # per repo, only ops and the
   - `issues: write`
   - `checks: write`
   - `actions: read`
-  - `workflows: write`: minted only when securefix allows it and for managed files.
+  - `workflows: write`: minted only when securefix allows it, for managed files, and on the final merge token after readiness succeeds. The merge token is limited to the target repository and may merge approved changes to `.github/workflows/**`. Read and notification tokens do not receive this permission.
   - `attestations: write`: only if the spike shows it is needed.
   - `administration: write`: minted only in the repo-settings job.
     - Advantages over the old classic admin PAT:
@@ -263,6 +263,7 @@ repositories:                                       # per repo, only ops and the
 - For required checks that come from GitHub Actions, a PR author with write access can modify the workflow. The real gates are the approval and `csm-ci/policy`.
 - Fork PRs are out of scope for securefix. approve and policy-check run on `pull_request_target`, but they do not check out the PR's code.
 - Remaining risk of head pinning: if the sha is omitted, we cannot detect a push by a trusted committer that forged `committedDate`.
+- The final merge token includes `workflows: write` for every ready pull request, even when it changes no workflow file. This avoids a separate path-detection decision before token creation. The permission is used only to merge the pinned head after final revalidation of trust, command evidence, approval, policies, and required checks. It does not permit securefix workflow changes when `allow_workflow_changes` is false.
 - **All server jobs share the Server App key**. So a compromise of any job can mint an `administration: write` token. Narrowing the token permissions per job is only operational discipline, not a boundary. We accept this compromise (the user's decision). If we want to separate it in the future, we can add a third App and split the environment.
 
 ---
@@ -354,14 +355,14 @@ After Phase 0, phases 1, 2, 3, 4, 5a, and 6 can proceed independently in paralle
      - The approver's latest review is an APPROVE on this head. Do not look at `reviewDecision`, because the ruleset and the merge API already block a human's changes requested.
      - **Policies are re-evaluated inside the server and pass**. Do not use the check run result, so that we judge with the latest configuration even if it changed.
      - `required_checks` are success or skipped, with the specified app as the producer.
-  4. Mint the write token only after the PR is ready, then run `pulls.merge(sha=head, squash)`.
+  4. Mint the final token with `contents: write`, `pull_requests: write`, and `workflows: write` only after the PR is ready. Revalidate readiness against the pinned head before `pulls.merge(sha=head, squash)`.
      - The commit message carries the PR body's `Co-authored-by` lines with duplicates removed.
      - Retry 405, 422, and 503 with a re-validation in between.
      - Fail immediately on 409.
      - Confirm the response has `merged: true`.
   5. Notify the result with a comment.
 - **e2e**
-  - The success case merges.
+  - The success case merges, including an approved change to `.github/workflows/**` through the final merge token.
   - A `/merge` from a non-merger is rejected.
   - Even with the ruleset removed, a PR that is not approved is rejected (defense in depth).
   - It aborts on a head change, a force-push, or a comment edit or deletion while waiting. Live e2e force-push coverage requires explicit authorization to mutate a testing-client PR branch; the current authorization permits force-pushing only the csm-ci-actions `e2e` branch. Unit and mutation tests cover force-push rejection until that authorization changes.
