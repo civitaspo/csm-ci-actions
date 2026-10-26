@@ -524,7 +524,9 @@ After Phase 0, phases 1, 2, 3, 4, 5a, and 6 can proceed independently in paralle
   - Read the settings and rulesets with that administration token too. GitHub returns a ruleset's `bypass_actors` only to callers with write access to it (testing-csm-ci-server run 40155267064), so a read-only token cannot see the bypass. The activation preflight and the managed-file inspection use a target-scoped contents and pull-requests read token.
   - `repo_settings.settings` accepts only the merge booleans shown in the Configuration section, with the merge methods fixed to squash only to match `review-and-checks`. `managed_files` maps safe literal paths to text, with the securefix size limits.
 - **What gets synced in `reconcile` mode** (all validated with zod)
-  - Repository settings
+  - Repository settings. When `repo_settings.settings.allow_squash_merge` is explicitly `true`, also enforce `squash_merge_commit_title: PR_TITLE` and `squash_merge_commit_message: PR_BODY`. These fixed values use the pull request title and description for both single-commit and multi-commit squash merges. They are implied settings, not new configuration keys.
+    - Inspect both fields, report each differing field as drift, and repair them even when `allow_squash_merge` already matches. Missing fields fail inspection rather than being treated as unchanged. A repeat sync with no further settings drift makes no settings write.
+    - Omitted settings remain unmanaged. If `allow_squash_merge` or the entire `settings` block is omitted, leave both squash commit fields unchanged, even when the repository already allows squash merges. The fixed S6 rulesets still apply.
   - The 4 rulesets in S6. Upsert by name and `source_type == Repository`, and replace the whole ruleset. If more than one ruleset has the same name, raise an error.
   - Enabling immutable releases (we do not disable it)
   - Collaborators: handled only when the approver uses the PAT approach. If the Phase 1 spike lands on the App approach, they are not needed.
@@ -549,7 +551,7 @@ After Phase 0, phases 1, 2, 3, 4, 5a, and 6 can proceed independently in paralle
   - Reuse the same global literal `managed_files` map and `csm-ci/repo-settings` branch. Do not add server-specific workflow distribution or per-repository templating.
   - Bootstrap order: the user installs Apps and provisions variables and secrets; dispatch managed-files-only; review and merge the generated PR using the repository's existing merge process; verify the caller workflows and required checks on default; then dispatch normal reconciliation to apply protections. Normal activation preflight and emergency-stop behavior remain unchanged.
 - **e2e**
-  - Drift is repaired.
+  - Drift is repaired. With `allow_squash_merge: true`, verify both squash commit fields in the testing repositories, repair drift in either field, and confirm that a second sync makes no settings write. Record the candidate SHA and real run URLs. Verify that omitting `allow_squash_merge` leaves both fields unchanged.
   - A managed PR is created.
   - The second run is a no-op.
   - The schedule does not re-enable a controlled-merges that was set to disabled.
