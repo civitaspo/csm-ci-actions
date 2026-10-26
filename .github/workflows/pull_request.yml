@@ -1,0 +1,28 @@
+name: PR CI
+
+on:
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    uses: ./.github/workflows/workflow_call_ci.yml
+    permissions:
+      contents: read
+
+  status-check:
+    needs: checks
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - name: Require successful checks
+        env:
+          RESULT: ${{ needs.checks.result }}
+        run: test "$RESULT" = success

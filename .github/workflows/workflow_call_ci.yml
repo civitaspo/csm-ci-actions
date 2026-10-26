@@ -1,0 +1,55 @@
+name: CI checks
+
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  paths:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      workflows: ${{ steps.paths.outputs.workflows }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select workflow checks
+        id: paths
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        shell: bash
+        run: |
+          workflows=true
+          if [[ "$BASE" =~ ^[0-9a-f]{40}$ ]] && git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            git diff --no-renames --name-only -z "$BASE" HEAD > "$RUNNER_TEMP/ci-paths"
+            workflows=false
+            while IFS= read -r -d '' path; do
+              case "$path" in
+                docs/*|*.md|LICENSE) ;;
+                *) workflows=true; break ;;
+              esac
+            done < "$RUNNER_TEMP/ci-paths"
+          fi
+          echo "workflows=$workflows" >> "$GITHUB_OUTPUT"
+
+  english:
+    uses: ./.github/workflows/wc-english.yml
+    permissions:
+      contents: read
+
+  runtime:
+    uses: ./.github/workflows/wc-runtime.yml
+    permissions:
+      contents: read
+
+  workflows:
+    needs: paths
+    if: ${{ needs.paths.outputs.workflows == 'true' }}
+    uses: ./.github/workflows/wc-workflows.yml
+    permissions:
+      contents: read
