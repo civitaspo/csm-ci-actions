@@ -37500,15 +37500,7 @@ async function applyRepoSettings(args) {
   let rulesetsUpdated = 0;
   let rulesetsCreated = 0;
   if (inspection.changes.settings.length > 0 && repoSettings.settings) {
-    const desired = repoSettings.settings;
-    await args.adminGH.rest.repos.update({
-      ...address,
-      ...desired.delete_branch_on_merge !== undefined ? { delete_branch_on_merge: desired.delete_branch_on_merge } : {},
-      ...desired.allow_auto_merge !== undefined ? { allow_auto_merge: desired.allow_auto_merge } : {},
-      ...desired.allow_squash_merge !== undefined ? { allow_squash_merge: desired.allow_squash_merge } : {},
-      ...desired.allow_merge_commit !== undefined ? { allow_merge_commit: desired.allow_merge_commit } : {},
-      ...desired.allow_rebase_merge !== undefined ? { allow_rebase_merge: desired.allow_rebase_merge } : {}
-    });
+    await args.adminGH.rest.repos.update({ ...address, ...desiredRepositorySettings(repoSettings.settings) });
     settingsUpdated = 1;
   }
   if (inspection.changes.immutableReleases) {
@@ -37551,8 +37543,18 @@ function validateDispatchPreflight(preflight) {
 function sameServerPullRequestBypass(bypassActors, serverAppId) {
   return bypassActors.length === 1 && bypassActors[0]?.actor_id === serverAppId && bypassActors[0]?.actor_type === "Integration" && bypassActors[0]?.bypass_mode === "pull_request";
 }
+function desiredRepositorySettings(settings) {
+  return {
+    ...settings.delete_branch_on_merge !== undefined ? { delete_branch_on_merge: settings.delete_branch_on_merge } : {},
+    ...settings.allow_auto_merge !== undefined ? { allow_auto_merge: settings.allow_auto_merge } : {},
+    ...settings.allow_squash_merge !== undefined ? { allow_squash_merge: settings.allow_squash_merge } : {},
+    ...settings.allow_merge_commit !== undefined ? { allow_merge_commit: settings.allow_merge_commit } : {},
+    ...settings.allow_rebase_merge !== undefined ? { allow_rebase_merge: settings.allow_rebase_merge } : {},
+    ...settings.allow_squash_merge === true ? { squash_merge_commit_title: "PR_TITLE", squash_merge_commit_message: "PR_BODY" } : {}
+  };
+}
 function changedSettings(repository, desired) {
-  return Object.entries(desired).filter(([key, value]) => {
+  return Object.entries(desiredRepositorySettings(desired)).filter(([key, value]) => {
     if (!(key in repository))
       throw new Rejection(`repository setting ${key} is not visible to the inspection token`);
     return repository[key] !== value;

@@ -2,12 +2,25 @@ import { z } from "zod";
 import { type GitHub, splitRepository } from "../src/lib/github.ts";
 import { inspectRepoSettingsPreflight } from "../src/lib/repo-settings.ts";
 import { assert, CLIENT, dispatch, hasStatus, jobLog, SERVER, SERVER_BOT_ID, type Ctx, type Scenario, until, withServerConfig } from "./harness.ts";
+import { withCleanup } from "./cleanup.ts";
 import { parseCreatedRulesets, rulesetCleanupPlan } from "./repo-settings-ownership.ts";
 
 const BRANCH = "csm-ci/repo-settings";
 const MANAGED_MARKER = "<!-- csm-ci:repo-settings:managed-files -->";
 const RULESET_NAMES = new Set(["integrity", "review-and-checks", "controlled-merges", "release-tags"]);
-const SETTINGS = ["delete_branch_on_merge", "allow_auto_merge", "allow_squash_merge", "allow_merge_commit", "allow_rebase_merge"] as const;
+export const UNMANAGED_SQUASH_SETTINGS = {
+  squash_merge_commit_title: "COMMIT_OR_PR_TITLE",
+  squash_merge_commit_message: "COMMIT_MESSAGES",
+} satisfies Pick<NonNullable<Parameters<GitHub["rest"]["repos"]["update"]>[0]>, "squash_merge_commit_title" | "squash_merge_commit_message">;
+const SettingsSnapshotSchema = z.object({
+  delete_branch_on_merge: z.boolean(),
+  allow_auto_merge: z.boolean(),
+  allow_squash_merge: z.boolean(),
+  allow_merge_commit: z.boolean(),
+  allow_rebase_merge: z.boolean(),
+  squash_merge_commit_title: z.enum(["PR_TITLE", "COMMIT_OR_PR_TITLE"]),
+  squash_merge_commit_message: z.enum(["PR_BODY", "COMMIT_MESSAGES", "BLANK"]),
+});
 
 type RulesetUpdate = NonNullable<Parameters<GitHub["rest"]["repos"]["updateRepoRuleset"]>[0]>;
 type RuleSet = {
@@ -21,7 +34,7 @@ type RuleSet = {
   rules: NonNullable<RulesetUpdate["rules"]>;
   bypass_actors: NonNullable<RulesetUpdate["bypass_actors"]>;
 };
-type SettingsSnapshot = { [K in (typeof SETTINGS)[number]]: boolean };
+type SettingsSnapshot = z.infer<typeof SettingsSnapshotSchema>;
 type RuleSetSnapshot = Omit<RuleSet, "id" | "source_type">;
 type RepoSnapshot = { settings: SettingsSnapshot; rulesets: RuleSet[]; immutableReleases: boolean };
 type ManagedPull = { number: number; headSha: string };
@@ -39,16 +52,18 @@ const RuleSetDetailsSchema = z.object({
   bypass_actors: z.array(z.object({ actor_id: z.number().nullable().optional(), actor_type: z.string(), bypass_mode: z.string().optional() }).passthrough()),
 }).passthrough();
 
-async function snapshotRepository(gh: GitHub, repository: string): Promise<RepoSnapshot> {
+export async function snapshotRepository(gh: GitHub, repository: string, phase: "baseline" | "restored" | "observed" = "baseline"): Promise<RepoSnapshot> {
   const address = splitRepository(repository);
   const [{ data: repositoryInfo }, rawRulesets, immutableReleases] = await Promise.all([
     gh.rest.repos.get(address),
     gh.paginate("GET /repos/{owner}/{repo}/rulesets", { ...address, per_page: 100 }),
     immutableReleaseState(gh, repository),
   ]);
-  const settings = Object.fromEntries(SETTINGS.map((key) => [key, repositoryInfo[key] as boolean])) as SettingsSnapshot;
+  const settings = SettingsSnapshotSchema.parse(repositoryInfo);
   const rulesets = await listManagedRulesets(gh, repository, rawRulesets);
-  return { settings, rulesets, immutableReleases };
+  const snapshot = { settings, rulesets, immutableReleases };
+  console.log(`repo-settings-snapshot ${JSON.stringify({ repository, phase, snapshot })}`);
+  return snapshot;
 }
 
 async function immutableReleaseState(gh: GitHub, repository: string): Promise<boolean> {
@@ -87,7 +102,7 @@ async function listManagedRuleSetDetails(gh: GitHub, repository: string, raw: un
 }
 
 // Each step runs even when an earlier one fails, so one failed call cannot leave the rest unrestored.
-async function restoreRepository(gh: GitHub, repository: string, snapshot: RepoSnapshot, createdRulesetIds: ReadonlySet<number>): Promise<void> {
+export async function restoreRepository(gh: GitHub, repository: string, snapshot: RepoSnapshot, createdRulesetIds: ReadonlySet<number>): Promise<void> {
   const address = splitRepository(repository);
   const failures: unknown[] = [];
   const attempt = async (step: () => Promise<unknown>) => {
@@ -115,10 +130,12 @@ async function restoreRepository(gh: GitHub, repository: string, snapshot: RepoS
     };
     await attempt(() => gh.rest.repos.updateRepoRuleset({ ...address, ruleset_id: ruleset.id, ...body }));
   }
-  await attempt(() => gh.rest.repos.update({ ...address, ...snapshot.settings } as Parameters<GitHub["rest"]["repos"]["update"]>[0]));
+  await attempt(() => gh.rest.repos.update({ ...address, ...snapshot.settings }));
   if (!snapshot.immutableReleases) await attempt(() => gh.request("DELETE /repos/{owner}/{repo}/immutable-releases", address));
+  let restored: RepoSnapshot | undefined;
+  await attempt(async () => { restored = await snapshotRepository(gh, repository, "restored"); });
   if (failures.length > 0) throw new AggregateError(failures, `restoring ${repository} failed in ${failures.length} step(s)`);
-  const restored = await snapshotRepository(gh, repository);
+  assert(restored, `could not read restored repository state for ${repository}`);
   assert(JSON.stringify(restored.settings) === JSON.stringify(snapshot.settings), `repository settings were not restored for ${repository}`);
   assert(restored.immutableReleases === snapshot.immutableReleases, `immutable releases were not restored for ${repository}`);
   assert(JSON.stringify(normalizeRuleSets(restored.rulesets)) === JSON.stringify(normalizeRuleSets(snapshot.rulesets)), `rulesets were not restored for ${repository}`);
@@ -246,7 +263,7 @@ async function makeSettingsDrift(ctx: Ctx): Promise<void> {
     allow_merge_commit: false,
     allow_rebase_merge: false,
   };
-  await ctx.gh.rest.repos.update({ ...address, delete_branch_on_merge: !desired.delete_branch_on_merge, allow_auto_merge: !desired.allow_auto_merge });
+  await ctx.gh.rest.repos.update({ ...address, delete_branch_on_merge: !desired.delete_branch_on_merge, allow_auto_merge: !desired.allow_auto_merge, allow_squash_merge: true, squash_merge_commit_title: "COMMIT_OR_PR_TITLE", squash_merge_commit_message: "COMMIT_MESSAGES" });
   const existing = (await listManagedRulesets(ctx.gh)).find((ruleset) => ruleset.name === "integrity");
   if (existing) {
     await ctx.gh.rest.repos.updateRepoRuleset({
@@ -277,6 +294,8 @@ async function assertRepositorySettings(ctx: Ctx, repository: string): Promise<v
   assert(data.delete_branch_on_merge === true, "delete_branch_on_merge drift was not repaired");
   assert(data.allow_auto_merge === true, "allow_auto_merge drift was not repaired");
   assert(data.allow_squash_merge === true, "allow_squash_merge was not reconciled");
+  assert(data.squash_merge_commit_title === "PR_TITLE", "squash_merge_commit_title drift was not repaired");
+  assert(data.squash_merge_commit_message === "PR_BODY", "squash_merge_commit_message drift was not repaired");
   assert(data.allow_merge_commit === false, "allow_merge_commit was not reconciled");
   assert(data.allow_rebase_merge === false, "allow_rebase_merge was not reconciled");
 }
@@ -317,7 +336,7 @@ export const repoSettings: Scenario[] = [
       const createdRulesetIds = new Set<number>();
       let observedHead: string | undefined;
       let managedPull: ManagedPull | undefined;
-      try {
+      await withCleanup(async () => {
         await makeSettingsDrift(ctx);
         const initial = await dispatchReconciliation(ctx, CLIENT, "dispatch", undefined, { createdRulesetIds });
         assert(initial.stepConclusions.get("Mint approver contents token") === "success", `client dispatch did not verify the Approver App installation (${initial.url})`);
@@ -336,22 +355,34 @@ export const repoSettings: Scenario[] = [
         assert(await managedBranchHead(ctx.gh) === observedHead, "the repeated run changed the managed-files branch head");
         const repeatedPulls = await openManagedPull(ctx.gh);
         assert(repeatedPulls.length === 1 && repeatedPulls[0]?.number === managedPull.number && repeatedPulls[0]?.headSha === managedPull.headSha, "the repeated run did not preserve the existing managed-files pull request head");
+        await assertRepositorySettings(ctx, CLIENT);
         const afterRepeat = await rulesetUpdateTimes(ctx.gh);
         assert(JSON.stringify([...afterRepeat].sort(([a], [b]) => a - b)) === JSON.stringify([...beforeRepeat].sort(([a], [b]) => a - b)), "the repeated run updated a ruleset");
         for (const name of ["Apply repository settings", "Apply managed files", "Mint approver contents token", "Mint managed contents token", "Mint managed workflows token"]) {
           assert(repeat.stepConclusions.get(name) === "skipped", `the repeated run did not skip ${name} (${repeat.url})`);
         }
 
+        await withServerConfig(ctx, (text) => {
+          const changed = text.replace("    allow_squash_merge: true\n", "");
+          assert(changed !== text, "could not omit allow_squash_merge for the unmanaged settings scenario");
+          return changed;
+        }, async () => {
+          await ctx.gh.rest.repos.update({ ...splitRepository(CLIENT), ...UNMANAGED_SQUASH_SETTINGS });
+          const omitted = await dispatchReconciliation(ctx, CLIENT, "dispatch", undefined, { createdRulesetIds });
+          assert(omitted.stepConclusions.get("Apply repository settings") === "skipped", `omitted squash setting caused a settings write (${omitted.url})`);
+          const { data } = await ctx.gh.rest.repos.get(splitRepository(CLIENT));
+          assert(data.allow_squash_merge === true && data.squash_merge_commit_title === UNMANAGED_SQUASH_SETTINGS.squash_merge_commit_title && data.squash_merge_commit_message === UNMANAGED_SQUASH_SETTINGS.squash_merge_commit_message, "omitted squash setting changed the squash commit format");
+        });
+        await dispatchReconciliation(ctx, CLIENT, "dispatch", undefined, { createdRulesetIds });
+        await assertRepositorySettings(ctx, CLIENT);
+
         await disableControlledMerges(ctx);
         await dispatchReconciliation(ctx, CLIENT, "schedule", undefined, { createdRulesetIds });
         await assertControlledMergesDisabled(ctx);
-      } finally {
-        try {
-          await cleanupManagedState(ctx, observedHead, managedPull);
-        } finally {
-          await restoreRepository(ctx.gh, CLIENT, snapshot, createdRulesetIds);
-        }
-      }
+      }, [
+        () => cleanupManagedState(ctx, observedHead, managedPull),
+        () => restoreRepository(ctx.gh, CLIENT, snapshot, createdRulesetIds),
+      ]);
 
       const serverSnapshot = await snapshotRepository(ctx.gh, SERVER);
       const serverCreatedRulesetIds = new Set<number>();
@@ -362,7 +393,7 @@ export const repoSettings: Scenario[] = [
         assert(changed !== text, "could not set managed_files to empty for the server schedule scenario");
         return changed;
       }, async () => {
-        try {
+        await withCleanup(async () => {
           const originalControlled = serverSnapshot.rulesets.find((ruleset) => ruleset.name === "controlled-merges");
           const serverSchedule = await dispatchReconciliation(ctx, SERVER, "schedule", undefined, { createdRulesetIds: serverCreatedRulesetIds });
           assert(serverSchedule.stepConclusions.get("Mint approver contents token") === "skipped", `server schedule tried to mint an Approver App token (${serverSchedule.url})`);
@@ -376,15 +407,13 @@ export const repoSettings: Scenario[] = [
           assert(controlledAfter?.enforcement === originalControlled?.enforcement, "server schedule created or changed controlled-merges");
           assert(await managedBranchHead(ctx.gh, SERVER) === undefined, `empty managed_files created ${BRANCH} in ${SERVER}`);
           assert(await immutableReleaseState(ctx.gh, SERVER), `server schedule did not enable immutable releases in ${SERVER}`);
-        } finally {
-          await restoreRepository(ctx.gh, SERVER, serverSnapshot, serverCreatedRulesetIds);
-        }
+        }, [() => restoreRepository(ctx.gh, SERVER, serverSnapshot, serverCreatedRulesetIds)]);
       });
 
       const bootstrapSnapshot = await snapshotRepository(ctx.gh, SERVER);
       const bootstrapCreatedRulesetIds = new Set<number>();
       await ensureNoPreviousManagedState(ctx, SERVER);
-      try {
+      await withCleanup(async () => {
         const preflight = await inspectRepoSettingsPreflight({ readGH: ctx.gh, target: { name: SERVER, isServer: true } });
         assert(!preflight.callerDistributed, "the server caller workflows are already distributed in " + SERVER + "; bootstrap precondition changed");
         assert(!bootstrapSnapshot.rulesets.some((ruleset) => ruleset.name === "controlled-merges"), "controlled-merges already exists in " + SERVER + "; bootstrap precondition changed");
@@ -423,18 +452,15 @@ export const repoSettings: Scenario[] = [
         assert(normal.reconcileLog.includes("caller workflow is not distributed on " + SERVER), "normal dispatch did not reject the missing caller before writes (" + normal.url + ")");
         assert(normal.stepConclusions.get("Apply repository settings") === "skipped", "normal dispatch applied repository settings before rejecting the caller (" + normal.url + ")");
         assert(await managedBranchHead(ctx.gh, SERVER) === bootstrapHead, "normal dispatch changed the managed branch after caller rejection (" + normal.url + ")");
-        const after = await snapshotRepository(ctx.gh, SERVER);
+        const after = await snapshotRepository(ctx.gh, SERVER, "observed");
         assert(JSON.stringify(after.settings) === JSON.stringify(bootstrapSnapshot.settings)
           && after.immutableReleases === bootstrapSnapshot.immutableReleases
           && JSON.stringify(normalizeRuleSets(after.rulesets)) === JSON.stringify(normalizeRuleSets(bootstrapSnapshot.rulesets)),
         "managed-files-only or rejected normal dispatch changed server administration state (" + normal.url + ")");
-      } finally {
-        try {
-          await cleanupManagedState(ctx, undefined, undefined, SERVER);
-        } finally {
-          await restoreRepository(ctx.gh, SERVER, bootstrapSnapshot, bootstrapCreatedRulesetIds);
-        }
-      }
+      }, [
+        () => cleanupManagedState(ctx, undefined, undefined, SERVER),
+        () => restoreRepository(ctx.gh, SERVER, bootstrapSnapshot, bootstrapCreatedRulesetIds),
+      ]);
     },
   },
 ];
