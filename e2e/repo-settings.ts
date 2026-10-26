@@ -410,7 +410,8 @@ export const repoSettings: Scenario[] = [
         }, [() => restoreRepository(ctx.gh, SERVER, serverSnapshot, serverCreatedRulesetIds)]);
       });
 
-      const bootstrapSnapshot = await snapshotRepository(ctx.gh, SERVER);
+      // Restoration verified this snapshot; a fresh read can still return the preceding reconciled settings.
+      const bootstrapSnapshot = serverSnapshot;
       const bootstrapCreatedRulesetIds = new Set<number>();
       await ensureNoPreviousManagedState(ctx, SERVER);
       await withCleanup(async () => {
