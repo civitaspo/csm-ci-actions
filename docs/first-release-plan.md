@@ -15,7 +15,7 @@ The previous attempts failed because "the goal kept moving, and abstractions pil
 
 - The transport is the label method (`label: created`).
 - `/approve` takes no argument. It is the command for approvers to approve a "PR that has only trusted commits" (the same meaning as in the Rust version). `/approve` does not approve untrusted commits either. For a PR from an external contributor, the owner approves it from the GitHub UI. The first idea was to "also force-approve untrusted commits". We changed it in Phase 1, because without an argument we cannot prevent commit swapping.
-- Policies are configured declaratively from built-in types. The configuration is **global only**. v1 has no mechanism to override policy, trust, or merge per repo. The only per-repo settings are the enabled ops and the release build type.
+- Policies are configured declaratively from built-in types. Global policy and merge settings supply the defaults. Repository entries can override sensitive paths, sensitive-path exemptions, and permission for Bot merge requests. Trust lists remain global and use immutable IDs.
 - `/recheck` can re-run policy-check and the automatic approve.
 - Release builds in an unprivileged server job and includes release-pr.
 - We use zod to validate the configuration.
@@ -74,9 +74,7 @@ securefix is the one exception on the client side. Its caller cannot be a reusab
   - Mint a write token only in a step that runs after validation has passed.
 - **How a reusable workflow calls an action**: a reusable workflow job first checks out csm-ci-actions itself with `actions/checkout` (`repository: ${{ job.workflow_repository }}`, `ref: ${{ job.workflow_sha }}`, `path: .csm-ci-actions`). Then it uses the action from the same commit with `uses: ./.csm-ci-actions/actions/<name>`. We confirmed that these two contexts exist in run 40099821184 of testing-csm-ci-client.
 - **Lockfile-enforced client callers**: the five reusable client workflows (`client-approve.yml`, `client-merge.yml`, `client-policy-check.yml`, `client-release-prepare.yml`, and `client-release-publish.yml`) may call their own composite through `uses: $/actions/client/<name>`, which resolves to the defining reusable workflow repository and revision. Onboard all five with the official `gh actions-lock` generator and commit `.github/workflows/actions.lock`; keep their external action SHA pins. This exposes composite dependencies to the defining repository's lockfile without relying on a runtime checkout. Other reusable workflows retain the checkout pattern above. Verify a real locked client can start all five client workflows before considering the migration complete.
-- **Caller secrets**: the caller sets `secrets: inherit`. The reusable workflow reads the variables and secrets in the "Naming list" under those exact names.
-  - Without `inherit`, an environment secret is empty in the called job (run 40099955263 of testing-csm-ci-server). With `inherit`, it arrives (run 40100014166).
-  - Variables are visible without `inherit`.
+- **Caller secrets**: reusable workflows declare named secrets and callers map each consumed or deliberately forwarded name to `${{ secrets.NAME }}` under the identical name. Supported production callers do not use `secrets: inherit`. The [explicit secret contract](#explicit-secret-contract-and-staged-migration) defines required names, feature-specific names, and rollout gates. Variables keep their Naming-list names.
 - **artifact**: only the securefix diff is passed with the official upload-artifact / download-artifact.
 - **External actions**: pin all of them to a full SHA.
 - **Static checks in CI**
@@ -85,6 +83,36 @@ securefix is the one exception on the client side. Its caller cannot be a reusab
   - Pass `${{ github.event.* }}` only through env.
   - **Server-side workflows use no cache at all**. CI checks this.
 - **License**: MIT.
+
+### Explicit secret contract and staged migration
+
+This is the approved specification for [issue #76](https://github.com/civitaspo/csm-ci-actions/issues/76). Runtime workflows, activation preflight, templates, and callers still require separate implementation and deployment. Do not replace inheritance on an existing pin using this specification alone. The environment-bound [availability probe](handoff.md#explicit-secret-contract-probe) establishes the GitHub boundary, not completed runtime migration.
+
+Each reusable workflow declares `on.workflow_call.secrets` as follows. Optional means feature-specific, not optional after that feature is selected.
+
+| Workflow | Secret | `required` | Use |
+|---|---|---|---|
+| All five `client-*.yml` | `CSM_CI_CLIENT_APP_PRIVATE_KEY` | `true` | Client request token |
+| `server.yml` | `CSM_CI_SERVER_APP_PRIVATE_KEY` | `true` | Server operation tokens |
+| `server.yml` | `CSM_CI_APPROVER_APP_PRIVATE_KEY` | `false` | Approval, including `/approve` and `/recheck` approval |
+| `server.yml` | `CSM_CI_TERRAFORM_PROVIDER_GPG_PRIVATE_KEY`, `CSM_CI_TERRAFORM_PROVIDER_GPG_PASSPHRASE` | `false` for each | Terraform provider publication only |
+| `server-repo-settings.yml` | `CSM_CI_SERVER_APP_PRIVATE_KEY` | `true` | Discovery and target jobs |
+| `server-repo-settings.yml` | `CSM_CI_APPROVER_APP_PRIVATE_KEY` | `false` | Forward to activation preflight |
+| `server-repo-settings-target.yml` | `CSM_CI_SERVER_APP_PRIVATE_KEY` | `true` | Every target mode |
+| `server-repo-settings-target.yml` | `CSM_CI_APPROVER_APP_PRIVATE_KEY` | `false` | Manual activation preflight only |
+| `server-check.yml` | None | Not applicable | No App credentials consumed |
+
+Client callers map only `CSM_CI_CLIENT_APP_PRIVATE_KEY`. The server label caller maps the Server App key and names for its enabled approval and provider publication features. The repo-settings caller maps the server and approver names. Both nested client-target and server-target edges forward those two names explicitly. Repo-settings never forwards provider signing credentials. No production caller forwards `csm-ci-e2e` credentials. The securefix composite keeps its existing single Client App private-key input.
+
+Every privileged job retains `environment: csm-ci` and the existing default-branch-only deployment restriction. Strong credentials stay in that server environment. Client repositories retain only the Client App key at repository level. An explicit mapping may evaluate to an empty string in the caller when the name exists only in the called job's environment. The environment provides that name to the called job. GitHub's required declaration validates presence of the mapping, not a nonempty credential value. Never pass credentials through workflow inputs, outputs, artifacts, logs, or command arguments.
+
+Keep selected-operation validation at the existing consuming steps. Approval and manual repo-settings activation must fail at the pinned App-token action when the approver key is empty. Its current message is `The 'private-key' input must be set to a non-empty string. If using a secret or variable, ensure it is available in this workflow context.` Terraform provider asset preparation must reject an empty key with `Input required and not supplied: gpg-private-key`, or an empty passphrase with `Input required and not supplied: gpg-passphrase`, before signing. Other release types do not require these inputs. Managed-files-only and repairs that do not activate controlled merges do not require approver capability. Do not add a PAT fallback, broaden token permissions, or change receipt, cleanup, replay, or final write revalidation.
+
+Activation preflight retains its existing caller path, created-event, no-job-condition, and referenced repository rules. Replace the inheritance requirement with a named secret map. A merge caller must map `CSM_CI_CLIENT_APP_PRIVATE_KEY` to the identical `secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY` expression. The server label caller must map `CSM_CI_SERVER_APP_PRIVATE_KEY` to its identical expression, plus each present feature-specific name to its identical expression. Optional feature presence is validated when the feature runs, not inferred from client configuration during caller discovery. Reject inheritance, a missing required mapping, a renamed mapping, a literal value, a mapping to another secret, or an extra undeclared credential name. Allow expression whitespace without changing the referenced secret name. Preserve `caller workflow has not been distributed` from dispatch validation and `caller workflow is not distributed on <repository>` from the earlier workflow preflight. Missing mappings declared required also fail GitHub workflow validation before any job starts.
+
+Implementation acceptance requires table-driven tests for valid explicit maps, omitted optional names, each missing or wrong mapping, extra names, and unchanged trigger and condition rejection messages. Test selected-feature missing credentials and non-feature paths. Mutation-check each changed rejection rule individually. Migrate reusable declarations, nested edges, supported callers, templates, fixtures, setup examples, and generated action locks together. Preserve the configured lockfile workflow list and the server checkout pattern.
+
+Run all mandatory local checks, then affected live feature suites and smoke at the signed, pushed full candidate SHA. Verify both client and server callers, every nested repo-settings edge, and bootstrap activation. Keep the e2e runner checkout on `main` and the privileged `csm-ci-e2e` environment separate. Roll out reviewed compatible pins and callers one repository at a time through normal protections. A workflow-change merge blocked by the old runtime needs the separately authorized bootstrap recovery in [merge.md](merge.md). This specification authorizes no credential, App permission, or environment policy changes.
 
 ### Layout
 
@@ -123,7 +151,7 @@ trust:                                              # all matched by immutable i
 merge:
   required_checks: [{ name: status-check, app_id: 15368 }]
   deadline_minutes: 60
-policies:                                           # global only
+policies:                                           # defaults for every repository
   - { type: signed-commits }
   - { type: trusted-committers }
   - { type: sensitive-paths, paths: [<the full default set from the Rust version>], exempt: [{ id: 2 }] }
@@ -138,18 +166,48 @@ securefix:                                          # global only
                  dbt_project.yml: version-only } }
 repo_settings:                                      # global only (Phase 6)
   settings: { delete_branch_on_merge: true, allow_auto_merge: false,
-              allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false }
-  managed_files: { .github/PULL_REQUEST_TEMPLATE.md: "<text>" }   # literal path → content
-repositories:                                       # per repo, only ops and the release build type
+              allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false,
+              has_wiki: false, has_projects: false, allow_update_branch: true }
+  sponsorships: { enabled: true, github: [your-sponsors-login] } # optional; explicit recipients only
+  additional_managed_files:                         # planned; requires runtime and parser rollout
+    .github/PULL_REQUEST_TEMPLATE.md: managed-files/pull-request-template.md
+repositories:                                       # first matching entry supplies all overrides
   - name: owner/*                                   # first match wins
     ops: [approve, merge, policy-check, securefix, release]
     release: { build_type: none | js-action | goreleaser | cargo | cargo-raw, targets: [...] }
+    sensitive_paths: { paths: ["**"], exempt: [] }     # optional independent list replacements
+    merge: { allow_bot_requests: false }              # optional; defaults to true
 ```
 
 - Read the file as of the server's `GITHUB_SHA`, and validate it with zod strict mode (unknown keys are errors).
 - Reject the following combinations at configuration validation time.
-  - **The server repo and the csm-ci-actions repo are always treated as `sensitive-paths: ["**"]` in code, and exempt and `bot_mergers` do not apply to them**. This is a fixed rule that configuration cannot change (in the Rust version too, the server repo had every path as sensitive).
   - Putting the Server bot in a trust list is not allowed.
+
+### Repository policy overrides and staged migration
+
+This contract implements [issue #74](https://github.com/civitaspo/csm-ci-actions/issues/74). It requires separate runtime changes and deployment. Until the migration below completes, the runtime retains its existing hardcoded protection for the configured server repository and `civitaspo/csm-ci-actions`.
+
+- `repositories[].sensitive_paths` is an optional strict object with optional `paths` and `exempt` lists. `paths` uses the global sensitive-path pattern format. `exempt` uses the existing strict `{ id, login }` principal format and matches immutable IDs.
+- Each omitted list inherits its corresponding global `sensitive-paths` list. An explicit list replaces that list, rather than extending it. `paths: []` matches no paths. `exempt: []` disables inherited exemptions. Neither empty list is converted to omission.
+- If no global sensitive-path policy exists, an omitted repository override leaves that policy disabled. A supplied `sensitive_paths` object enables it, with empty lists for components without global or repository values. The existing file-count limit still applies whenever that policy runs.
+- Repository overrides replace the corresponding fields of every configured `sensitive-paths` policy. Other policy types keep their current behavior. The existing first matching repository entry supplies the complete override object. Later matching entries do not contribute fields.
+- `repositories[].merge` is an optional strict object with the optional Boolean `allow_bot_requests`. Omission defaults to `true`. `false` rejects Bot-authored `/merge` requests even if the author is in global `trust.bot_mergers`. `true` permits consideration under that existing trust list and all ownership, approval, policy, and check requirements. It grants no identity or permission by itself.
+- Exemptions and permission for Bot requests are independent. Neither changes signature verification, trusted-committer checks, current-head command approval evidence, Bot ownership checks, required CI checks, or final merge-head validation. Every approval and policy evaluation, including merge-time reevaluation, uses the same effective sensitive-path settings.
+- Final runtime policy and merge decisions contain no special repository-name checks. Operators protect the server and actions repositories with explicit `sensitive_paths: { paths: ["**"], exempt: [] }` and `merge: { allow_bot_requests: false }` entries.
+
+Deploy in this order. Each runtime change is a complete, independently reviewed PR with required local and live verification.
+
+1. Add schema support and effective policy resolution while retaining legacy protection for the server and actions repositories. Overrides cannot relax those two repositories during this stage.
+2. Deploy the compatible runtime and explicit protection entries together in a reviewed server PR. Update every production configuration consumer, including `server.yml`, `server-check.yml`, and `server-repo-settings.yml`, to the verified full runtime SHA. An old strict parser cannot read the new fields. Drain older runs before the cutover and identify any old run that fails after reloading the new configuration. Retry its request through the compatible runtime. Verify that both repositories still require trusted command approval and reject Bot merge requests.
+3. Remove the legacy repository-name restrictions in a separate runtime PR only after the deployed explicit protections are verified. Remove the superseded implementation and its fixed-name expectations together. This is a bounded migration, not a permanent compatibility mode.
+4. Deploy that verified runtime by updating all production configuration-consuming workflow pins. Verify that explicit configuration preserves the same protection on both repositories.
+5. Relax either repository only through a subsequent, explicit configuration diff. A deliberate Renovate exemption can retain `paths: ["**"]`, replace `exempt` with its existing configured principal, and set `allow_bot_requests: true`. Keep the server protection unchanged unless a separate configuration change deliberately changes it.
+
+Do not deploy new configuration fields to old parser pins. Do not remove legacy protection before explicit protection is deployed. Rollback must retain a parser that accepts the deployed schema. Workflow upgrades blocked by the deployed merge token require the separately authorized bootstrap recovery in [merge.md](merge.md). This migration does not authorize credential administration, App permission changes, or protection changes outside the reviewed configuration.
+
+Implementation acceptance requires table-driven configuration and operation tests for inheritance, independent overrides, replacement, empty lists, absent global policy, strict validation, and first-match precedence. Cover two repositories with different settings, the same author and every commit exemption condition, renamed paths, the file-count limit, and unchanged trust checks. Exercise automatic approval, `/approve`, `/recheck`, policy-check, and merge reevaluation. Changing Bot permission or effective policy during a waiting merge must take effect before the final write. Mutation-check every changed rejection rule individually.
+
+Run the affected approve, policy-check, and merge suites sequentially, then smoke, against the signed pushed implementation SHA. Verify an explicitly protected repository and a repository deliberately allowing the configured Bot, including mixed-identity rejection. After an authorized merge, run the affected CI suites through the runner on `main`. Record exact configuration and runtime SHAs, accepted request identities, run URLs, and skips in `docs/handoff.md`. A testing Bot proves Bot mechanics, not actual Renovate integration. The deliberate production relaxation also requires a real Renovate request, current-head approval and checks, and a verified Server-executed merge. Historical comments or approvals for another head are not evidence.
 
 ---
 
@@ -209,7 +267,7 @@ repositories:                                       # per repo, only ops and the
 - **Client side**: only a comment that passes the body and commenter pre-filter mints a token. This prevents label spam by fork commenters.
   - `/approve` requires OWNER, MEMBER, or COLLABORATOR association.
   - `/merge` accepts those associations, or a Bot whose immutable comment-author ID equals the pull request author's ID in the issue event. Missing or malformed bot identity cannot qualify for this exception.
-  - Forwarding a bot request does not grant merge permission. The server requires `trust.bot_mergers` membership, ownership of the PR and every commit, current approval and checks, and the existing protected-repository restrictions. This permits Renovate's own-PR `/merge` comments even when GitHub reports CONTRIBUTOR association.
+  - Forwarding a bot request does not grant merge permission. The server requires `trust.bot_mergers` membership, ownership of the PR and every commit, current approval and checks, and the effective repository permission for Bot requests. This permits Renovate's own-PR `/merge` comments even when GitHub reports CONTRIBUTOR association.
 - **Server-side acceptance conditions**
   - The comment belongs to the target PR.
   - The body matches the command regex exactly.
@@ -233,7 +291,7 @@ repositories:                                       # per repo, only ops and the
 
 ### S6. Placement of secrets and permissions
 
-- **environment `csm-ci`** (deploys from the default branch only): holds the Server App key and the approver PAT.
+- **environment `csm-ci`** (deploys from the default branch only): holds the Server App key, the approver App key, and enabled provider signing credentials. Explicit workflow mappings do not change this placement.
 - The build job declares no environment.
 - **Client App** is installed only on the server repo. Its permission is `issues: write`.
 - **Server App** permissions
@@ -242,7 +300,7 @@ repositories:                                       # per repo, only ops and the
   - `issues: write`
   - `checks: write`
   - `actions: read`
-  - `workflows: write`: minted only when securefix allows it and for managed files.
+  - `workflows: write`: minted only when securefix allows it, for managed files, and on the final merge token after readiness succeeds. The merge token is limited to the target repository and may merge approved changes to `.github/workflows/**`. Read and notification tokens do not receive this permission.
   - `attestations: write`: only if the spike shows it is needed.
   - `administration: write`: minted only in the repo-settings job.
     - Advantages over the old classic admin PAT:
@@ -262,6 +320,7 @@ repositories:                                       # per repo, only ops and the
 - For required checks that come from GitHub Actions, a PR author with write access can modify the workflow. The real gates are the approval and `csm-ci/policy`.
 - Fork PRs are out of scope for securefix. approve and policy-check run on `pull_request_target`, but they do not check out the PR's code.
 - Remaining risk of head pinning: if the sha is omitted, we cannot detect a push by a trusted committer that forged `committedDate`.
+- The final merge token includes `workflows: write` for every ready pull request, even when it changes no workflow file. This avoids a separate path-detection decision before token creation. The permission is used only to merge the pinned head after final revalidation of trust, command evidence, approval, policies, and required checks. It does not permit securefix workflow changes when `allow_workflow_changes` is false.
 - **All server jobs share the Server App key**. So a compromise of any job can mint an `administration: write` token. Narrowing the token permissions per job is only operational discipline, not a boundary. We accept this compromise (the user's decision). If we want to separate it in the future, we can add a third App and split the environment.
 
 ---
@@ -353,14 +412,14 @@ After Phase 0, phases 1, 2, 3, 4, 5a, and 6 can proceed independently in paralle
      - The approver's latest review is an APPROVE on this head. Do not look at `reviewDecision`, because the ruleset and the merge API already block a human's changes requested.
      - **Policies are re-evaluated inside the server and pass**. Do not use the check run result, so that we judge with the latest configuration even if it changed.
      - `required_checks` are success or skipped, with the specified app as the producer.
-  4. Mint the write token only after the PR is ready, then run `pulls.merge(sha=head, squash)`.
+  4. Mint the final token with `contents: write`, `pull_requests: write`, and `workflows: write` only after the PR is ready. Revalidate readiness against the pinned head before `pulls.merge(sha=head, squash)`.
      - The commit message carries the PR body's `Co-authored-by` lines with duplicates removed.
      - Retry 405, 422, and 503 with a re-validation in between.
      - Fail immediately on 409.
      - Confirm the response has `merged: true`.
   5. Notify the result with a comment.
 - **e2e**
-  - The success case merges.
+  - The success case merges, including an approved change to `.github/workflows/**` through the final merge token.
   - A `/merge` from a non-merger is rejected.
   - Even with the ruleset removed, a PR that is not approved is rejected (defense in depth).
   - It aborts on a head change, a force-push, or a comment edit or deletion while waiting. Live e2e force-push coverage requires explicit authorization to mutate a testing-client PR branch; the current authorization permits force-pushing only the csm-ci-actions `e2e` branch. Unit and mutation tests cover force-push rejection until that authorization changes.
@@ -395,7 +454,11 @@ After Phase 0, phases 1, 2, 3, 4, 5a, and 6 can proceed independently in paralle
   - `/recheck` triggers a re-evaluation
   - Fake markers (a review by a non-approver, a COMMENT review) are invalid
   - The producer of the check is the Server App
-- **Not in scope**: external scripts, minimizing failure comments.
+- **Policy failure reports and recovery**: the Server App manages dedicated, head-bound failure comments as specified in [Policy check](policy-check.md#failure-reports-and-recovery). Failed full evaluations report every failed policy's actual reasons and applicable remediation. Identical active retries reuse the report. Changed failures supersede older reports with `OUTDATED`. Passing full evaluations of the current head minimize all owned failure reports, including outdated reports, with `RESOLVED`. Recovery posts no success comment and deletes nothing.
+- **Publication boundary**: the shared full check publication path applies this lifecycle to standalone policy-check, automatic approval, the final `/approve` refresh, and `/recheck`. Pure evaluation, merge readiness polling, and prospective `/approve` preflight do not publish or resolve reports. Approval and trust semantics remain unchanged.
+- **Report safety**: paginate prior comments, require the dedicated marker and configured Server Bot's immutable identity, and reread each target before minimization. Revalidate the PR state and evaluated head before each write. Preserve per-PR server serialization and prevent stale or out-of-order results from replacing newer results. REST and GraphQL failures propagate.
+- **Implementation gates**: test lifecycle transitions, identity and head rejection, escaping and truncation, pagination, errors, and preflight isolation. Mutation-check each changed rejection rule. Verify real rendered comments and `RESOLVED` minimization with existing Server App permissions in the testing repositories. Record exact run URLs before claiming runtime support.
+- **Not in scope**: external scripts.
 
 ### Phase 4: securefix
 
@@ -516,20 +579,33 @@ After Phase 0, phases 1, 2, 3, 4, 5a, and 6 can proceed independently in paralle
 
 - **Target selection**
   - Discover installed repositories under the configured owners and select only repositories matched by `repositories`. Keep the server configured and process it last.
-  - The actions repository can be a managed client when installed and configured, including when selected explicitly for `reconcile` or `managed-files-only`. Do not exclude it by its role as the source of the reusable workflows. Its fixed all-paths-sensitive policy still applies.
+  - The actions repository can be a managed client when installed and configured, including when selected explicitly for `reconcile` or `managed-files-only`. Do not exclude it by its role as the source of the reusable workflows. Its configured sensitive-path policy still applies. Preserve explicit all-paths protection during the repository-policy migration.
 - **Trigger and permissions**
   - `server-repo-settings.yml` starts on a schedule and on `workflow_dispatch(repository?, mode?)`. The reusable workflow accepts `mode: reconcile | managed-files-only`, defaulting to `reconcile`. A schedule always uses `reconcile`; reject a scheduled request for `managed-files-only` and reject unknown modes before target writes.
   - The environment is `csm-ci`.
   - In `reconcile` mode, mint the Server App token per target repo with `administration: write` only. Mint a separate token for managed files.
   - Read the settings and rulesets with that administration token too. GitHub returns a ruleset's `bypass_actors` only to callers with write access to it (testing-csm-ci-server run 40155267064), so a read-only token cannot see the bypass. The activation preflight and the managed-file inspection use a target-scoped contents and pull-requests read token.
-  - `repo_settings.settings` accepts only the merge booleans shown in the Configuration section, with the merge methods fixed to squash only to match `review-and-checks`. `managed_files` maps safe literal paths to text, with the securefix size limits.
+  - `repo_settings.settings` accepts only the settings shown in the Configuration section. `has_wiki`, `has_projects`, and `allow_update_branch` are optional booleans. The merge methods remain fixed to squash only to match `review-and-checks`. `additional_managed_files` maps safe literal destination paths to Server source paths under the planned contract below. Until its runtime and parser rollout complete, deployed configurations retain the inline `managed_files` format.
 - **What gets synced in `reconcile` mode** (all validated with zod)
   - Repository settings. When `repo_settings.settings.allow_squash_merge` is explicitly `true`, also enforce `squash_merge_commit_title: PR_TITLE` and `squash_merge_commit_message: PR_BODY`. These fixed values use the pull request title and description for both single-commit and multi-commit squash merges. They are implied settings, not new configuration keys.
     - Inspect both fields, report each differing field as drift, and repair them even when `allow_squash_merge` already matches. Missing fields fail inspection rather than being treated as unchanged. A repeat sync with no further settings drift makes no settings write.
     - Omitted settings remain unmanaged. If `allow_squash_merge` or the entire `settings` block is omitted, leave both squash commit fields unchanged, even when the repository already allows squash merges. The fixed S6 rulesets still apply.
+  - Repository features. Reconcile configured `has_wiki`, `has_projects`, and `allow_update_branch` through the repository REST API. The example disables Wiki and Projects and enables pull request branch update suggestions. Each field accepts `true` or `false`; omitted fields remain unchanged.
+    - Inspect each configured field, report each differing field as drift, and repair it. A missing configured field fails inspection. Surface read and update API errors, including unsupported settings, instead of skipping a configured field. A repeat sync with no settings drift makes no settings write.
+    - `allow_update_branch` controls GitHub's branch update suggestion only. It does not update branches or require branches to be up to date before merging. Preserve existing merge, approval, required-check, and ruleset behavior and unrelated repository settings.
   - The 4 rulesets in S6. Upsert by name and `source_type == Repository`, and replace the whole ruleset. If more than one ruleset has the same name, raise an error.
   - Enabling immutable releases (we do not disable it)
   - Collaborators: handled only when the approver uses the PAT approach. If the Phase 1 spike lands on the App approach, they are not needed.
+- **Sponsorships**
+  - The optional global `repo_settings.sponsorships` block is a strict object with required boolean `enabled` and optional `github`. Omission leaves the Sponsor button setting unmanaged. `github`, when present, is a list of one to four explicit GitHub logins. Do not infer a recipient from the owner or any other account.
+  - Each login has 1 to 39 ASCII alphanumeric characters or single hyphens between alphanumeric characters. Reject empty values, whitespace, URLs, leading `@`, invalid characters, leading or trailing hyphens, consecutive hyphens, and case-insensitive duplicates. Normalize logins to lowercase and retain their configured order. Four total recipients is this implementation's supported subset, not GitHub's platform limit. Syntax validation does not establish account existence or GitHub Sponsors enrollment.
+  - In `reconcile`, read the target repository's node ID and `hasSponsorshipsEnabled` with GraphQL. Report drift and repair it with `updateRepository(input: { repositoryId, hasSponsorshipsEnabled })` using the existing target-scoped administration token. Both boolean values are supported. Missing or invalid fields, read errors, and mutation errors fail the run. A matching value makes no sponsorship mutation. Revalidate before writes under the existing apply contract. Never blindly retry the mutation after a lost response; read the setting before deciding whether another write is needed.
+  - When `github` is present, generate the complete `.github/FUNDING.yml` as `github: ["login-one", "login-two"]` followed by one newline. Include only the configured logins. Generate the file even when `enabled` is false, so funding content can be prepared without enabling the button. Omitted `github` leaves funding content unmanaged by this generator, including when `enabled` is true.
+  - Add generated funding content to the existing managed-file delivery path and validate the complete desired file set against its path, file-count, and byte limits before file writes. Reject a configured managed file at `.github/FUNDING.yml` when generation is active; never choose a producer by priority. A literal managed file, including a Server-source additional file after its runtime rollout, may use this destination when `github` is absent. No second file-delivery mechanism is introduced.
+  - Generation owns the whole file. Existing GitHub recipients and unconfigured funding providers are replaced only through the reviewed managed-file PR. There is no merge with existing funding content and no direct default-branch write. Removing `github` or the block preserves the existing file and follows the same unmanaged-path and outstanding-PR recovery rules as other removed managed files.
+  - Settings synchronization and funding-file delivery have separate results. A successful boolean update does not complete a pending funding-file PR. Verify generated content on the default branch after its normal review, CI, approval, and protected merge. `Repository.fundingLinks` is read-only evidence of resolved links, not an API for setting recipients or proof that an open PR has reached default.
+  - `managed-files-only` generates the same desired funding content without reading or changing the Sponsor button setting or minting an administration token. Preserve the existing branch ownership, signature, lease, expected-head, final revalidation, and idempotency rules in both modes.
+  - Verify the existing Server App can read and change the setting in the testing repositories before claiming support. Permission failures remain errors; agents do not change App permissions or credentials. Production recipient values require explicit reviewed Server configuration. See [GitHub's sponsor-button documentation](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/displaying-a-sponsor-button-in-your-repository) and [GraphQL repository reference](https://docs.github.com/en/graphql/reference/repos#updaterepositoryinput).
 - **controlled-merges**
   - A schedule run **does not create it and does not change it from `disabled → active`**. This respects the emergency stop.
   - A schedule run repairs an existing `controlled-merges` without sending its enforcement, so a stop set during the run is kept. A PUT without `enforcement` keeps the current value (verified on testing-csm-ci-client).
@@ -540,6 +616,23 @@ After Phase 0, phases 1, 2, 3, 4, 5a, and 6 can proceed independently in paralle
     - The only bypass is the Server App's `pull_request`.
   - Disable it with `disabled`, not by deleting the ruleset.
   - Process the server repo last.
+- **Additional managed files, planned**
+  - This contract implements [issue #78](https://github.com/civitaspo/csm-ci-actions/issues/78). It requires a separate runtime change and deployment. Current parser pins do not accept `additional_managed_files`; merging this specification does not enable source-file distribution or remove the deployed inline format.
+  - The optional global `repo_settings.additional_managed_files` map defaults to empty. Keys are literal target paths. Values are literal source paths relative to the Server repository root, even when `config-path` is nested. The same map applies to every selected repository. There is no URL resolver, separate source repository, templating, or per-repository override.
+  - Load sources from the exact Server `GITHUB_SHA` used to read `csm-ci.yaml`. Do not resolve them from a branch tip, the actions checkout, or `job.workflow_sha`. Resolve sources only for repo-settings managed-file inspection and apply. Shared configuration parsing validates the schema and paths without adding source reads to intake, approval, merge, policy-check, securefix, or release operations.
+  - Use the existing Server configuration contents-read client and shared bounded GitHub read helpers. Resolve the commit tree and traverse each path through Git tree entries. Every ancestor must be a tree and every leaf a regular blob. Reject missing entries or object SHAs, symlinks, submodules, non-directory ancestors, truncated trees, malformed or unsupported blob encodings, and API failures. Never follow a source symlink or read a source from the runner filesystem. Do not treat an API error as an empty source file.
+  - Both source and destination paths must be normalized relative literal paths. Reject empty paths, absolute or drive paths, backslashes, control characters, empty or dot segments, parent traversal, glob syntax, and case-insensitive `.git` segments. Reject destination parent/child conflicts across the complete desired set. Reusing one source for multiple destinations is allowed.
+  - Decode source blobs as strict UTF-8. Reject invalid bytes rather than replacing them. Preserve all valid source bytes when delivering text, including a BOM and line endings. Do not render templates or normalize text. Source executable mode is not distributed; the existing restriction on new executable target files remains.
+  - Fully load and validate additional files together with active generated content before any managed-file write. Keep the existing inclusive limits of 512 delivered files, 8 MiB per file, and 10 MiB total UTF-8 content. Count a reused source once per destination. Check actual loaded sizes; an invalid later source cannot leave a partial file update. Source failures fail the managed-file stage. Administrative reconciliation retains its existing ordering and separate result.
+  - Additional files cannot override destinations reserved by an active generator, even with identical bytes. Sponsorship generation reserves `.github/FUNDING.yml` whenever `sponsorships.github` is present, including when `enabled` is false. When it is absent, an additional source file may manage funding content. Standard caller generation and its reserved destinations belong to [issue #77](https://github.com/civitaspo/csm-ci-actions/issues/77), which depends on #76. This change can ship first. Until that generator is deployed, existing workflow callers may remain literal additional files. Transition those entries to generated ownership together when #77 is deployed, under its removal and reservation rules.
+  - After migration, reject the removed `repo_settings.managed_files` key, including an empty map or both keys together, with an actionable message. Tell the operator to move inline contents into committed Server source files and replace the key with `repo_settings.additional_managed_files`. Do not retain overlapping runtime formats.
+  - In both `reconcile` and `managed-files-only`, pass the complete loaded destination-to-content set through the existing managed-file PR path. Preserve signatures, Server identity, full history proof, Git leases, expected-head checks, final revalidation, token restrictions, and repeat-run idempotency. A source-only content change proposes an update. Identical retries preserve the PR and head.
+  - Removing an additional entry stops managing the target file and does not delete it. When an existing branch needs reuse and its commits changed a removed destination, reject it as an unmanaged-path change. Preserve the documented ownership verification and operator recovery; do not expand the history allowlist or reset an unverified branch.
+  - Migrate through reviewed Server PRs. First inventory and drain old configuration-writing runs, add ordinary committed source files containing the deployed literal bytes, and omit the old map while retaining settings. This temporarily pauses additional-file distribution. Leave existing target files, managed branches, and open PRs untouched. With no desired files, the existing file stage makes no write and does not prove branch ownership. No unrelated managed PR merge is required.
+  - During that pause, upgrade every Server configuration parser pin, including configuration checks, label/intake, operation jobs, and merge's current-configuration reload, to the verified runtime that accepts the new map. Verify every deployed caller before adding the new key. Then restore the same destination set and bytes using source paths. Normal branch ownership and head checks resume when reuse is needed. A source-directory example is `managed-files/`; it is not a required prefix and must not install source copies as executable Server workflows.
+  - Do not deploy new fields to old strict parser pins. Before the pin-upgrade PR, verify the deployed merge workflow can merge workflow changes; use only the separately authorized bootstrap recovery if necessary. Keep normal approval, policy, CI, protection, and one-repository-at-a-time rollout. After the new schema is deployed, rollback must retain compatible parser pins or first restore a mutually accepted configuration. This change authorizes no credential administration, App permission change, or unrelated protection change.
+  - Implementation must update config, source loading, all affected fixtures and harness callers, generated bundles, and the repo-settings, setup, and cutover instructions together. Cover exact-commit and root resolution, source-only changes, preserved bytes, identical retries, both modes, removal and outstanding-PR recovery, all path/tree/encoding and size rejection rules, generator collisions, old-key errors, and API error propagation. Table-driven tests assert rejection messages; mutation-check every changed rejection individually.
+  - Run all required local checks and independent specification review, then the affected repo-settings live suite and smoke at the signed pushed full implementation SHA. After an authorized merge, run affected CI e2e through the runner on `main`. Record exact runtime and configuration SHAs, run URLs, generated PRs, skips, and restoration in `docs/handoff.md`. Preserve the existing unverified live changed-content branch-reset case unless separately authorized. A specification PR needs no live e2e and establishes no runtime support.
 - **managed files**
   - Writes use the Server App's contents / workflows permissions. `workflows` is minted only when a managed path is a workflow, or when the branch is reset, because the reset may move it across workflow changes on default.
   - Apply the S4 server-owned branch rule to the branch `csm-ci/repo-settings`, write with `createCommitOnBranch`, and create a PR.
@@ -548,10 +641,13 @@ After Phase 0, phases 1, 2, 3, 4, 5a, and 6 can proceed independently in paralle
   - An explicit dispatch with `mode: managed-files-only` creates or updates only the managed-file pull request. It works before the target has a merge caller, policy checks or the approver App required by the activation preflight.
   - Keep the normal configuration validation, configured-target discovery and selection, target-scoped tokens, S4 server-owned history proof, path and size limits, expected-head checks and refusal to overwrite untrusted state. The mode does not bypass branch ownership checks or merge the pull request.
   - Do not read or write repository settings, rulesets or immutable-release state in this mode. Do not mint an administration token or an approver capability token, and do not run the controlled-merges activation preflight. Mint only discovery and managed-file inspection/write tokens, with workflows permission subject to the same path/reset condition as normal reconciliation.
-  - Reuse the same global literal `managed_files` map and `csm-ci/repo-settings` branch. Do not add server-specific workflow distribution or per-repository templating.
+  - Reuse the same global managed-file set, generated sponsorship funding content, and `csm-ci/repo-settings` branch. After the additional-files runtime rollout, load that set from `additional_managed_files` under the contract above. Do not add server-specific workflow distribution or per-repository templating.
   - Bootstrap order: the user installs Apps and provisions variables and secrets; dispatch managed-files-only; review and merge the generated PR using the repository's existing merge process; verify the caller workflows and required checks on default; then dispatch normal reconciliation to apply protections. Normal activation preflight and emergency-stop behavior remain unchanged.
 - **e2e**
+  - For sponsorships, test strict configuration, both `enabled` values, omitted recipients and block, every invalid recipient rule, collisions, deterministic generated content, replacement of existing funding providers, and removal recovery. Assert each new rejection message and mutation-check each changed rule. Test missing or invalid GraphQL fields, read and mutation failures, drift repair, and an unchanged second sync.
+  - Verify sponsorship toggle readback and a generated funding PR in real testing-repository runs. Verify PR reuse with an unchanged head on repeat, no PR when default already matches, and changed-recipient updates. Verify `managed-files-only` proposes funding content without setting access or administration tokens. Record exact candidate SHAs, run URLs, PR URLs, and post-merge default-branch funding evidence in `docs/handoff.md`; distinguish a pending PR from completed setup and record any skipped or unverified behavior.
   - Drift is repaired. With `allow_squash_merge: true`, verify both squash commit fields in the testing repositories, repair drift in either field, and confirm that a second sync makes no settings write. Record the candidate SHA and real run URLs. Verify that omitting `allow_squash_merge` leaves both fields unchanged.
+  - For `has_wiki`, `has_projects`, and `allow_update_branch`, cover both boolean values, omitted fields, drift reporting and repair, missing configured fields, API failures, and an unchanged second sync. Mutation-check each new rejection rule. Verify all three actual settings in the testing repositories and record the candidate SHA and run URLs in `docs/handoff.md`.
   - A managed PR is created.
   - The second run is a no-op.
   - The schedule does not re-enable a controlled-merges that was set to disabled.
@@ -685,15 +781,15 @@ The differences in security rules are summarized in the comparison table in the 
 | approve | Automatic for trusted commits. The owner's `/approve` approves sensitive paths. It adds an owner marker comment | The meaning is the same (`/approve` takes no argument and covers trusted commits only). The marker goes in the review body, and no owner marker comment is added. A push right after approval causes a dismiss |
 | Re-run | None | **`/recheck`** can redo policy-check and the automatic approve |
 | merge | The client records the acceptance time and head in a manifest and watches the timeline broadly. Renovate rebase recovery exists | Based on the exact `/merge` comment creation time and pins the server-read head. Policies are re-evaluated inside the server. No rebase recovery |
-| policy-check | The check name is `securefix-policy-check`. An approval of the current head is also a condition to pass. On failure it posts a comment and minimizes old ones | The check name is `csm-ci/policy`. Approval is not a condition (the ruleset and the merge side check it). Policies can be added declaratively. The result is only in the check summary, and no comment is posted |
+| policy-check | The check name is `securefix-policy-check`. An approval of the current head is also a condition to pass. On failure it posts a comment and minimizes old ones | The check name is `csm-ci/policy`. Approval is not a condition (the ruleset and the merge side check it). Policies can be added declaratively. The check summary remains authoritative. Failed full evaluations also post actionable comments. Superseded failures use `OUTDATED`; recovery uses `RESOLVED` |
 | securefix | The PR fix workflow path is fixed to `pull_request.yml`. It does not update the PR title and body (release-pr-sync fills the gap) | A PR-mode run is bound to the target PR and to the base being the default branch (the workflow path does not matter). Route mode is a general configuration and also updates the PR title and body. release-pr-sync is not needed |
 | release tag | Created with the client's `GITHUB_TOKEN` (`contents: write`) | **The server creates it**. The client needs no write permission. The tag ruleset allows only the Server App to create it |
 | release build | A Go matrix and cargo dedicated to terraform-provider. goreleaser is not used (it would not read the client's configuration) | `build_type` (none / js-action / goreleaser / cargo / cargo-raw / terraform-provider). Provider builds reuse the isolated GoReleaser path; provider validation and signing run only in the trusted publisher |
 | release verification | GPG-signed SHA256SUMS only | Replaced with an **attestation** (including the client repo, SHA, and tag) and with check-dist for JS actions. The bounded terraform-provider type additionally supplies the Registry-required GPG signature |
 | repo-settings | The owner's classic admin PAT. Managed files exist only on the native side | The Server App's `administration`. Managed files are distributed by PR, and caller distribution also uses this. It does not create repos |
-| Trust of the Server bot | Registered as a trusted committer | Not registered. We judge whether a commit is server-made. The server repo and csm-ci-actions always treat every path as sensitive |
+| Trust of the Server bot | Registered as a trusted committer | Not registered. We judge whether a commit is server-made. Explicit repository configuration preserves all-paths protection for the server repo and csm-ci-actions until deliberately relaxed |
 | Tests | A `testing-` namespace and about 40 workflows inside the production repo | Dedicated testing repos, testing Apps, and an e2e harness |
-| Removed | Control revisions, bootstrap and repair, runtime publishing, two protocols, native producer proof, owner marker comments, minimizing failure comments | — |
+| Removed | Control revisions, bootstrap and repair, runtime publishing, two protocols, native producer proof, owner marker comments | — |
 
 ## Comparison with past implementations (security rules)
 
@@ -707,7 +803,7 @@ The differences in security rules are summarized in the comparison table in the 
 | Readiness check, minting the token after ready | Old, Rust | Kept. Policies are re-evaluated inside the server (follows configuration changes) |
 | verified, 250 or fewer commits, last item is the head, web-flow proof | Old, Rust | Kept. Matching changes to id-based |
 | Sensitive paths (the Rust default set) and the exempt condition | Rust | Kept. The marker is bound by author, state, and head |
-| Every path in the server repo is sensitive | Rust | Kept (enforced by the schema). csm-ci-actions is covered too |
+| Every path in the server repo is sensitive | Rust | Preserved by explicit repository configuration during migration. csm-ci-actions is covered too |
 | The reusable pin is an ancestor of `main` | Old | Kept (a CI check of the server repo) |
 | Approver identity check, non-author, `commit_id`, re-read after approval | Rust | Kept. If the head moved, dismiss |
 | Make the Server bot a trusted committer | Old | **Removed**. The server-made judgment is S3, and the path binding is S4 |

@@ -14,6 +14,9 @@ repo_settings:
     allow_squash_merge: true
     allow_merge_commit: false
     allow_rebase_merge: false
+    has_wiki: false
+    has_projects: false
+    allow_update_branch: true
   managed_files:
     .github/PULL_REQUEST_TEMPLATE.md: |
       ## Why
@@ -23,11 +26,86 @@ repo_settings:
 
 Omitted repository settings remain unchanged. The merge-method settings accept only the values shown above.
 
+`has_wiki`, `has_projects`, and `allow_update_branch` are optional booleans. Each accepts `true` or `false`. The example disables Wiki and Projects and enables GitHub's suggestion to update pull request branches. `allow_update_branch` does not update branches or require branches to be up to date before merging. Existing merge, approval, required-check, and ruleset behavior remains unchanged.
+
+Inspection reports drift for each configured field and fails if a configured field is missing from the API response. Sync repairs differing values without changing omitted fields or unrelated repository settings. A second sync with no settings drift makes no settings write. Read and update API errors fail the run, including errors for unsupported settings.
+
 When `allow_squash_merge` is explicitly `true`, reconciliation also enforces `squash_merge_commit_title: PR_TITLE` and `squash_merge_commit_message: PR_BODY`. These fixed values use the pull request title and description for both single-commit and multi-commit squash merges. Do not add these fields to `csm-ci.yaml`; they are implied by `allow_squash_merge: true`. Inspection reports drift in each field and fails if either field is missing. Sync repairs either field even when squash merging is already enabled. A repeat with no further settings drift makes no settings write. If `allow_squash_merge` or the entire `settings` block is omitted, both fields remain unchanged, even when the repository already allows squash merges. The fixed rulesets still apply.
 
-Managed files map literal relative paths to UTF-8 text. Paths cannot contain traversal, Git metadata, glob syntax, or conflicting parent and child file names. Files use the securefix size limits. Removing a path from configuration stops managing it; it does not delete the file. If `csm-ci/repo-settings` still holds a commit that changed the removed path, later runs reject the branch as changing an unmanaged path. Close its pull request and delete the branch, and the next run starts it again from the default branch.
+The currently deployed `managed_files` format maps literal relative paths to inline UTF-8 text. Its planned replacement and required migration are defined in [Additional managed files](#additional-managed-files-planned). Paths cannot contain traversal, Git metadata, glob syntax, or conflicting parent and child file names. Files use the securefix size limits. Removing a path from configuration stops managing it; it does not delete the file. If `csm-ci/repo-settings` still holds a commit that changed the removed path, a later run that needs to reuse it rejects the branch as changing an unmanaged path. Verify ownership before closing its pull request and deleting that owned branch. The next run starts it again from the default branch. An empty desired set or matching default content needs no branch reuse and does not prove ownership of an existing branch.
 
 Configuration comes from the triggering server commit, `GITHUB_SHA`. Discovery intersects the repositories of the Server App installation on the server's owner with `owners` and the first matching `repositories` entry. Repositories under another owner are not discovered. The actions repository is eligible when installed and configured, including when explicitly selected. It remains subject to its fixed all-paths-sensitive policy. An explicit repository selector limits the run to that repository. When the selected set includes the server, its job runs after the client jobs finish, even when one of them failed, so one broken repository cannot stall the server's own repair. Within a repository, settings, rulesets and immutable releases are applied before managed files, so a rejected `csm-ci/repo-settings` branch does not block them.
+
+## Additional managed files, planned
+
+This is the planned contract for [issue #78](https://github.com/civitaspo/csm-ci-actions/issues/78), not behavior available at current parser pins. A separate implementation and the migration below must complete before using `additional_managed_files`. Until then, keep the deployed inline configuration above.
+
+After deployment, the optional global map associates each target destination with a source file committed in the Server repository:
+
+```yaml
+repo_settings:
+  additional_managed_files:
+    .github/PULL_REQUEST_TEMPLATE.md: managed-files/pull-request-template.md
+    .github/FUNDING.yml: managed-files/FUNDING.yml
+    LICENSE: managed-files/LICENSE
+```
+
+Omitting the map means no additional files. The same map applies to every selected target in both modes. `managed-files/` is an example directory, not a required prefix. Sources are relative to the Server repository root, including with a nested `config-path`. There is no external URL, separate repository, templating, or per-repository override.
+
+The server reads source Git objects at the exact `GITHUB_SHA` that supplied `csm-ci.yaml`. It does not use the latest branch tip, the actions checkout revision, or files on the runner. The existing Server configuration reader supplies contents-read access. Source resolution runs only during repo-settings file inspection and apply; other operations retain schema validation without source loading.
+
+Both path roles must be normalized relative literal paths. Absolute paths, drive paths, backslashes, control characters, empty or dot segments, parent traversal, glob characters, and any case variant of a `.git` segment are rejected. Every source ancestor must be an actual Git tree and its leaf a regular blob. Missing objects, symlinks, submodules, non-directory ancestors, missing SHAs, truncated trees, malformed or unsupported blob encoding, invalid UTF-8, and API failures fail the file stage. No source failure is interpreted as an empty file or skipped entry.
+
+Valid source bytes are copied without changes, including BOMs and line endings. Executable source mode is not copied. New executable target files retain the existing limitation. Reusing one source at several destinations is allowed. Every delivered copy counts toward the inclusive limits of 512 files, 8 MiB per file, and 10 MiB total UTF-8 content. The server loads and validates the complete desired set before any managed-file write, including generated content, actual sizes, and destination parent/child conflicts. Administrative synchronization retains its existing order and separate result.
+
+An additional file cannot override a destination reserved by an active generator, even with identical content. Sponsorship generation reserves `.github/FUNDING.yml` when `sponsorships.github` is present, including with `enabled: false`. Otherwise a source file may supply it. Standard caller generation and its reserved paths require the separate [issue #77](https://github.com/civitaspo/csm-ci-actions/issues/77) deployment. This feature does not require that generator. Existing workflow callers can first move unchanged to source files, then transfer to generated ownership in #77's reviewed transition. No additional entry may bypass that generator's removal or reservation rules once deployed.
+
+Source-only changes propose the same signed Server-owned PR updates as inline content changes. Identical retries keep the existing PR and head, and matching default content needs no update. Removing an entry stops managing the target file and never deletes it. Outstanding branches follow the same history checks and owned-branch recovery as the inline format. All signatures, leases, expected-head checks, final revalidation, token restrictions, and normal review and protected merge requirements remain.
+
+### Migrate deployed inline content
+
+Perform this procedure only after the runtime has passed the required local checks, independent review, repo-settings live tests, and smoke. Follow [cutover](cutover.md) for production PRs, protections, snapshots, and rollout. This specification does not authorize credential or App permission changes.
+
+1. Inventory the inline destinations, exact bytes and caller pins, existing managed branches and open PRs, and current parser workflow revisions. Confirm ownership before any later branch recovery. Drain old configuration-writing runs and recheck queued runs so an older writer cannot race migration.
+2. In a reviewed Server PR, add ordinary source files with those exact inline bytes and omit `managed_files` while retaining repository settings. Keep source copies outside runnable Server workflows. This temporarily pauses additional-file management without changing target files, existing managed branches, or their PRs. An empty desired set makes no file write and does not inspect existing branch ownership. Unrelated managed PRs do not need merging.
+3. Upgrade every Server parser pin through the normal protected PR process. Include configuration checks, label/intake, approve, policy-check, merge and its current-config reload, securefix, and release paths. Verify their deployed revisions accept the new schema. Before changing workflows, verify the deployed merger supports workflow-file merges. Any required bootstrap recovery needs the separate authorization described in [merge](merge.md).
+4. Add `additional_managed_files` in a reviewed Server PR with the same destination set and bytes. Keep existing literal caller pins unchanged during this format migration. Normal history proof and expected-head checks resume when a branch needs reuse. If state changed or proof fails, inspect it and use the existing owned-branch recovery instead of overwriting it.
+5. Verify the live result one repository at a time. Record the runtime and configuration SHAs, run URLs, proposed PRs or no-op results, and unchanged target content. Keep compatible parser pins for rollback, or restore a mutually accepted configuration before reverting them.
+
+The final runtime rejects the removed `repo_settings.managed_files` key, including an empty map or both keys together. Its error directs the operator to commit the inline contents as Server files and replace the key with `repo_settings.additional_managed_files`. The migration does not retain two runtime formats.
+
+Implementation must update fixtures and harness configuration rewrites, generated bundles, setup examples, and cutover's empty-map instructions together. Table-driven and mutation tests cover changed rejection rules, exact-commit resolution, preserved bytes, source-only updates, identical retries, removal, and safe existing-PR reuse. Record live evidence and any existing verification gaps in `docs/handoff.md`; this specification has no live execution evidence of its own.
+
+## Sponsorships
+
+This section specifies the planned contract for issue #67. A separate runtime implementation and deployment are required before use. Do not add `sponsorships` to Server configuration pinned to a revision without that implementation; its configuration schema rejects the key.
+
+The optional global `repo_settings.sponsorships` block configures the Sponsor button separately from its funding content:
+
+```yaml
+repo_settings:
+  sponsorships:
+    enabled: true
+    github: [your-sponsors-login]
+```
+
+`enabled` is required and accepts `true` or `false`. Omission of the block leaves the button setting unmanaged. The optional `github` list contains one to four explicit recipient logins. No account is inferred from the repository owner. Each login has 1 to 39 ASCII alphanumeric characters or single hyphens between alphanumeric characters. Empty values, whitespace, URLs, leading `@`, invalid characters, leading or trailing hyphens, consecutive hyphens, and case-insensitive duplicates are rejected. Logins are normalized to lowercase in their configured order. Four total recipients is the supported subset here, not GitHub's platform limit. Syntax validation does not prove that an account exists or accepts sponsorships.
+
+When `github` is present, the server generates the entire `.github/FUNDING.yml` with a quoted YAML list and a trailing newline:
+
+```yaml
+github: ["your-sponsors-login"]
+```
+
+Generation also runs with `enabled: false`, which allows a funding PR before button activation. Omitting `github` leaves funding content unmanaged by the generator, even when the button is enabled. A literal managed funding file can be distributed in that case. This also applies to a Server-source additional file after the separate additional-files runtime rollout. Configuring a managed file at `.github/FUNDING.yml` while `github` is present fails validation; neither producer overrides the other. The combined desired file set uses the existing path, file-count, and byte limits.
+
+Generated content replaces existing recipients and all unconfigured funding providers through the normal managed-file PR. The server does not merge existing provider entries or write directly to default. Removing `github` or the entire block preserves the existing file. An outstanding managed PR that changed the removed path follows the same recovery procedure as other removed managed files in [Configuration](#configuration).
+
+In `reconcile`, the existing target-scoped administration token reads the repository node ID and `hasSponsorshipsEnabled` through GraphQL. The server reports drift and repairs it through `updateRepository`, using `repositoryId` and `hasSponsorshipsEnabled`. Missing or invalid fields and API errors fail the run. A repeat with no drift makes no sponsorship mutation. Existing final revalidation still applies. A lost mutation response requires a state read before another write. `managed-files-only` proposes the same funding content without reading or changing the setting or minting an administration token.
+
+The setting result and funding-file PR result are separate. An enabled setting with a pending PR is not completed funding setup. The generated file reaches default only after normal review, CI, approval, and protected merging. An exact repeat reuses the PR and head; matching default-branch content needs no PR. GraphQL `fundingLinks` exposes resolved funding links, not a recipient-write API or proof that a pending PR has merged. See [GitHub's sponsor-button documentation](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/displaying-a-sponsor-button-in-your-repository) and [GraphQL repository reference](https://docs.github.com/en/graphql/reference/repos#updaterepositoryinput).
+
+Implementation must verify setting changes with the existing Server App and record testing-repository run URLs, generated PRs, repeat behavior, and merged default-branch content in `docs/handoff.md`. Permission failures remain errors. Only the operator changes App permissions or credentials. Production recipients must come from explicit reviewed Server configuration.
 
 ## Rulesets and emergency stop
 
@@ -44,7 +122,7 @@ The server matches rulesets by name and `source_type: Repository`. Duplicate nam
 
 A scheduled run does not create `controlled-merges` or activate a disabled ruleset. Every repair that does not activate it, scheduled or dispatched, omits its enforcement, so a stop set during the run is kept. Set its enforcement to `disabled` for an emergency stop. Manual dispatch activates it, creating it when absent, only after these checks pass:
 
-- The default branch contains a merge caller for newly created issue comments, with `secrets: inherit` and no job-level `if:`. The server also needs its label caller under the same rules.
+- The default branch contains a merge caller for newly created issue comments, with `secrets: inherit` and no job-level `if:`. The server also needs its label caller under the same rules. This describes the current runtime. The [approved explicit secret contract](first-release-plan.md#explicit-secret-contract-and-staged-migration) replaces inheritance with same-name mappings in a separate implementation. It preserves the caller triggers, unconditional jobs, and activation rejection messages.
 - The configured approver App can obtain a repository-scoped contents-write token, and its bot identity matches configuration.
 - No open pull request has auto-merge queued.
 - An existing `controlled-merges` ruleset has only the Server App's `pull_request` bypass.
