@@ -69,13 +69,10 @@ async function openBotPr(ctx: Parameters<Scenario["run"]>[0]): Promise<{ pr: Pr;
   return { pr, since };
 }
 
-async function postBotMergeRequest(ctx: Parameters<Scenario["run"]>[0], pr: Pr): Promise<{ comment: { id: number; since: Date }; requestInfo: MergeRequest }> {
+async function postBotMergeRequest(ctx: Parameters<Scenario["run"]>[0], pr: Pr): Promise<{ comment: Awaited<ReturnType<typeof postComment>>; requestInfo: MergeRequest }> {
   assert(ctx.untrusted, "the untrusted test token is not configured");
   const comment = await postComment(ctx, pr, "/merge", ctx.untrusted);
-  const requestInfo = ["OWNER", "MEMBER", "COLLABORATOR"].includes(comment.authorAssociation)
-    ? fromComment(pr, comment)
-    : await request(ctx, pr, comment.id);
-  return { comment, requestInfo };
+  return { comment, requestInfo: fromComment(pr, comment) };
 }
 
 async function closeIfOpen(ctx: Parameters<Scenario["run"]>[0], pr: Pr): Promise<void> {
@@ -274,7 +271,11 @@ export const merge: Scenario[] = [
       assert(ctx.untrusted, "the untrusted test token is not configured");
       await withTestBotConfigured(ctx, async () => {
         await withSignedPr(ctx, async (pr) => {
-          const { comment, requestInfo } = await postBotMergeRequest(ctx, pr);
+          const { comment, requestInfo: commentRequest } = await postBotMergeRequest(ctx, pr);
+          // Exercise the server's ownership check independently of the client prefilter.
+          const requestInfo = ["OWNER", "MEMBER", "COLLABORATOR"].includes(comment.authorAssociation)
+            ? commentRequest
+            : await request(ctx, pr, comment.id);
           await expectOp(ctx, requestInfo.match, requestInfo.since, "failure", /bot merger testing-csm-ci-untrusted-committer\[bot\] can merge only its own pull request/);
           await noMerge(ctx, pr);
           assert(!(await serverComments(ctx, pr)).some((body) => body.includes(marker("merge", comment.id))), "rejected bot ownership request posted a receipt");
