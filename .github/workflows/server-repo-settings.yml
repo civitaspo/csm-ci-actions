@@ -5,6 +5,11 @@ name: csm-ci repository settings
 # as an input and trusts its caller, a workflow on the server's default branch.
 on:
   workflow_call:
+    secrets:
+      CSM_CI_SERVER_APP_PRIVATE_KEY:
+        required: true
+      CSM_CI_APPROVER_APP_PRIVATE_KEY:
+        required: false
     inputs:
       config-path:
         description: Path of csm-ci.yaml in the server repository.
@@ -80,8 +85,6 @@ jobs:
       max-parallel: 1
       matrix:
         target: ${{ fromJSON(needs.discover.outputs.clients) }}
-    # The called job needs the Server App credentials from the csm-ci environment.
-    # jactionlint ignore=secrets-inherit
     uses: ./.github/workflows/server-repo-settings-target.yml
     permissions:
       contents: read
@@ -90,7 +93,9 @@ jobs:
       event-mode: ${{ github.event_name == 'schedule' && 'schedule' || 'dispatch' }}
       mode: ${{ needs.discover.outputs.operation-mode }}
       config-path: ${{ inputs.config-path }}
-    secrets: inherit
+    secrets:
+      CSM_CI_SERVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+      CSM_CI_APPROVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_APPROVER_APP_PRIVATE_KEY }}
 
   server:
     needs: [discover, clients]
@@ -98,8 +103,6 @@ jobs:
       always() && needs.discover.result == 'success' &&
       needs.discover.outputs.has-server == 'true' &&
       needs.clients.result != 'cancelled'
-    # The called job needs the Server App credentials from the csm-ci environment.
-    # jactionlint ignore=secrets-inherit
     uses: ./.github/workflows/server-repo-settings-target.yml
     permissions:
       contents: read
@@ -108,4 +111,6 @@ jobs:
       event-mode: ${{ github.event_name == 'schedule' && 'schedule' || 'dispatch' }}
       mode: ${{ needs.discover.outputs.operation-mode }}
       config-path: ${{ inputs.config-path }}
-    secrets: inherit
+    secrets:
+      CSM_CI_SERVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+      CSM_CI_APPROVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_APPROVER_APP_PRIVATE_KEY }}

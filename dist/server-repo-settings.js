@@ -37391,7 +37391,10 @@ async function hasDistributedCaller(gh, target, defaultBranch, actionsRepository
   if (!parsedEntries.success)
     return false;
   const files = parsedEntries.data.filter((entry) => entry.type === "file" && /\.ya?ml$/iu.test(entry.name));
-  const requirements = target.isServer ? [{ workflow: "client-merge.yml", event: "issue_comment" }, { workflow: "server.yml", event: "label" }] : [{ workflow: "client-merge.yml", event: "issue_comment" }];
+  const requirements = target.isServer ? [
+    { workflow: "client-merge.yml", event: "issue_comment", requiredSecret: "CSM_CI_CLIENT_APP_PRIVATE_KEY", optionalSecrets: [] },
+    { workflow: "server.yml", event: "label", requiredSecret: "CSM_CI_SERVER_APP_PRIVATE_KEY", optionalSecrets: ["CSM_CI_APPROVER_APP_PRIVATE_KEY", "CSM_CI_TERRAFORM_PROVIDER_GPG_PRIVATE_KEY", "CSM_CI_TERRAFORM_PROVIDER_GPG_PASSPHRASE"] }
+  ] : [{ workflow: "client-merge.yml", event: "issue_comment", requiredSecret: "CSM_CI_CLIENT_APP_PRIVATE_KEY", optionalSecrets: [] }];
   const distributed = new Set;
   for (const file of files) {
     const path = `.github/workflows/${file.name}`;
@@ -37423,8 +37426,12 @@ async function hasDistributedCaller(gh, target, defaultBranch, actionsRepository
         const uses = job.uses;
         if (uses.slice(0, actionsRepository.length).toLowerCase() !== actionsRepository || !uses.slice(actionsRepository.length).startsWith(expectedPath) || uses.length === actionsRepository.length + expectedPath.length)
           continue;
-        if (job.secrets === "inherit")
+        if (!isRecord(job.secrets) || !(requirement.requiredSecret in job.secrets))
+          continue;
+        const allowedSecrets = [requirement.requiredSecret, ...requirement.optionalSecrets];
+        if (Object.entries(job.secrets).every(([name, value]) => allowedSecrets.includes(name) && typeof value === "string" && new RegExp(`^\\$\\{\\{\\s*secrets\\.${name}\\s*\\}\\}$`, "u").test(value))) {
           distributed.add(requirement.workflow);
+        }
       }
     }
   }

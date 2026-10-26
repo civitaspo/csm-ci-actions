@@ -1,5 +1,7 @@
 # Release publishing
 
+Reusable client callers declare and map only `CSM_CI_CLIENT_APP_PRIVATE_KEY`. See the [secret contract and staged migration](setup.md#explicit-secret-contract-migration) for server feature credentials and compatible caller pins.
+
 The client calls `client-release-publish.yml` when a pull request from `release/next` is merged. The client workflow sends only the repository and pull request number. The server re-reads the pull request, merge commit and `.release-version` from GitHub before acting.
 
 The matching repository entry must enable `release` and choose one strict build configuration:

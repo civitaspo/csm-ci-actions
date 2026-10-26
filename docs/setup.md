@@ -90,9 +90,20 @@ The schema rejects unknown keys and puts the server bot in no trust list.
 
 ## Explicit secret contract migration
 
-The [approved explicit secret contract](first-release-plan.md#explicit-secret-contract-and-staged-migration) replaces inherited secrets after its runtime implementation and deployment. The examples below describe the current runtime. Keep inheritance until the selected reusable pin and repo-settings activation preflight support named mappings.
+These examples require a reviewed reusable workflow revision that implements the [explicit secret contract](first-release-plan.md#explicit-secret-contract-and-staged-migration). Upgrade each caller's pin and secret mapping together. Existing production callers on older pins still use inheritance until their staged rollout. Changing only their mapping can fail GitHub workflow validation.
 
-The target contract requires only `CSM_CI_CLIENT_APP_PRIVATE_KEY` in each client caller. Server callers name the Server App key and enabled feature credentials. Repo-settings forwards only the server and approver names at both nested target calls. Strong credentials remain in the server's `csm-ci` environment with the same deployment restriction. Follow the plan's table for required and feature-specific names. Upgrade callers, fixtures, templates, and action locks together, and verify bootstrap activation before production rollout. No new credential placement or App permission is needed.
+| Caller | Required mapping | Feature-specific mappings |
+|---|---|---|
+| All five client workflows | `CSM_CI_CLIENT_APP_PRIVATE_KEY` | None |
+| Server label workflow | `CSM_CI_SERVER_APP_PRIVATE_KEY` | `CSM_CI_APPROVER_APP_PRIVATE_KEY` for approval; `CSM_CI_TERRAFORM_PROVIDER_GPG_PRIVATE_KEY` and `CSM_CI_TERRAFORM_PROVIDER_GPG_PASSPHRASE` for Terraform provider publication |
+| Repo-settings workflow and both nested targets | `CSM_CI_SERVER_APP_PRIVATE_KEY` | `CSM_CI_APPROVER_APP_PRIVATE_KEY` for manual activation |
+| Server check workflow | None | None |
+
+Map every name to the identical `secrets.NAME` expression. Each client repository stores only the Client App key at repository level. Strong credentials remain in the server's `csm-ci` environment with its default-branch-only deployment restriction. The calling job can evaluate an environment-only name to an empty string; the called job's environment supplies it. GitHub checks that required mappings exist before jobs start. It does not check whether their values are nonempty.
+
+Approval and manual activation fail at the pinned App-token action if the approver key is empty. Terraform provider publication requires both signing inputs before signing. Other release types need neither signing input. Managed-files-only runs and repairs without activation need no approver capability. Repo-settings never forwards provider signing credentials, and production callers never forward `csm-ci-e2e` credentials.
+
+Verify the named contract, both nested repo-settings edges, and bootstrap activation in testing before rolling out compatible pins and callers to production one repository at a time. No credential placement or App permission change is needed.
 
 ## 4. Add the server workflows
 
@@ -110,10 +121,10 @@ on:
 permissions: {}
 jobs:
   server:
-    # This caller uses inherit under the current runtime contract.
-    # jactionlint ignore=secrets-inherit
     uses: civitaspo/csm-ci-actions/.github/workflows/server.yml@<sha>
-    secrets: inherit
+    secrets:
+      CSM_CI_SERVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+      CSM_CI_APPROVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_APPROVER_APP_PRIVATE_KEY }}
     permissions:
       contents: read
       issues: write
@@ -121,7 +132,17 @@ jobs:
       attestations: write
 ```
 
-`secrets: inherit` is required by the current runtime contract. Named mappings with environment secrets passed the [isolated probe](handoff.md#explicit-secret-contract-probe), but require the implementation described above.
+The example enables approval. If Terraform provider publication is enabled, add these same-name mappings to the server job as well:
+
+```yaml
+    secrets:
+      CSM_CI_SERVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+      CSM_CI_APPROVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_APPROVER_APP_PRIVATE_KEY }}
+      CSM_CI_TERRAFORM_PROVIDER_GPG_PRIVATE_KEY: ${{ secrets.CSM_CI_TERRAFORM_PROVIDER_GPG_PRIVATE_KEY }}
+      CSM_CI_TERRAFORM_PROVIDER_GPG_PASSPHRASE: ${{ secrets.CSM_CI_TERRAFORM_PROVIDER_GPG_PASSPHRASE }}
+```
+
+Omit feature-specific names when their features are disabled. Keep the Server App key mapping in every label caller. The [isolated probe](handoff.md#explicit-secret-contract-probe) verified environment availability and required mapping validation. Full runtime verification remains a separate rollout gate.
 
 `.github/workflows/csm-ci-check.yml` validates `csm-ci.yaml` and lints the workflows on every change:
 
@@ -164,10 +185,9 @@ on:
 permissions: {}
 jobs:
   approve:
-    # This caller uses inherit under the current runtime contract.
-    # jactionlint ignore=secrets-inherit
     uses: civitaspo/csm-ci-actions/.github/workflows/client-approve.yml@<sha>
-    secrets: inherit
+    secrets:
+      CSM_CI_CLIENT_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}
 ```
 
 `.github/workflows/csm-ci-policy-check.yml` evaluates pull request policies:
@@ -181,7 +201,8 @@ permissions: {}
 jobs:
   policy-check:
     uses: civitaspo/csm-ci-actions/.github/workflows/client-policy-check.yml@<sha>
-    secrets: inherit
+    secrets:
+      CSM_CI_CLIENT_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}
 ```
 
 Add the approver to `csm-ci.yaml`:
@@ -203,10 +224,9 @@ on:
 permissions: {}
 jobs:
   merge:
-    # This caller uses inherit under the current runtime contract.
-    # jactionlint ignore=secrets-inherit
     uses: civitaspo/csm-ci-actions/.github/workflows/client-merge.yml@<sha>
-    secrets: inherit
+    secrets:
+      CSM_CI_CLIENT_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}
 ```
 
 The command is exactly `/merge`. The server waits for the latest approver review, current policies, and configured checks. After readiness succeeds, the workflow mints fresh read and notification tokens plus a contents and pull-requests write token, then revalidates and merges. If an accepted wait fails, the workflow mints a fresh notification token for the failure receipt.
@@ -222,9 +242,9 @@ permissions: {}
 jobs:
   release:
     # The reusable workflow needs the Client App key from the client repository.
-    # jactionlint ignore=secrets-inherit
     uses: civitaspo/csm-ci-actions/.github/workflows/client-release-publish.yml@<sha>
-    secrets: inherit
+    secrets:
+      CSM_CI_CLIENT_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}
 ```
 
 The server verifies the merged pull request before it creates a tag or release. Its build job runs without credentials, secrets or an environment. The `release-tags` ruleset must restrict `v*` tags to the Server App.
@@ -283,9 +303,9 @@ jobs:
     uses: civitaspo/csm-ci-actions/.github/workflows/server-repo-settings.yml@<sha>
     with:
       repository: ${{ inputs.repository || '' }}
-    # This caller uses inherit under the current runtime contract.
-    # jactionlint ignore=secrets-inherit
-    secrets: inherit
+    secrets:
+      CSM_CI_SERVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+      CSM_CI_APPROVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_APPROVER_APP_PRIVATE_KEY }}
 ```
 
 Pin `<sha>` to the reviewed actions commit. The schedule repairs drift without creating or re-enabling `controlled-merges`. To activate it, first distribute the merge caller and clear the auto-merge queue, then dispatch for that repository. The server verifies these prerequisites before it changes anything, whenever a dispatch would activate the ruleset.

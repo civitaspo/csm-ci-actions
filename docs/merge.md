@@ -1,5 +1,7 @@
 # Merge
 
+Reusable client callers declare and map only `CSM_CI_CLIENT_APP_PRIVATE_KEY`. See the [secret contract and staged migration](setup.md#explicit-secret-contract-migration) for server feature credentials and compatible caller pins.
+
 `/merge` asks csm-ci to squash-merge the current head of an open pull request. The command takes no argument. It is accepted only from an account listed in `trust.mergers`, or from a bot listed in `trust.bot_mergers` when that bot authored the pull request and every commit.
 
 The server checks the pull request state and the S5 trust rules before waiting. Every readiness validation reloads the configuration from the server repository's current default branch and confirms that the repository still enables merge. It then re-reads the pull request and command comment, evaluates the current policies against GitHub state, checks that the latest review from the configured approver is an approval for the pinned head, and verifies each configured required check by name and GitHub App ID. A moved head, invalidated comment, removed merger, changed policy, or failed trust check aborts the request. Readiness polling runs every 30 seconds until `merge.deadline_minutes` expires.

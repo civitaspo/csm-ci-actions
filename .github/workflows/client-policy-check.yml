@@ -1,9 +1,12 @@
 name: csm-ci client policy-check
 
-# Called from a client repository on pull_request_target with `secrets: inherit`.
+# Called from a client repository on pull_request_target with a named secret mapping.
 # It never checks out the pull request. It only asks the server to evaluate it.
 on:
   workflow_call:
+    secrets:
+      CSM_CI_CLIENT_APP_PRIVATE_KEY:
+        required: true
 
 permissions: {}
 

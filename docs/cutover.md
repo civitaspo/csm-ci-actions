@@ -57,7 +57,7 @@ Add `csm-ci.yaml` to `csm-ci-server` as in [setup.md](setup.md#3-write-csm-ciyam
 Add these to `csm-ci-server`'s default branch, each pinned to `<sha>`:
 
 - `.github/workflows/csm-ci.yml` (the label caller, `server.yml` on `label: created`) and `.github/workflows/csm-ci-check.yml`: [setup.md section 4](setup.md#4-add-the-server-workflows).
-- The client callers for approve, policy-check and merge: [setup.md section 5](setup.md#5-add-the-client-workflows). Before it activates `controlled-merges`, repo-settings checks that the merge caller (and, on the server, the label caller) uses `secrets: inherit` and has no job-level `if:`.
+- The client callers for approve, policy-check and merge: [setup.md section 5](setup.md#5-add-the-client-workflows). Upgrade caller pins and mappings together to the reviewed contract revision. Before it activates `controlled-merges`, repo-settings checks that the merge caller (and, on the server, the label caller) uses the explicit same-name secret mappings and has no job-level `if:`.
 - A job for every `merge.required_checks` entry, for example a workflow whose job is named `status-check` and runs the same checks as `csm-ci-check`.
 
 Checks:

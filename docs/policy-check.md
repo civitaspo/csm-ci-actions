@@ -1,5 +1,7 @@
 # Policy check
 
+Reusable client callers declare and map only `CSM_CI_CLIENT_APP_PRIVATE_KEY`. See the [secret contract and staged migration](setup.md#explicit-secret-contract-migration) for server feature credentials and compatible caller pins.
+
 The `policy-check` operation evaluates the effective repository policies in `csm-ci.yaml` against the pull request's current head. It creates or updates the `csm-ci/policy` check run with the Server App and pins `external_id` to that head. The check summary contains one row per policy.
 
 Closed pull requests skip evaluation and publication. Immediately before creating or updating a check, the server rereads the pull request and skips publication if it closed or its head changed. This also protects policy refreshes after approval. Skips leave existing checks untouched and the standalone action reports `result=skipped` with a reason in its log. An open pull request with no commits still fails both trust policies.

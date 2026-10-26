@@ -3,6 +3,9 @@ name: csm-ci client release publish
 # A merged release PR is only a locator. The server re-fetches all release facts from GitHub.
 on:
   workflow_call:
+    secrets:
+      CSM_CI_CLIENT_APP_PRIVATE_KEY:
+        required: true
 
 permissions: {}
 
