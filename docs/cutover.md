@@ -1,6 +1,6 @@
 # Production cutover runbook
 
-This runbook moves production from `civitaspo/securefix-server` to a new `csm-ci-server` running csm-ci-actions. The user runs every step. Nothing here has been executed. It is Phase 7 of [first-release-plan.md](first-release-plan.md#phase-7-production-migration).
+This runbook describes the production migration from `civitaspo/securefix-server` to `csm-ci-server` running csm-ci-actions. All ten selected repositories have completed their protected-merge and applicable release verification. [handoff.md](handoff.md#34-production-provider-verification) and the server's [production verification](https://github.com/civitaspo/csm-ci-server/blob/main/verification.md) record the executed steps. The additional Renovate caller rollout and legacy archival are tracked separately. This is Phase 7 of [first-release-plan.md](first-release-plan.md#phase-7-production-migration).
 
 Names come from the plan's "Naming list". Replace `<owner>` with the account that owns the repositories and `<sha>` with the reviewed csm-ci-actions commit on `main` that you pin. The wizard registers the Apps under a personal account, so `<owner>` is that user.
 
@@ -73,7 +73,7 @@ From here on, every change to `csm-ci-server` goes through a pull request, `/app
 2. Dispatch `csm-ci-repo-settings` with `repository: <owner>/csm-ci-server`. It creates `integrity`, `review-and-checks`, `controlled-merges` and `release-tags`, activates `controlled-merges` after its preflight, and enables immutable releases.
 3. Check: `gh api repos/<owner>/csm-ci-server/rulesets --jq '.[] | [.name, .enforcement]'` shows the four rulesets active, and `gh api repos/<owner>/csm-ci-server/immutable-releases` shows `"enabled": true`. Repeat check 4.2 with another small pull request.
 
-Activating `controlled-merges` on a server was not exercised in testing (see the end of this runbook). Watch this step.
+Production server activation and protected [PR #5](https://github.com/civitaspo/csm-ci-server/pull/5) verified the required App review and controlled merge. This path was not exercised in the isolated testing server.
 
 Do not copy securefix-server's admin PAT into `csm-ci-server`. The Server App's `administration: write`, minted only in the repo-settings job, replaces it. Revoke the PAT in step 7.
 
@@ -125,5 +125,5 @@ After the last repository has moved and passed step 6.9:
 
 - Changing the content of an existing `csm-ci/repo-settings` branch resets it to the default branch with a Git lease before writing. Unit tests and local Git tests cover this. It was not exercised live in the testing repositories, because force-pushes there were not authorized. Watch the first managed-file update after a configuration change. The reset mints workflows write to fail safe; whether GitHub requires it is unknown.
 - The scheduled trigger itself was not observed in testing. Testing dispatched the schedule branch of the reusable workflow directly. Check the first scheduled run of `csm-ci-repo-settings` after step 5.
-- Activating `controlled-merges` on a server was not tested, because the testing approver App is not installed on the testing server.
-- In a scheduled run, one failing client job skips the server job. A broken repository stops the server's own drift repair until it is fixed or removed from `repositories`.
+- The isolated testing server did not exercise `controlled-merges` activation because its approver App is not installed there. Production activation and protected server PR #5 passed.
+- Server reconciliation runs after failed client jobs, provided discovery succeeded and the client wave was not cancelled. Cancellation still stops the server step.
