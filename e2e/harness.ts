@@ -304,12 +304,22 @@ export async function openReleasePr(ctx: Ctx, version: string, additions: Record
   const since = new Date(Date.now() - 2_000);
   let ownedHead = base;
   try {
+    const deletions: { path: string }[] = [];
+    for (const [path, content] of Object.entries(files)) {
+      if (content !== null) continue;
+      try {
+        await ctx.gh.rest.repos.getContent({ ...repo, path, ref: base });
+        deletions.push({ path });
+      } catch (error) {
+        if (!hasStatus(error, 404)) throw error;
+      }
+    }
     const data = await ctx.gh.graphql<{ createCommitOnBranch: { commit: { oid: string } } }>(
       "mutation($i: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $i) { commit { oid } } }",
       { i: { branch: { repositoryNameWithOwner: CLIENT, branchName: branch }, message: { headline: `e2e release ${version}` }, expectedHeadOid: base,
         fileChanges: {
           additions: Object.entries(files).flatMap(([path, content]) => content === null ? [] : [{ path, contents: Buffer.from(content).toString("base64") }]),
-          deletions: Object.entries(files).flatMap(([path, content]) => content === null ? [{ path }] : []),
+          deletions,
         } } },
     );
     ownedHead = data.createCommitOnBranch.commit.oid;

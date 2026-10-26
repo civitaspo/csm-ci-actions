@@ -53,9 +53,12 @@ The client workflow sends a comment request only when the commenter's associatio
 
 The approver's identity is checked after the review exists. An installation token cannot call `GET /user`, so the review's author is the first place the identity shows.
 
+## Policy refresh
+
+Automatic approval, `/recheck`, and the final `/approve` refresh update `csm-ci/policy` through the shared full evaluation path. The [policy failure report lifecycle](policy-check.md#failure-reports-and-recovery) applies to those full refreshes when implemented. Prospective `/approve` preflight cannot resolve policy failure reports. Automatic approval and `/recheck` still produce no command receipt.
+
 ## Not done here
 
-- Updating the `csm-ci/policy` check run. The check run is created in Phase 3, so approve does not touch it yet.
 - `/merge` (Phase 2).
 - Forcing an approval of untrusted commits. See the approve section of docs/first-release-plan.md for why.
 
@@ -82,3 +85,9 @@ The scenarios below need a second identity, so they run only in the `e2e` workfl
 - Commands from a commenter who is not an owner, member or collaborator.
 
 The 60-minute limit and a push that lands while approving are covered by unit tests, because e2e cannot produce them on demand.
+
+## Repository policy overrides
+
+The [approved repository policy contract](first-release-plan.md#repository-policy-overrides-and-staged-migration) requires separate implementation and deployment. Automatic approval, `/approve`, and `/recheck` use the same effective sensitive paths and exemptions as policy-check and merge. An omitted repository list inherits its global value. An explicit list replaces it, including an empty list.
+
+An exemption requires the PR author and every commit to have the same effective identity. It does not bypass signature verification or trusted-committer checks. `/approve` retains its trusted human command and current-head evidence requirements. Permission for a Bot to request a merge remains a separate repository setting.

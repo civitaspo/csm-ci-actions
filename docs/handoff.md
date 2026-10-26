@@ -185,12 +185,11 @@ Each item was verified by running real workflows, not decided from the docs. If 
     persist-credentials: false
 ```
 
-### 3.2 Environment secrets do not arrive without `secrets: inherit`
+### 3.2 Environment secret forwarding
 
-- Even if the called job declares `environment: csm-ci`, the environment secrets are empty unless the caller sets `secrets: inherit` (testing-csm-ci-server run 40099955263).
-- With `secrets: inherit`, they arrive (run 40100014166).
-- Variables are visible without `inherit`.
-- jactionlint reports this as `secrets-inherit`. Suppress it and write the reason (section 3.10).
+The historical no-secret-map run [40099955263](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40099955263) and inherited-secret run [40100014166](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40100014166) motivated the current inheritance requirement. They did not test explicit named mappings. Their workflow success conclusions alone do not establish secret availability. Variables are visible without inheritance.
+
+The later [explicit secret contract probe](#explicit-secret-contract-probe) verified named mappings while retaining the server environment and its deployment policy. This supersedes the conclusion that inheritance is the only supported GitHub forwarding mechanism. Production runtime migration remains separate. Existing inheritance suppressions remain until callers and reusable workflows migrate together.
 
 ### 3.3 `actions/create-github-app-token` v3.3.0
 
@@ -1176,3 +1175,33 @@ Local verification checked every asset digest, archive contract, manifest, check
 The actual Terraform Registry discovered version 0.2.4. Terraform 1.17 installed it in a clean project and loaded the provider schema with 29 resources and 34 data sources without Sigma credentials. The final snapshot confirmed all six provider rulesets, preserved unrelated protection and Actions settings, and only the reviewed installer allowlist addition. The server's [verification record](https://github.com/civitaspo/csm-ci-server/blob/main/verification.md) contains the complete production sequence.
 
 The owner subsequently requested eligible Renovate auto-merges and `/merge` comment configuration in every repository. The read-only ten-repository audit found eight existing comment configurations and two missing configurations, on the server and this actions repository. The server rollout and this caller change add those missing non-major comment requests with platform automerge disabled. The fixed prohibition on Bot mergers in both privileged repositories remains; their Renovate requests still require an operator. The remaining eight client caller updates, native production Renovate merge proof, final reference audit and three legacy repository archives remain required before the rollout is complete. No agent handled private credentials or App permissions.
+
+## Explicit secret contract probe
+
+Issue [#76](https://github.com/civitaspo/csm-ci-actions/issues/76) now has a separate [specification](first-release-plan.md#explicit-secret-contract-and-staged-migration). It is not a completed runtime migration.
+
+The [positive run](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40303489939), attempt 1, used testing-server caller `1ebcba6b0054f0ab352610318cd9a5dc6035d6e4`, reusable candidate `b99d243b4f07a56a9b85f87b254ae4555c8610b9`, and nested leaves `75b1a47c2b78dbf1cfe04785e8cb96f931ec2d77`. All four expected Boolean availability assertions completed successfully, with none skipped. These were the direct environment job, nested discovery, nested client target, and nested server-after-clients target. The direct job checked all four configured names. Nested discovery checked the Server App key only. Each nested target checked the Server App and approver App keys. The nested wrapper declared and forwarded only those two names, never provider signing credentials. All checks used Boolean availability expressions without printing values or lengths.
+
+The separate [missing-required-mapping run](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40303734933), attempt 1, used caller `4af3da61ac99f2c33132c7bf8f4b55fd3b47746c` and the same reusable candidate. It ended in `startup_failure` with zero jobs. The GitHub run summary reported `Secret CSM_CI_SERVER_APP_PRIVATE_KEY is required, but not provided while calling.` This establishes required mapping validation, not selected-feature runtime validation.
+
+Metadata before and after both runs showed owner `civitaspo` was a User, ID `4525500`, with zero repository Actions secrets. The server's `csm-ci` environment contained exactly the Server App key, approver App key, provider GPG private key, and provider GPG passphrase names in the Naming list. Its sole deployment policy remained branch `main`, policy ID `64190557`. Organization secret scope does not apply to this personal account. These metadata observations establish environment provenance separately from the assertion steps. No credential values or job logs were retrieved. No secret, App, production configuration, or environment policy changed.
+
+Both temporary caller paths returned 404 at cleanup commit `9c7512438ddc6ccf6fc6bb76c6bbbc62b46b5353`. The [cleanup CI run](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40303897065) succeeded. The owned temporary actions branch was deleted after both runs completed, using the expected candidate head. Probe workflow source is not part of the specification change.
+
+The probe did not mint App tokens, activate controlled merges, submit client requests, sign releases, or test the full migrated runtime. Those gates, including missing and wrong mappings and selected-feature credential rejection tests, remain required by the specification. The optional no-map probe was not run.
+
+## 35. Smoke fixture lint prerequisite
+
+The smoke attempt at candidate `b1a42322f7805dd7b99d434d4135b5cb2178a488` failed in the testing server's [check run](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40290018469). jactionlint 2.3.0 rejected the Terraform public-key verification pipeline in `.github/workflows/csm-ci-release-verify.yml` because the default shell omits `pipefail`. The live workflow matched the authoritative fixture byte-for-byte at both that candidate and main `984235a`. The pipeline originated in `82917b4c3a28e5ff4023991ed355b40081d650fb`; restoring the unchanged fixture cannot repair it.
+
+The fixture now selects `shell: bash` for that step so an upstream `jq` failure fails the step. Local jactionlint reproduced the original `pipeline-without-pipefail` error and passed with the correction. Live release and smoke verification subsequently passed at signed candidate `ec29e772425d2260fe11b09d528061f9b7fe6e41`, as recorded in section 36.
+
+## 36. Release fixture deletion across build types
+
+The full release suite at `a2b27bcef9bfcc4dce1ea83ca08e730a6a3b216b` passed none, js-action, GoReleaser, Cargo and cargo-raw publication, then failed before creating the Terraform release PR. The GoReleaser fixture had already removed `dist/action.js` in [client commit `345c5c3`](https://github.com/civitaspo/testing-csm-ci-client/commit/345c5c38236dd2f1479faf1c8a6f89f26b7f732a). Terraform requested that deletion again against client base `dba0a9207f4100ca7e8193106cbe495af5bf7279`, whose tree no longer contains the path. GitHub rejected the commit with "A path was requested for deletion which does not exist". This fixture behavior predates the verification-shell correction.
+
+`openReleasePr` now checks deletion paths at its pinned base SHA and omits paths already absent there. Other lookup errors propagate; the commit still requires the same expected head, and branch cleanup retains its ownership check. Focused tests cover present and absent paths, pinned-base reads, preserved additions and expected head, and HTTP 403, 422 and 503 failures. The final complete release suite verified Terraform publication and replay alongside the other supported build types.
+
+Local verification passed all 1,038 tests, typecheck, build with unchanged bundles, jactionlint and actions-lock verification. Five isolated mutation checks detected unconditional deletions, omitted present-path deletions, swallowed lookup errors, reads against mutable `main`, and removal of the expected-head condition. The complete release suite passed all 14 scenarios without skips at signed candidate `ec29e772425d2260fe11b09d528061f9b7fe6e41`. The Terraform scenario verified its [publication](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40307291864), [all seventeen assets](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40307568638), [immutable replay](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40307761443), and [replay verification](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40308041353).
+
+Smoke passed all five scenarios without skips at the same signed candidate: [client request](https://github.com/civitaspo/testing-csm-ci-client/actions/runs/40317288667), [server intake and cleanup](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40317306440), [server check](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40317289764), [App permission probe](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40317289138), and [human-label rejection](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40317291236). The later integration changes only documentation and preserves every non-Markdown tracked blob from this verified candidate.

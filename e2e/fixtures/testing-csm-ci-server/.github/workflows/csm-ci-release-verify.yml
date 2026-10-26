@@ -78,6 +78,7 @@ jobs:
           path: ${{ runner.temp }}/terraform-public-key
       - if: inputs.terraform_signer_run != ''
         name: Verify Registry archives, manifest, checksums and RSA signature
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           CLIENT_REPOSITORY: ${{ inputs.client_repository }}
