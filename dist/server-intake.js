@@ -36641,7 +36641,10 @@ var RepoSettings = strictObject({
     allow_auto_merge: boolean2().optional(),
     allow_squash_merge: literal(true).optional(),
     allow_merge_commit: literal(false).optional(),
-    allow_rebase_merge: literal(false).optional()
+    allow_rebase_merge: literal(false).optional(),
+    has_wiki: boolean2().optional(),
+    has_projects: boolean2().optional(),
+    allow_update_branch: boolean2().optional()
   }).optional(),
   managed_files: record(string2(), string2()).default({})
 }).superRefine((value, ctx) => {

@@ -32679,7 +32679,10 @@ var RepoSettings = strictObject({
     allow_auto_merge: boolean2().optional(),
     allow_squash_merge: literal(true).optional(),
     allow_merge_commit: literal(false).optional(),
-    allow_rebase_merge: literal(false).optional()
+    allow_rebase_merge: literal(false).optional(),
+    has_wiki: boolean2().optional(),
+    has_projects: boolean2().optional(),
+    allow_update_branch: boolean2().optional()
   }).optional(),
   managed_files: record(string2(), string2()).default({})
 }).superRefine((value, ctx) => {
@@ -37550,6 +37553,9 @@ function desiredRepositorySettings(settings) {
     ...settings.allow_squash_merge !== undefined ? { allow_squash_merge: settings.allow_squash_merge } : {},
     ...settings.allow_merge_commit !== undefined ? { allow_merge_commit: settings.allow_merge_commit } : {},
     ...settings.allow_rebase_merge !== undefined ? { allow_rebase_merge: settings.allow_rebase_merge } : {},
+    ...settings.has_wiki !== undefined ? { has_wiki: settings.has_wiki } : {},
+    ...settings.has_projects !== undefined ? { has_projects: settings.has_projects } : {},
+    ...settings.allow_update_branch !== undefined ? { allow_update_branch: settings.allow_update_branch } : {},
     ...settings.allow_squash_merge === true ? { squash_merge_commit_title: "PR_TITLE", squash_merge_commit_message: "PR_BODY" } : {}
   };
 }

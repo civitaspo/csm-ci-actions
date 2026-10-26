@@ -81,6 +81,9 @@ const RepoSettings = z.strictObject({
     allow_squash_merge: z.literal(true).optional(),
     allow_merge_commit: z.literal(false).optional(),
     allow_rebase_merge: z.literal(false).optional(),
+    has_wiki: z.boolean().optional(),
+    has_projects: z.boolean().optional(),
+    allow_update_branch: z.boolean().optional(),
   }).optional(),
   managed_files: z.record(z.string(), z.string()).default({}),
 }).superRefine((value, ctx) => {

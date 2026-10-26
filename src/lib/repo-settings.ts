@@ -326,6 +326,9 @@ function desiredRepositorySettings(settings: NonNullable<RepoSettingsConfig["set
     ...(settings.allow_squash_merge !== undefined ? { allow_squash_merge: settings.allow_squash_merge } : {}),
     ...(settings.allow_merge_commit !== undefined ? { allow_merge_commit: settings.allow_merge_commit } : {}),
     ...(settings.allow_rebase_merge !== undefined ? { allow_rebase_merge: settings.allow_rebase_merge } : {}),
+    ...(settings.has_wiki !== undefined ? { has_wiki: settings.has_wiki } : {}),
+    ...(settings.has_projects !== undefined ? { has_projects: settings.has_projects } : {}),
+    ...(settings.allow_update_branch !== undefined ? { allow_update_branch: settings.allow_update_branch } : {}),
     ...(settings.allow_squash_merge === true ? { squash_merge_commit_title: "PR_TITLE" as const, squash_merge_commit_message: "PR_BODY" as const } : {}),
   };
 }
