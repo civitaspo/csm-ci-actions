@@ -85,3 +85,9 @@ The scenarios below need a second identity, so they run only in the `e2e` workfl
 - Commands from a commenter who is not an owner, member or collaborator.
 
 The 60-minute limit and a push that lands while approving are covered by unit tests, because e2e cannot produce them on demand.
+
+## Repository policy overrides
+
+The [approved repository policy contract](first-release-plan.md#repository-policy-overrides-and-staged-migration) requires separate implementation and deployment. Automatic approval, `/approve`, and `/recheck` use the same effective sensitive paths and exemptions as policy-check and merge. An omitted repository list inherits its global value. An explicit list replaces it, including an empty list.
+
+An exemption requires the PR author and every commit to have the same effective identity. It does not bypass signature verification or trusted-committer checks. `/approve` retains its trusted human command and current-head evidence requirements. Permission for a Bot to request a merge remains a separate repository setting.

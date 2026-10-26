@@ -15,7 +15,7 @@ The previous attempts failed because "the goal kept moving, and abstractions pil
 
 - The transport is the label method (`label: created`).
 - `/approve` takes no argument. It is the command for approvers to approve a "PR that has only trusted commits" (the same meaning as in the Rust version). `/approve` does not approve untrusted commits either. For a PR from an external contributor, the owner approves it from the GitHub UI. The first idea was to "also force-approve untrusted commits". We changed it in Phase 1, because without an argument we cannot prevent commit swapping.
-- Policies are configured declaratively from built-in types. The configuration is **global only**. v1 has no mechanism to override policy, trust, or merge per repo. The only per-repo settings are the enabled ops and the release build type.
+- Policies are configured declaratively from built-in types. Global policy and merge settings supply the defaults. Repository entries can override sensitive paths, sensitive-path exemptions, and permission for Bot merge requests. Trust lists remain global and use immutable IDs.
 - `/recheck` can re-run policy-check and the automatic approve.
 - Release builds in an unprivileged server job and includes release-pr.
 - We use zod to validate the configuration.
@@ -123,7 +123,7 @@ trust:                                              # all matched by immutable i
 merge:
   required_checks: [{ name: status-check, app_id: 15368 }]
   deadline_minutes: 60
-policies:                                           # global only
+policies:                                           # defaults for every repository
   - { type: signed-commits }
   - { type: trusted-committers }
   - { type: sensitive-paths, paths: [<the full default set from the Rust version>], exempt: [{ id: 2 }] }
@@ -141,16 +141,43 @@ repo_settings:                                      # global only (Phase 6)
               allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false,
               has_wiki: false, has_projects: false, allow_update_branch: true }
   managed_files: { .github/PULL_REQUEST_TEMPLATE.md: "<text>" }   # literal path → content
-repositories:                                       # per repo, only ops and the release build type
+repositories:                                       # first matching entry supplies all overrides
   - name: owner/*                                   # first match wins
     ops: [approve, merge, policy-check, securefix, release]
     release: { build_type: none | js-action | goreleaser | cargo | cargo-raw, targets: [...] }
+    sensitive_paths: { paths: ["**"], exempt: [] }     # optional independent list replacements
+    merge: { allow_bot_requests: false }              # optional; defaults to true
 ```
 
 - Read the file as of the server's `GITHUB_SHA`, and validate it with zod strict mode (unknown keys are errors).
 - Reject the following combinations at configuration validation time.
-  - **The server repo and the csm-ci-actions repo are always treated as `sensitive-paths: ["**"]` in code, and exempt and `bot_mergers` do not apply to them**. This is a fixed rule that configuration cannot change (in the Rust version too, the server repo had every path as sensitive).
   - Putting the Server bot in a trust list is not allowed.
+
+### Repository policy overrides and staged migration
+
+This contract implements [issue #74](https://github.com/civitaspo/csm-ci-actions/issues/74). It requires separate runtime changes and deployment. Until the migration below completes, the runtime retains its existing hardcoded protection for the configured server repository and `civitaspo/csm-ci-actions`.
+
+- `repositories[].sensitive_paths` is an optional strict object with optional `paths` and `exempt` lists. `paths` uses the global sensitive-path pattern format. `exempt` uses the existing strict `{ id, login }` principal format and matches immutable IDs.
+- Each omitted list inherits its corresponding global `sensitive-paths` list. An explicit list replaces that list, rather than extending it. `paths: []` matches no paths. `exempt: []` disables inherited exemptions. Neither empty list is converted to omission.
+- If no global sensitive-path policy exists, an omitted repository override leaves that policy disabled. A supplied `sensitive_paths` object enables it, with empty lists for components without global or repository values. The existing file-count limit still applies whenever that policy runs.
+- Repository overrides replace the corresponding fields of every configured `sensitive-paths` policy. Other policy types keep their current behavior. The existing first matching repository entry supplies the complete override object. Later matching entries do not contribute fields.
+- `repositories[].merge` is an optional strict object with the optional Boolean `allow_bot_requests`. Omission defaults to `true`. `false` rejects Bot-authored `/merge` requests even if the author is in global `trust.bot_mergers`. `true` permits consideration under that existing trust list and all ownership, approval, policy, and check requirements. It grants no identity or permission by itself.
+- Exemptions and permission for Bot requests are independent. Neither changes signature verification, trusted-committer checks, current-head command approval evidence, Bot ownership checks, required CI checks, or final merge-head validation. Every approval and policy evaluation, including merge-time reevaluation, uses the same effective sensitive-path settings.
+- Final runtime policy and merge decisions contain no special repository-name checks. Operators protect the server and actions repositories with explicit `sensitive_paths: { paths: ["**"], exempt: [] }` and `merge: { allow_bot_requests: false }` entries.
+
+Deploy in this order. Each runtime change is a complete, independently reviewed PR with required local and live verification.
+
+1. Add schema support and effective policy resolution while retaining legacy protection for the server and actions repositories. Overrides cannot relax those two repositories during this stage.
+2. Deploy the compatible runtime and explicit protection entries together in a reviewed server PR. Update every production configuration consumer, including `server.yml`, `server-check.yml`, and `server-repo-settings.yml`, to the verified full runtime SHA. An old strict parser cannot read the new fields. Drain older runs before the cutover and identify any old run that fails after reloading the new configuration. Retry its request through the compatible runtime. Verify that both repositories still require trusted command approval and reject Bot merge requests.
+3. Remove the legacy repository-name restrictions in a separate runtime PR only after the deployed explicit protections are verified. Remove the superseded implementation and its fixed-name expectations together. This is a bounded migration, not a permanent compatibility mode.
+4. Deploy that verified runtime by updating all production configuration-consuming workflow pins. Verify that explicit configuration preserves the same protection on both repositories.
+5. Relax either repository only through a subsequent, explicit configuration diff. A deliberate Renovate exemption can retain `paths: ["**"]`, replace `exempt` with its existing configured principal, and set `allow_bot_requests: true`. Keep the server protection unchanged unless a separate configuration change deliberately changes it.
+
+Do not deploy new configuration fields to old parser pins. Do not remove legacy protection before explicit protection is deployed. Rollback must retain a parser that accepts the deployed schema. Workflow upgrades blocked by the deployed merge token require the separately authorized bootstrap recovery in [merge.md](merge.md). This migration does not authorize credential administration, App permission changes, or protection changes outside the reviewed configuration.
+
+Implementation acceptance requires table-driven configuration and operation tests for inheritance, independent overrides, replacement, empty lists, absent global policy, strict validation, and first-match precedence. Cover two repositories with different settings, the same author and every commit exemption condition, renamed paths, the file-count limit, and unchanged trust checks. Exercise automatic approval, `/approve`, `/recheck`, policy-check, and merge reevaluation. Changing Bot permission or effective policy during a waiting merge must take effect before the final write. Mutation-check every changed rejection rule individually.
+
+Run the affected approve, policy-check, and merge suites sequentially, then smoke, against the signed pushed implementation SHA. Verify an explicitly protected repository and a repository deliberately allowing the configured Bot, including mixed-identity rejection. After an authorized merge, run the affected CI suites through the runner on `main`. Record exact configuration and runtime SHAs, accepted request identities, run URLs, and skips in `docs/handoff.md`. A testing Bot proves Bot mechanics, not actual Renovate integration. The deliberate production relaxation also requires a real Renovate request, current-head approval and checks, and a verified Server-executed merge. Historical comments or approvals for another head are not evidence.
 
 ---
 
@@ -210,7 +237,7 @@ repositories:                                       # per repo, only ops and the
 - **Client side**: only a comment that passes the body and commenter pre-filter mints a token. This prevents label spam by fork commenters.
   - `/approve` requires OWNER, MEMBER, or COLLABORATOR association.
   - `/merge` accepts those associations, or a Bot whose immutable comment-author ID equals the pull request author's ID in the issue event. Missing or malformed bot identity cannot qualify for this exception.
-  - Forwarding a bot request does not grant merge permission. The server requires `trust.bot_mergers` membership, ownership of the PR and every commit, current approval and checks, and the existing protected-repository restrictions. This permits Renovate's own-PR `/merge` comments even when GitHub reports CONTRIBUTOR association.
+  - Forwarding a bot request does not grant merge permission. The server requires `trust.bot_mergers` membership, ownership of the PR and every commit, current approval and checks, and the effective repository permission for Bot requests. This permits Renovate's own-PR `/merge` comments even when GitHub reports CONTRIBUTOR association.
 - **Server-side acceptance conditions**
   - The comment belongs to the target PR.
   - The body matches the command regex exactly.
@@ -522,7 +549,7 @@ After Phase 0, phases 1, 2, 3, 4, 5a, and 6 can proceed independently in paralle
 
 - **Target selection**
   - Discover installed repositories under the configured owners and select only repositories matched by `repositories`. Keep the server configured and process it last.
-  - The actions repository can be a managed client when installed and configured, including when selected explicitly for `reconcile` or `managed-files-only`. Do not exclude it by its role as the source of the reusable workflows. Its fixed all-paths-sensitive policy still applies.
+  - The actions repository can be a managed client when installed and configured, including when selected explicitly for `reconcile` or `managed-files-only`. Do not exclude it by its role as the source of the reusable workflows. Its configured sensitive-path policy still applies. Preserve explicit all-paths protection during the repository-policy migration.
 - **Trigger and permissions**
   - `server-repo-settings.yml` starts on a schedule and on `workflow_dispatch(repository?, mode?)`. The reusable workflow accepts `mode: reconcile | managed-files-only`, defaulting to `reconcile`. A schedule always uses `reconcile`; reject a scheduled request for `managed-files-only` and reject unknown modes before target writes.
   - The environment is `csm-ci`.
@@ -701,7 +728,7 @@ The differences in security rules are summarized in the comparison table in the 
 | release build | A Go matrix and cargo dedicated to terraform-provider. goreleaser is not used (it would not read the client's configuration) | `build_type` (none / js-action / goreleaser / cargo / cargo-raw / terraform-provider). Provider builds reuse the isolated GoReleaser path; provider validation and signing run only in the trusted publisher |
 | release verification | GPG-signed SHA256SUMS only | Replaced with an **attestation** (including the client repo, SHA, and tag) and with check-dist for JS actions. The bounded terraform-provider type additionally supplies the Registry-required GPG signature |
 | repo-settings | The owner's classic admin PAT. Managed files exist only on the native side | The Server App's `administration`. Managed files are distributed by PR, and caller distribution also uses this. It does not create repos |
-| Trust of the Server bot | Registered as a trusted committer | Not registered. We judge whether a commit is server-made. The server repo and csm-ci-actions always treat every path as sensitive |
+| Trust of the Server bot | Registered as a trusted committer | Not registered. We judge whether a commit is server-made. Explicit repository configuration preserves all-paths protection for the server repo and csm-ci-actions until deliberately relaxed |
 | Tests | A `testing-` namespace and about 40 workflows inside the production repo | Dedicated testing repos, testing Apps, and an e2e harness |
 | Removed | Control revisions, bootstrap and repair, runtime publishing, two protocols, native producer proof, owner marker comments | — |
 
@@ -717,7 +744,7 @@ The differences in security rules are summarized in the comparison table in the 
 | Readiness check, minting the token after ready | Old, Rust | Kept. Policies are re-evaluated inside the server (follows configuration changes) |
 | verified, 250 or fewer commits, last item is the head, web-flow proof | Old, Rust | Kept. Matching changes to id-based |
 | Sensitive paths (the Rust default set) and the exempt condition | Rust | Kept. The marker is bound by author, state, and head |
-| Every path in the server repo is sensitive | Rust | Kept (enforced by the schema). csm-ci-actions is covered too |
+| Every path in the server repo is sensitive | Rust | Preserved by explicit repository configuration during migration. csm-ci-actions is covered too |
 | The reusable pin is an ancestor of `main` | Old | Kept (a CI check of the server repo) |
 | Approver identity check, non-author, `commit_id`, re-read after approval | Rust | Kept. If the head moved, dismiss |
 | Make the Server bot a trusted committer | Old | **Removed**. The server-made judgment is S3, and the path binding is S4 |
