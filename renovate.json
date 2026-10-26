@@ -4,6 +4,7 @@
     "config:recommended",
     "helpers:pinGitHubActionDigests"
   ],
+  "dependencyDashboard": false,
   "ignorePaths": [
     "**/node_modules/**",
     "e2e/fixtures/**"
