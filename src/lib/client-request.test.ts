@@ -12,6 +12,10 @@ const comment = (body: string, options: { action?: string; pullRequest?: boolean
   issue: { number: 17, ...(options.pullRequest === false ? {} : { pull_request: { url: "https://api.github.com/repos/example/repo/pulls/17" } }) },
   comment: { id: 235, body, author_association: options.association ?? "MEMBER" },
 });
+const botComment = (commentUser: unknown = { id: 123, type: "Bot" }, issueUser: unknown = { id: 123 }, body = "/merge") => {
+  const event = comment(body, { association: "CONTRIBUTOR" });
+  return { ...event, issue: { ...event.issue, user: issueUser }, comment: { ...event.comment, user: commentUser } };
+};
 const release = (overrides: Record<string, unknown> = {}) => ({
   action: "closed",
   repository: { full_name: repository, default_branch: "main" },
@@ -31,6 +35,7 @@ describe("prepareClientRequest", () => {
     ["recheck comment", "approve", "issue_comment", comment("/recheck"), { kind: "approve", numbers: [17, 235] }],
     ["policy-check", "policy-check", "pull_request_target", pullRequest("edited"), { kind: "policy-check", numbers: [17] }],
     ["merge command", "merge", "issue_comment", comment("/merge"), { kind: "merge", numbers: [17, 235] }],
+    ["bot merging its own PR", "merge", "issue_comment", botComment(), { kind: "merge", numbers: [17, 235] }],
     ["release publish", "release-publish", "pull_request", release(), { kind: "release", numbers: [31] }],
   ] as const)("sends %s with the expected fixed request", (_name, operation, eventName, event, request) => {
     const result = prepareClientRequest(operation, eventName, event, server);
@@ -59,6 +64,19 @@ describe("prepareClientRequest", () => {
     ["merge issue comment", "merge", "issue_comment", comment("/merge", { pullRequest: false }), "comment is not on a pull request"],
     ["merge untrusted association", "merge", "issue_comment", comment("/merge", { association: "NONE" }), "comment author association NONE is not allowed"],
     ["merge command body", "merge", "issue_comment", comment("/Merge"), "comment body is not exactly /merge"],
+    ["bot on another author's PR", "merge", "issue_comment", botComment({ id: 456, type: "Bot" }), "comment author association CONTRIBUTOR is not allowed"],
+    ["human on their own PR", "merge", "issue_comment", botComment({ id: 123, type: "User" }), "comment author association CONTRIBUTOR is not allowed"],
+    ["bot missing type", "merge", "issue_comment", botComment({ id: 123 }), "comment author association CONTRIBUTOR is not allowed"],
+    ["bot malformed type", "merge", "issue_comment", botComment({ id: 123, type: "bot" }), "comment author association CONTRIBUTOR is not allowed"],
+    ["bot missing user", "merge", "issue_comment", { ...botComment(), comment: comment("/merge", { association: "CONTRIBUTOR" }).comment }, "comment author association CONTRIBUTOR is not allowed"],
+    ["bot null user", "merge", "issue_comment", botComment(null), "comment author association CONTRIBUTOR is not allowed"],
+    ["bot missing PR author", "merge", "issue_comment", { ...botComment(), issue: comment("/merge").issue }, "comment author association CONTRIBUTOR is not allowed"],
+    ["bot null PR author", "merge", "issue_comment", botComment({ id: 123, type: "Bot" }, null), "comment author association CONTRIBUTOR is not allowed"],
+    ["bot edited command", "merge", "issue_comment", { ...botComment(), action: "edited" }, "comment action edited is not handled"],
+    ["bot on issue", "merge", "issue_comment", { ...botComment(), issue: { number: 17, user: { id: 123 } } }, "comment is not on a pull request"],
+    ["bot command body", "merge", "issue_comment", botComment({ id: 123, type: "Bot" }, { id: 123 }, "/merge extra"), "comment body is not exactly /merge"],
+    ["bot approve unchanged", "approve", "issue_comment", botComment({ id: 123, type: "Bot" }, { id: 123 }, "/approve"), "comment author association CONTRIBUTOR is not allowed"],
+    ["bot recheck unchanged", "approve", "issue_comment", botComment({ id: 123, type: "Bot" }, { id: 123 }, "/recheck"), "comment author association CONTRIBUTOR is not allowed"],
     ["release wrong event", "release-publish", "push", {}, "event push is not handled"],
     ["release not merged", "release-publish", "pull_request", release({ merged: false }), "pull request was not merged"],
     ["release wrong branch", "release-publish", "pull_request", release({ head: { ref: "main", repo: { full_name: repository } } }), "pull request head is not release/next"],
@@ -67,6 +85,14 @@ describe("prepareClientRequest", () => {
     ["release non-default base", "release-publish", "pull_request", release({ base: { ref: "develop", repo: { full_name: repository } } }), "pull request base is not the default branch"],
   ] as const)("skips %s with an observable reason", (_name, operation, eventName, event, reason) => {
     expect(prepareClientRequest(operation, eventName, event, server)).toEqual({ status: "skip", reason });
+  });
+
+  test.each([undefined, null, "123", 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])("rejects malformed bot identity %s with an observable reason", (id) => {
+    for (const event of [botComment({ id, type: "Bot" }), botComment({ id, type: "Bot" }, { id }), botComment({ id: 123, type: "Bot" }, { id })]) {
+      expect(prepareClientRequest("merge", "issue_comment", event, server)).toEqual({
+        status: "skip", reason: "comment author association CONTRIBUTOR is not allowed",
+      });
+    }
   });
 
   test("rejects an invalid server repository before returning a request", () => {

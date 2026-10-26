@@ -35164,6 +35164,10 @@ var commentEvent = object({
     author_association: string2()
   }).passthrough()
 }).passthrough();
+var botMergeIdentity = object({
+  issue: object({ user: object({ id: number2().int().positive() }) }),
+  comment: object({ user: object({ id: number2().int().positive(), type: literal("Bot") }) })
+});
 var releaseEvent = object({
   action: string2(),
   repository: object({ full_name: string2(), default_branch: string2() }).passthrough(),
@@ -35237,7 +35241,10 @@ function prepareClientRequest(operation, eventName, event, serverRepository) {
     if (!parsed.data.issue.pull_request)
       return skip("comment is not on a pull request");
     if (!COMMENT_ASSOCIATIONS.has(parsed.data.comment.author_association)) {
-      return skip(`comment author association ${parsed.data.comment.author_association} is not allowed`);
+      const identity = botMergeIdentity.safeParse(event);
+      if (!identity.success || identity.data.comment.user.id !== identity.data.issue.user.id) {
+        return skip(`comment author association ${parsed.data.comment.author_association} is not allowed`);
+      }
     }
     if (parsed.data.comment.body !== "/merge")
       return skip("comment body is not exactly /merge");

@@ -8,6 +8,6 @@ Notification tokens have issues and pull-requests write access because GitHub re
 
 The squash commit uses the pull request title and body. Duplicate `Co-authored-by` lines in the body are removed. The server posts a receipt containing `<!-- csm-ci:merge:<comment_id> -->` after an accepted command succeeds or fails. Requests rejected before acceptance do not receive a receipt. If a long wait fails after the initial notification token expires, the workflow mints a fresh notification token and retries the idempotent failure receipt. A receipt authored by the Server bot prevents replay.
 
-The client workflow listens for newly created issue comments and requests work only for pull requests from commenters with OWNER, MEMBER, or COLLABORATOR association whose body is exactly `/merge`. The server independently verifies the comment author by immutable ID and bot or user type.
+The client workflow listens for newly created pull request comments whose body is exactly `/merge`. The commenter must have OWNER, MEMBER, or COLLABORATOR association, or be a Bot whose immutable ID matches the pull request author. This Bot exception only forwards a request. The server independently requires an enabled repository, an allowed bot merger, and every commit authored by that bot, followed by current approval, policy and CI checks. Bot mergers remain forbidden on the server and actions repositories. Approval and recheck comments retain their association requirement.
 
 `bun e2e/run.ts --ref <sha> --feature merge` exercises the merge scenarios against the testing repositories.

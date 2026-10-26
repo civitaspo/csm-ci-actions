@@ -31,6 +31,11 @@ const commentEvent = z.object({
   }).passthrough(),
 }).passthrough();
 
+const botMergeIdentity = z.object({
+  issue: z.object({ user: z.object({ id: z.number().int().positive() }) }),
+  comment: z.object({ user: z.object({ id: z.number().int().positive(), type: z.literal("Bot") }) }),
+});
+
 const releaseEvent = z.object({
   action: z.string(),
   repository: z.object({ full_name: z.string(), default_branch: z.string() }).passthrough(),
@@ -105,7 +110,10 @@ export function prepareClientRequest(
     if (parsed.data.action !== "created") return skip(`comment action ${parsed.data.action} is not handled`);
     if (!parsed.data.issue.pull_request) return skip("comment is not on a pull request");
     if (!COMMENT_ASSOCIATIONS.has(parsed.data.comment.author_association)) {
-      return skip(`comment author association ${parsed.data.comment.author_association} is not allowed`);
+      const identity = botMergeIdentity.safeParse(event);
+      if (!identity.success || identity.data.comment.user.id !== identity.data.issue.user.id) {
+        return skip(`comment author association ${parsed.data.comment.author_association} is not allowed`);
+      }
     }
     if (parsed.data.comment.body !== "/merge") return skip("comment body is not exactly /merge");
     return {
