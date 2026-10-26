@@ -125,3 +125,33 @@ test("does not inspect logs for an unfinished request or count it toward the exp
   expect(fetch.calls).not.toContain(`GET ${base}/runs/11/jobs`);
   expect(fetch.calls).not.toContain(`GET ${base}/jobs/21/logs`);
 });
+
+
+test("an explicit label selects its accepted run among competing requests for the same PR", async () => {
+  const base = "/repos/civitaspo/testing-csm-ci-server/actions";
+  const accepted = `accepted ${request.kind} for ${request.repository} ${JSON.stringify(request.args)}`;
+  const fetch = fakeFetch([
+    { method: "GET", path: `${base}/workflows/csm-ci.yml/runs`, body: { total_count: 3, workflow_runs: [
+      { id: 10, created_at: "2026-10-25T00:02:00Z", status: "completed", conclusion: "cancelled" },
+      { id: 11, created_at: "2026-10-25T00:01:30Z", status: "completed", conclusion: "success" },
+      { id: 12, created_at: "2026-10-25T00:01:00Z", status: "completed", conclusion: "success" },
+    ] } },
+    ...[10, 11, 12].flatMap((id) => [
+      { method: "GET", path: `${base}/runs/${id}/jobs`, body: { jobs: [
+        { id: id * 10, name: "server / intake", conclusion: "success" },
+        { id: id * 10 + 1, name: "server / cleanup", conclusion: "success" },
+      ] } },
+      { method: "GET", path: `${base}/jobs/${id * 10}/logs`, body: accepted },
+      { method: "GET", path: `${base}/jobs/${id * 10 + 1}/logs`, body: `LABEL: csm-ci-policy-check-${id === 10 ? "automatic" : id === 11 ? "explicit" : "explicitlonger"}` },
+    ]),
+  ]);
+  const fetchWithUrl = Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
+    const response = await fetch(input, init);
+    Object.defineProperty(response, "url", { value: typeof input === "string" ? input : input instanceof URL ? input.href : input.url });
+    return response;
+  }, { preconnect: () => undefined });
+  const ctx = { gh: github("t", fetchWithUrl), urls: [], untrusted: undefined };
+  const since = new Date("2026-10-25T00:00:00Z");
+  expect((await serverRuns(ctx, { ...request, label: "csm-ci-policy-check-explicit" }, since)).map(({ id }) => id)).toEqual([11]);
+  expect((await serverRuns(ctx, request, since)).map(({ id }) => id)).toEqual([10, 11, 12]);
+});

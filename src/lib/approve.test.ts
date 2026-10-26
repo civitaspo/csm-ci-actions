@@ -115,6 +115,13 @@ describe("runApprove automatic", () => {
     expect(approver.calls).toEqual([`POST ${P}/pulls/12/reviews`, `PUT ${P}/pulls/12/reviews/77/dismissals`]);
   });
 
+  test("does not refresh the policy check after the PR closes while approving", async () => {
+    const { ctx, server } = context({ pullAfter: pull({ state: "closed" }) });
+    expect((await runApprove(ctx, { pull_number: 12 })).result).toBe("approved");
+    expect(server.calls).not.toContain(`POST ${P}/check-runs`);
+    expect(server.calls.some((call) => call.startsWith(`PATCH ${P}/check-runs/`))).toBe(false);
+  });
+
   test("dismisses and fails when the approver token belongs to someone else", async () => {
     const { ctx, approver } = context({ reviewer: { id: 5, login: "other[bot]" } });
     await expect(runApprove(ctx, { pull_number: 12 })).rejects.toThrow(/belongs to other\[bot\]/);

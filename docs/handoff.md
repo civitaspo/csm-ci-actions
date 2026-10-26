@@ -545,6 +545,10 @@ The harness runs in this order.
 
 ### 7.3 Cautions when writing scenarios
 
+The issue #72 regression uses the current session's authorization for necessary live e2e to reset only the just-created, harness-owned ephemeral testing-client PR branch to testing-client `main`. It resets while the PR is open because GitHub retains the old head snapshot after an explicit close; GitHub may then close the zero-commit PR automatically. This authorization excludes production branches and shared managed refs such as `release/next` and `csm-ci/repo-settings`; the historical live coverage gaps for existing securefix route and release branches remain. This setup observation does not establish a passing candidate feature suite.
+
+At signed executable candidate `493faf4120cd88d0abf0b6c20e0c0d382491a439`, the closed/shared-SHA [targeted scenario](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40352797222) passed 1/1 without skips. The complete policy-check suite passed 4/8 scenarios with four expected second-identity skips. Its closed/shared-SHA [request](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40353803289) left the policy-check state on the shared main SHA unchanged. The local approve suite passed six scenarios and skipped four second-identity scenarios; its remaining `/recheck` scenario stopped on an HTTP 503 with the failing API endpoint unverified. A fresh [automatic approval](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40356168075) and [explicit `/recheck`](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40356367475) passed the targeted retry 1/1 without skips. After the targeted retry, the client and server runs had drained, the owned test PRs and branches were cleaned up, and the e2e lock was absent.
+
 - **Cleanup:** Open PRs with `withPr` (`e2e/approve.ts`), and close the PR and delete the branch in `finally`. If you kill the process, PRs stay open. Close the open PRs on branches that start with `e2e-`.
 
   ```bash

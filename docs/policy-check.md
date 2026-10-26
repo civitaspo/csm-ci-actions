@@ -2,6 +2,8 @@
 
 The `policy-check` operation evaluates the effective repository policies in `csm-ci.yaml` against the pull request's current head. It creates or updates the `csm-ci/policy` check run with the Server App and pins `external_id` to that head. The check summary contains one row per policy.
 
+Closed pull requests skip evaluation and publication. Immediately before creating or updating a check, the server rereads the pull request and skips publication if it closed or its head changed. This also protects policy refreshes after approval. Skips leave existing checks untouched and the standalone action reports `result=skipped` with a reason in its log. An open pull request with no commits still fails both trust policies.
+
 The `signed-commits` and `trusted-committers` policies always run, even when omitted from configuration. `sensitive-paths` checks changed and renamed paths against the configured patterns. Include these default paths when you want the standard dependency, build, and workflow coverage:
 
 ```yaml

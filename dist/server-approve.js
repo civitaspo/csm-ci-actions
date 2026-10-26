@@ -37106,6 +37106,8 @@ function policySummary(results) {
 `);
 }
 async function updatePolicyCheck(ctx) {
+  if (ctx.pull.state !== "open")
+    return { result: "skipped", reason: `#${ctx.pull.number} is closed` };
   const { owner, repo } = splitRepository(ctx.repository);
   const results = await evaluatePullPolicies(ctx);
   const ok = results.every((r) => r.ok);
@@ -37114,12 +37116,17 @@ async function updatePolicyCheck(ctx) {
   const checkRuns = await ctx.server.paginate(ctx.server.rest.checks.listForRef, { owner, repo, ref: ctx.pull.headSha, per_page: 100 });
   const existing = checkRuns.find((c) => c.name === "csm-ci/policy" && c.external_id === ctx.pull.headSha && Number(c.app?.id) === ctx.config.apps.server_app_id);
   const output = { title: ok ? "Policies passed" : "Policies failed", summary };
+  const { data: current } = await ctx.server.rest.pulls.get({ owner, repo, pull_number: ctx.pull.number });
+  if (current.state !== "open")
+    return { result: "skipped", reason: `#${ctx.pull.number} closed before policy publication` };
+  if (current.head.sha !== ctx.pull.headSha)
+    return { result: "skipped", reason: `#${ctx.pull.number} head moved before policy publication` };
   if (existing) {
     await ctx.server.rest.checks.update({ owner, repo, check_run_id: Number(existing.id), name: "csm-ci/policy", external_id: ctx.pull.headSha, head_sha: ctx.pull.headSha, status: "completed", completed_at: completedAt, conclusion: ok ? "success" : "failure", output });
   } else {
     await ctx.server.rest.checks.create({ owner, repo, name: "csm-ci/policy", external_id: ctx.pull.headSha, head_sha: ctx.pull.headSha, status: "completed", completed_at: completedAt, conclusion: ok ? "success" : "failure", output });
   }
-  return results;
+  return { result: "published", results };
 }
 
 // src/lib/approve.ts

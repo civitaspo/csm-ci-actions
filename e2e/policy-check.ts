@@ -4,6 +4,11 @@ import {
   assert,
   CLIENT,
   expectOp,
+  jobs,
+  jobLog,
+  recentWorkflowRuns,
+  serverRuns,
+  waitRun,
   openPr,
   type Pr,
   postComment,
@@ -93,6 +98,54 @@ export const policyCheck: Scenario[] = [
         assert(check.output?.summary?.includes(`| ${policy} | pass |`), `policy check summary does not show ${policy} passing`);
       }
     }),
+  },
+  {
+    name: "a delayed request after resetting a PR to main and closing it leaves shared-SHA checks untouched",
+    run: async (ctx) => {
+      const { pr, since } = await openPolicyPr(ctx, "signed");
+      try {
+        await expectPolicy(ctx, pr, since, "success");
+        const { data: main } = await ctx.gh.rest.git.getRef({ ...splitRepository(CLIENT), ref: "heads/main" });
+        const resetSince = new Date(Date.now() - 2_000);
+        await ctx.gh.rest.git.updateRef({ ...splitRepository(CLIENT), ref: `heads/${pr.branch}`, sha: main.object.sha, force: true });
+        const reset = await until("the PR head reset to main", async () => {
+          const { data: current } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
+          return current.head.sha === main.object.sha && current.base.sha === main.object.sha && current.commits === 0 ? current : undefined;
+        });
+        if (reset.state === "open") await ctx.gh.rest.pulls.update({ ...splitRepository(CLIENT), pull_number: pr.number, state: "closed" });
+        await until("the closed PR retains the zero-commit head", async () => {
+          const { data: current } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
+          return current.state === "closed" && current.head.sha === main.object.sha && current.base.sha === main.object.sha && current.commits === 0 ? current : undefined;
+        });
+        // Drain both synchronize requests before adding another request to the PR's concurrency group.
+        for (const { workflow, title, kind } of [
+          { workflow: "csm-ci-policy-check.yml", title: `csm-ci policy check #${pr.number}`, kind: "policy-check" },
+          { workflow: "csm-ci-approve.yml", title: `csm-ci request #${pr.number} comment #automatic`, kind: "approve" },
+        ]) {
+          const automatic = await until(`the ${kind} synchronize run for #${pr.number}`, async () =>
+            (await recentWorkflowRuns(ctx, CLIENT, workflow, "pull_request_target", resetSince)).find((run) => run.display_title === title));
+          await waitRun(ctx, CLIENT, automatic.id);
+          const requestJob = await until(`the automatic ${kind} request job`, async () => (await jobs(ctx, CLIENT, automatic.id)).get("request"));
+          assert(requestJob.conclusion === "success", `automatic ${kind} request did not succeed (${automatic.html_url})`);
+          const label = /created label (csm-ci-[^ ]+) \(/.exec(await jobLog(ctx, CLIENT, requestJob.id))?.[1];
+          assert(label, `automatic request label missing from ${automatic.html_url}`);
+          await until(`the automatic ${kind} server run to finish`, async () =>
+            (await serverRuns(ctx, { kind, repository: CLIENT, args: { pull_number: pr.number }, label }, resetSince))[0]);
+        }
+        const snapshot = async () => {
+          const checks = await ctx.gh.paginate(ctx.gh.rest.checks.listForRef, { ...splitRepository(CLIENT), ref: main.object.sha, per_page: 100 });
+          return JSON.stringify(checks.filter((check) => check.name === "csm-ci/policy" && Number(check.app?.id) === SERVER_APP_ID).sort((a, b) => String(a.id).localeCompare(String(b.id))));
+        };
+        const before = await snapshot();
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const request = await smokeRequest(ctx, "policy-check", String(pr.number));
+          await expectOp(ctx, { kind: "policy-check", repository: CLIENT, args: { pull_number: pr.number }, label: request.label }, request.since, "success", /Policy check skipped: #[0-9]+ is closed/);
+          assert(await snapshot() === before, "the closed PR request created or overwrote a policy check on main");
+        }
+      } finally {
+        await closePolicyPr(ctx, pr);
+      }
+    },
   },
   {
     name: "an unsigned commit fails the signed-commits policy",
