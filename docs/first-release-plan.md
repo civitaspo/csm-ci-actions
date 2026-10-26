@@ -397,7 +397,11 @@ After Phase 0, phases 1, 2, 3, 4, 5a, and 6 can proceed independently in paralle
   - `/recheck` triggers a re-evaluation
   - Fake markers (a review by a non-approver, a COMMENT review) are invalid
   - The producer of the check is the Server App
-- **Not in scope**: external scripts, minimizing failure comments.
+- **Policy failure reports and recovery**: the Server App manages dedicated, head-bound failure comments as specified in [Policy check](policy-check.md#failure-reports-and-recovery). Failed full evaluations report every failed policy's actual reasons and applicable remediation. Identical active retries reuse the report. Changed failures supersede older reports with `OUTDATED`. Passing full evaluations of the current head minimize all owned failure reports, including outdated reports, with `RESOLVED`. Recovery posts no success comment and deletes nothing.
+- **Publication boundary**: the shared full check publication path applies this lifecycle to standalone policy-check, automatic approval, the final `/approve` refresh, and `/recheck`. Pure evaluation, merge readiness polling, and prospective `/approve` preflight do not publish or resolve reports. Approval and trust semantics remain unchanged.
+- **Report safety**: paginate prior comments, require the dedicated marker and configured Server Bot's immutable identity, and reread each target before minimization. Revalidate the PR state and evaluated head before each write. Preserve per-PR server serialization and prevent stale or out-of-order results from replacing newer results. REST and GraphQL failures propagate.
+- **Implementation gates**: test lifecycle transitions, identity and head rejection, escaping and truncation, pagination, errors, and preflight isolation. Mutation-check each changed rejection rule. Verify real rendered comments and `RESOLVED` minimization with existing Server App permissions in the testing repositories. Record exact run URLs before claiming runtime support.
+- **Not in scope**: external scripts.
 
 ### Phase 4: securefix
 
@@ -691,7 +695,7 @@ The differences in security rules are summarized in the comparison table in the 
 | approve | Automatic for trusted commits. The owner's `/approve` approves sensitive paths. It adds an owner marker comment | The meaning is the same (`/approve` takes no argument and covers trusted commits only). The marker goes in the review body, and no owner marker comment is added. A push right after approval causes a dismiss |
 | Re-run | None | **`/recheck`** can redo policy-check and the automatic approve |
 | merge | The client records the acceptance time and head in a manifest and watches the timeline broadly. Renovate rebase recovery exists | Based on the exact `/merge` comment creation time and pins the server-read head. Policies are re-evaluated inside the server. No rebase recovery |
-| policy-check | The check name is `securefix-policy-check`. An approval of the current head is also a condition to pass. On failure it posts a comment and minimizes old ones | The check name is `csm-ci/policy`. Approval is not a condition (the ruleset and the merge side check it). Policies can be added declaratively. The result is only in the check summary, and no comment is posted |
+| policy-check | The check name is `securefix-policy-check`. An approval of the current head is also a condition to pass. On failure it posts a comment and minimizes old ones | The check name is `csm-ci/policy`. Approval is not a condition (the ruleset and the merge side check it). Policies can be added declaratively. The check summary remains authoritative. Failed full evaluations also post actionable comments. Superseded failures use `OUTDATED`; recovery uses `RESOLVED` |
 | securefix | The PR fix workflow path is fixed to `pull_request.yml`. It does not update the PR title and body (release-pr-sync fills the gap) | A PR-mode run is bound to the target PR and to the base being the default branch (the workflow path does not matter). Route mode is a general configuration and also updates the PR title and body. release-pr-sync is not needed |
 | release tag | Created with the client's `GITHUB_TOKEN` (`contents: write`) | **The server creates it**. The client needs no write permission. The tag ruleset allows only the Server App to create it |
 | release build | A Go matrix and cargo dedicated to terraform-provider. goreleaser is not used (it would not read the client's configuration) | `build_type` (none / js-action / goreleaser / cargo / cargo-raw / terraform-provider). Provider builds reuse the isolated GoReleaser path; provider validation and signing run only in the trusted publisher |
@@ -699,7 +703,7 @@ The differences in security rules are summarized in the comparison table in the 
 | repo-settings | The owner's classic admin PAT. Managed files exist only on the native side | The Server App's `administration`. Managed files are distributed by PR, and caller distribution also uses this. It does not create repos |
 | Trust of the Server bot | Registered as a trusted committer | Not registered. We judge whether a commit is server-made. The server repo and csm-ci-actions always treat every path as sensitive |
 | Tests | A `testing-` namespace and about 40 workflows inside the production repo | Dedicated testing repos, testing Apps, and an e2e harness |
-| Removed | Control revisions, bootstrap and repair, runtime publishing, two protocols, native producer proof, owner marker comments, minimizing failure comments | — |
+| Removed | Control revisions, bootstrap and repair, runtime publishing, two protocols, native producer proof, owner marker comments | — |
 
 ## Comparison with past implementations (security rules)
 
