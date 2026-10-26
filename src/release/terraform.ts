@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { Rejection } from "../lib/request.ts";
 
@@ -13,7 +14,9 @@ export async function terraformAssets(input: {
   fingerprint: string;
   credentials: { mode: "prepare"; privateKey: string; passphrase: string } | { mode: "verify"; publicKey: string };
 }): Promise<string> {
-  const helper = resolve(process.env.GITHUB_ACTION_PATH ?? "actions/server/release-assets", "../release-assets/terraform.py");
+  // Source tests run from src/release/; bundled Node actions run from dist/.
+  const root = import.meta.url.endsWith(".ts") ? "../../" : "../";
+  const helper = fileURLToPath(new URL(`${root}actions/server/release-assets/terraform.py`, import.meta.url));
   const credentials = input.credentials.mode === "prepare"
     ? { key: input.credentials.privateKey, passphrase: input.credentials.passphrase }
     : { key: input.credentials.publicKey };

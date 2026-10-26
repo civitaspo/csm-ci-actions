@@ -31060,8 +31060,10 @@ var LabelEventSchema = object({
 // src/release/terraform.ts
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 async function terraformAssets(input) {
-  const helper = resolve(process.env.GITHUB_ACTION_PATH ?? "actions/server/release-assets", "../release-assets/terraform.py");
+  const root = import.meta.url.endsWith(".ts") ? "../../" : "../";
+  const helper = fileURLToPath(new URL(`${root}actions/server/release-assets/terraform.py`, import.meta.url));
   const credentials = input.credentials.mode === "prepare" ? { key: input.credentials.privateKey, passphrase: input.credentials.passphrase } : { key: input.credentials.publicKey };
   const output = await new Promise((accept, reject) => {
     const child = spawn("python3", [
