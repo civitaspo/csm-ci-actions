@@ -30892,7 +30892,17 @@ var SecurefixSchema = strictObject({
   allow_workflow_changes: boolean2(),
   routes: array(SecurefixRoute).refine((routes) => new Set(routes.map((route) => route.name)).size === routes.length, "duplicate route name")
 });
+var Sponsorships = strictObject({
+  enabled: boolean2(),
+  github: array(string2().regex(/^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/u, "must be a GitHub recipient login").max(39).transform((login) => login.toLowerCase())).min(1).max(4).refine((logins) => new Set(logins).size === logins.length, "duplicate GitHub recipient login").optional()
+});
+function repoSettingsManagedFiles(settings) {
+  const recipients = settings?.sponsorships?.github;
+  return { ...settings?.managed_files, ...recipients ? { ".github/FUNDING.yml": `github: [${recipients.map((login) => JSON.stringify(login)).join(", ")}]
+` } : {} };
+}
 var RepoSettings = strictObject({
+  sponsorships: Sponsorships.optional(),
   settings: strictObject({
     delete_branch_on_merge: boolean2().optional(),
     allow_auto_merge: boolean2().optional(),
@@ -30905,12 +30915,16 @@ var RepoSettings = strictObject({
   }).optional(),
   managed_files: record(string2(), string2()).default({})
 }).superRefine((value, ctx) => {
-  const paths = Object.keys(value.managed_files);
+  if (value.sponsorships?.github && Object.hasOwn(value.managed_files, ".github/FUNDING.yml")) {
+    ctx.addIssue({ code: "custom", path: ["managed_files", ".github/FUNDING.yml"], message: "destination is reserved by sponsorships.github" });
+  }
+  const files = repoSettingsManagedFiles(value);
+  const paths = Object.keys(files);
   if (paths.length > 512)
     ctx.addIssue({ code: "custom", path: ["managed_files"], message: "must contain at most 512 files" });
   let totalBytes = 0;
   for (const path of paths) {
-    const content = value.managed_files[path] ?? "";
+    const content = files[path] ?? "";
     const bytes = new TextEncoder().encode(content).byteLength;
     totalBytes += bytes;
     if (!isSafeManagedFilePath(path)) {
