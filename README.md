@@ -8,7 +8,7 @@ csm-ci-actions extends that approach with approval and policy checks, controlled
 
 Start with the request flow and setup order below, then use the [client](#client-actions) and [server](#server-workflows-and-actions) action references for individual inputs and examples.
 
-For selected dependency batches, see the [agent-assisted Renovate review recommendation](docs/renovate-review.md). It preserves the server approval and merge gates.
+Use the [Renovate review skill](.agents/skills/renovate-review/SKILL.md) to assess selected dependency updates and process an authorized batch through the existing Server approval and merge paths. For example, ask `Use $renovate-review to review civitaspo/csm-ci-actions PR #57 in review-only mode.` Grant approval and merge authority separately when those actions are intended.
 
 Pin every action and reusable workflow to a reviewed full commit SHA. Replace `<sha>` in the examples before using them. Keep caller workflows on each repository's default branch.
 
