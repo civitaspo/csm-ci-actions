@@ -257,6 +257,7 @@ jobs:
           repositories: ${{ needs.intake.outputs.name }}
           permission-contents: write
           permission-pull-requests: write
+          permission-workflows: write
       - if: needs.intake.outputs.kind == 'merge'
         uses: ./.csm-ci-actions/actions/server/merge
         with:
