@@ -55,7 +55,7 @@ describe("discoverRepoSettingsTargets", () => {
 
 describe("inspectRepoSettings", () => {
   const target: RepoSettingsTarget = { name: "owner/client", isServer: false };
-  const repository = { default_branch: "main", delete_branch_on_merge: true, allow_auto_merge: true, allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false };
+  const repository = { default_branch: "main", delete_branch_on_merge: true, allow_auto_merge: true, allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false, squash_merge_commit_title: "PR_TITLE", squash_merge_commit_message: "PR_BODY" };
   const disabledControlled = {
     id: 81,
     name: "controlled-merges",
@@ -499,6 +499,74 @@ describe("inspectRepoSettingsPreflight", () => {
   });
 });
 
+describe("squash commit settings", () => {
+  const target = { name: "owner/client", isServer: false };
+  const desired = { allow_squash_merge: true, squash_merge_commit_title: "PR_TITLE", squash_merge_commit_message: "PR_BODY" };
+  function stateFetch(repository: Record<string, unknown>, then?: unknown[]) {
+    const definitions = repoSettingsRuleSets(config());
+    const summaries = definitions.map((set, index) => ({ id: index + 1, name: set.name, source_type: "Repository" }));
+    return fakeFetch([
+      { method: "GET", path: "/repos/owner/client", body: { ...repository, delete_branch_on_merge: false }, ...(then ? { then } : {}) },
+      { method: "GET", path: "/repos/owner/client/rulesets", body: summaries },
+      ...summaries.map((summary, index) => ({ method: "GET", path: `/repos/owner/client/rulesets/${summary.id}`, body: { ...definitions[index], ...summary } })),
+      { method: "GET", path: "/repos/owner/client/immutable-releases", body: { enabled: true } },
+      { method: "PATCH", path: "/repos/owner/client", body: {} },
+    ]);
+  }
+  const squashConfig = parseConfig(`${CONFIG_YAML}\nrepo_settings: { settings: { allow_squash_merge: true } }\n`);
+  test.each(["squash_merge_commit_title", "squash_merge_commit_message"])("rejects implied %s as a configuration key", (key) => {
+    expect(() => parseConfig(`${CONFIG_YAML}\nrepo_settings: { settings: { allow_squash_merge: true, ${key}: PR_TITLE } }\n`)).toThrow("Unrecognized key:");
+  });
+  test.each([
+    ["title", { ...desired, squash_merge_commit_title: "COMMIT_OR_PR_TITLE" }, ["squash_merge_commit_title"]],
+    ["message", { ...desired, squash_merge_commit_message: "COMMIT_MESSAGES" }, ["squash_merge_commit_message"]],
+    ["blank message", { ...desired, squash_merge_commit_message: "BLANK" }, ["squash_merge_commit_message"]],
+    ["both", { ...desired, squash_merge_commit_title: "COMMIT_OR_PR_TITLE", squash_merge_commit_message: "BLANK" }, ["squash_merge_commit_title", "squash_merge_commit_message"]],
+    ["disabled squash", { ...desired, allow_squash_merge: false }, ["allow_squash_merge"]],
+  ])("reports and repairs %s drift, then makes no settings write on replay", async (_name, repository, changes) => {
+    const fetch = stateFetch(repository, [repository, desired]);
+    const adminGH = github("admin", fetch);
+    const inspection = await inspectRepoSettings({ adminGH, config: squashConfig, target, mode: "schedule" });
+    expect(inspection.changes.settings).toEqual(changes);
+    const args = { adminGH, readGH: github("read", fakeFetch([])), config: squashConfig, target, mode: "schedule" as const };
+    expect((await applyRepoSettings(args)).settingsUpdated).toBe(1);
+    const writes = fetch.requests.filter((request) => request.method === "PATCH");
+    expect(writes).toHaveLength(1);
+    expect(JSON.parse(writes[0]?.body ?? "{}")).toEqual(desired);
+    expect((await applyRepoSettings(args)).settingsUpdated).toBe(0);
+    expect(fetch.requests.filter((request) => request.method === "PATCH")).toHaveLength(1);
+  });
+
+  test.each(["squash_merge_commit_title", "squash_merge_commit_message"])("rejects missing %s before writes", async (key) => {
+    const repository: Record<string, unknown> = { ...desired };
+    delete repository[key];
+    const fetch = stateFetch(repository);
+    const args = { adminGH: github("admin", fetch), readGH: github("read", fakeFetch([])), config: squashConfig, target, mode: "schedule" as const };
+    await expect(inspectRepoSettings(args)).rejects.toThrow(`repository setting ${key} is not visible to the inspection token`);
+    await expect(applyRepoSettings(args)).rejects.toThrow(`repository setting ${key} is not visible to the inspection token`);
+    expect(fetch.requests.every((request) => request.method === "GET")).toBe(true);
+  });
+
+  test.each([
+    ["omitted squash", "repo_settings: { settings: { delete_branch_on_merge: true } }", 1],
+    ["empty settings", "repo_settings: { settings: {} }", 0],
+    ["omitted settings", "repo_settings: {}", 0],
+  ])("%s leaves missing or drifted squash commit settings unmanaged", async (_name, yaml, writes) => {
+    for (const repository of [{ allow_squash_merge: true }, { ...desired, squash_merge_commit_title: "COMMIT_OR_PR_TITLE", squash_merge_commit_message: "BLANK" }]) {
+      const fetch = stateFetch(repository);
+      const cfg = parseConfig(`${CONFIG_YAML}\n${yaml}\n`);
+      const adminGH = github("admin", fetch);
+      const inspection = await inspectRepoSettings({ adminGH, config: cfg, target, mode: "schedule" });
+      expect(inspection.changes.settings).toEqual(writes ? ["delete_branch_on_merge"] : []);
+      const result = await applyRepoSettings({ adminGH, readGH: github("read", fakeFetch([])), config: cfg, target, mode: "schedule" });
+      expect(result.settingsUpdated).toBe(writes);
+      const updates = fetch.requests.filter((request) => request.method === "PATCH");
+      expect(updates).toHaveLength(writes);
+      if (writes) expect(JSON.parse(updates[0]?.body ?? "{}")).toEqual({ delete_branch_on_merge: true });
+    }
+  });
+});
+
 function configWithSettings() {
   return parseConfig(`${CONFIG_YAML}\nrepo_settings: { settings: { delete_branch_on_merge: true, allow_auto_merge: true, allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false } }\n`);
 }
@@ -536,7 +604,7 @@ function dispatchFetch(options: DispatchOptions) {
     bypass_actors: options.bypass ?? [{ actor_id: 1, actor_type: "Integration", bypass_mode: "pull_request" }],
   };
   return fakeFetch([
-    { method: "GET", path: "/repos/owner/client", body: { default_branch: "main", delete_branch_on_merge: true, allow_auto_merge: true, allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false } },
+    { method: "GET", path: "/repos/owner/client", body: { default_branch: "main", delete_branch_on_merge: true, allow_auto_merge: true, allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false, squash_merge_commit_title: "PR_TITLE", squash_merge_commit_message: "PR_BODY" } },
     { method: "GET", path: "/repos/owner/client/contents/.github%2Fworkflows", body: [{ name: "merge.yml", type: "file" }] },
     { method: "GET", path: "/repos/owner/client/contents/.github%2Fworkflows%2Fmerge.yml", body: workflow },
     { method: "GET", path: "/repos/owner/client/rulesets", body: options.absent ? [] : [{ id: 81, name: "controlled-merges", source_type: "Repository" }] },
