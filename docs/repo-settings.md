@@ -192,7 +192,7 @@ Implementation must update fixtures and harness configuration rewrites, generate
 
 ## Sponsorships
 
-This section specifies the planned contract for issue #67. A separate runtime implementation and deployment are required before use. Do not add `sponsorships` to Server configuration pinned to a revision without that implementation; its configuration schema rejects the key.
+This runtime accepts the sponsorship contract from issue #67. Deployment and live acceptance checks remain pending. Upgrade every Server configuration parser pin to a verified compatible revision before adding `sponsorships`; older revisions reject the key.
 
 The optional global `repo_settings.sponsorships` block configures the Sponsor button separately from its funding content:
 
@@ -217,7 +217,7 @@ Generated content replaces existing recipients and all unconfigured funding prov
 
 In `reconcile`, the existing target-scoped administration token reads the repository node ID and `hasSponsorshipsEnabled` through GraphQL. The server reports drift and repairs it through `updateRepository`, using `repositoryId` and `hasSponsorshipsEnabled`. Missing or invalid fields and API errors fail the run. A repeat with no drift makes no sponsorship mutation. Existing final revalidation still applies. A lost mutation response requires a state read before another write. `managed-files-only` proposes the same funding content without reading or changing the setting or minting an administration token.
 
-The setting result and funding-file PR result are separate. An enabled setting with a pending PR is not completed funding setup. The generated file reaches default only after normal review, CI, approval, and protected merging. An exact repeat reuses the PR and head; matching default-branch content needs no PR. GraphQL `fundingLinks` exposes resolved funding links, not a recipient-write API or proof that a pending PR has merged. See [GitHub's sponsor-button documentation](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/displaying-a-sponsor-button-in-your-repository) and [GraphQL repository reference](https://docs.github.com/en/graphql/reference/repos#updaterepositoryinput).
+The inspection reports `changes.sponsorships`, and administration apply reports `sponsorshipsUpdated` separately from `settingsUpdated`. Managed-file inspection and apply retain their separate result and PR number. The setting result and funding-file PR result are separate. An enabled setting with a pending PR is not completed funding setup. The generated file reaches default only after normal review, CI, approval, and protected merging. An exact repeat reuses the PR and head; matching default-branch content needs no PR. GraphQL `fundingLinks` exposes resolved funding links, not a recipient-write API or proof that a pending PR has merged. See [GitHub's sponsor-button documentation](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/displaying-a-sponsor-button-in-your-repository) and [GraphQL repository reference](https://docs.github.com/en/graphql/reference/repos#updaterepositoryinput).
 
 Implementation must verify setting changes with the existing Server App and record testing-repository run URLs, generated PRs, repeat behavior, and merged default-branch content in `docs/handoff.md`. Permission failures remain errors. Only the operator changes App permissions or credentials. Production recipients must come from explicit reviewed Server configuration.
 

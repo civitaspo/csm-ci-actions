@@ -1,3 +1,7 @@
+import { ownedManagedHead } from "./repo-settings.ts";
+import { CLIENT, SERVER_BOT_ID } from "./harness.ts";
+import { fakeFetch } from "../src/lib/testing.ts";
+import { github } from "../src/lib/github.ts";
 import { describe, expect, test } from "bun:test";
 import { parseCreatedRulesets, rulesetCleanupPlan } from "./repo-settings-ownership.ts";
 
@@ -54,5 +58,25 @@ describe("ruleset restoration ownership", () => {
       new Set([2]),
       new Set([17, 18]),
     )).toEqual({ deleteIds: [17, 18], errors: [`ruleset ${unknownId} was not created by this e2e run; refusing deletion`] });
+  });
+});
+
+describe("managed funding branch cleanup ownership", () => {
+  const fundingPaths = ["e2e/repo-settings-managed.txt", ".github/FUNDING.yml"];
+  test.each([
+    ["both configured files", fundingPaths, fundingPaths, true],
+    ["funding-only diff", [".github/FUNDING.yml"], fundingPaths, true],
+    ["legacy single file", ["e2e/repo-settings-managed.txt"], undefined, true],
+    ["funding outside sponsorship scenario", [".github/FUNDING.yml"], undefined, false],
+    ["unknown file", [...fundingPaths, "unrelated.txt"], fundingPaths, false],
+    ["empty diff", [], fundingPaths, false],
+  ] satisfies [string, string[], string[] | undefined, boolean][])("checks %s", async (_name, files, allowed, owned) => {
+    const sha = "a".repeat(40);
+    const fetch = fakeFetch([
+      { method: "GET", path: `/repos/${CLIENT}/git/ref/heads%2Fcsm-ci%2Frepo-settings`, body: { object: { sha } } },
+      { method: "GET", path: `/repos/${CLIENT}/commits/${sha}`, body: { author: { id: SERVER_BOT_ID }, commit: { message: "Sync managed files", verification: { verified: true, reason: "valid" } }, files: files.map((filename) => ({ filename })) } },
+      { method: "GET", path: `/repos/${CLIENT}/pulls`, body: [{ number: 1, body: "<!-- csm-ci:repo-settings:managed-files -->", head: { sha } }] },
+    ]);
+    expect(await ownedManagedHead({ gh: github("read", fetch) }, CLIENT, allowed)).toEqual(owned ? { sha, pull: { number: 1, headSha: sha } } : undefined);
   });
 });

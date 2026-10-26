@@ -1,4 +1,5 @@
 import * as core from "@actions/core";
+import { repoSettingsManagedFiles } from "../lib/config.ts";
 import { applyManagedFiles, inspectManagedFiles } from "../lib/managed-files.ts";
 import { applyRepoSettings, discoverRepoSettingsTargets, inspectRepoSettings, inspectRepoSettingsPreflight } from "../lib/repo-settings.ts";
 import { github, loadConfig, splitRepository } from "../lib/github.ts";
@@ -57,7 +58,7 @@ async function main(): Promise<void> {
     core.info(`drift for ${target.name}: ${JSON.stringify(result.changes)}; activation required: ${result.activation}`);
     core.setOutput("changes", JSON.stringify(result.changes));
     core.setOutput("activation-required", String(result.activation));
-    core.setOutput("has-changes", String(result.changes.settings.length > 0 || result.changes.immutableReleases || result.changes.rulesets.length > 0));
+    core.setOutput("has-changes", String(result.changes.settings.length > 0 || result.changes.immutableReleases || result.changes.sponsorships || result.changes.rulesets.length > 0));
     return;
   }
   const readGH = github(input("read-token", true));
@@ -88,7 +89,7 @@ async function main(): Promise<void> {
   }
   if (mode === "managed-inspect" || mode === "managed-apply") {
     const { data: repo } = await readGH.rest.repos.get(address);
-    const files = config.repo_settings?.managed_files ?? {};
+    const files = repoSettingsManagedFiles(config.repo_settings);
     if (mode === "managed-inspect") {
       const result = await inspectManagedFiles(readGH, { repository: target.name, defaultBranch: repo.default_branch, serverBotId: config.apps.server_bot_id, files });
       core.setOutput("result", result.status);

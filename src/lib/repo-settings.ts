@@ -186,14 +186,14 @@ export function repoSettingsRuleSets(config: Config): RuleSetDefinition[] {
 
 export type RepoSettingsInspection = {
   target: RepoSettingsTarget;
-  changes: { settings: string[]; immutableReleases: boolean; rulesets: string[] };
+  changes: { settings: string[]; immutableReleases: boolean; sponsorships: boolean; rulesets: string[] };
   // A dispatch that would create controlled-merges or move it to active; only this needs the preflight.
   activation: boolean;
   rulesetIds: Record<string, number | undefined>;
   rulesetEnforcements: Record<string, RuleSet["enforcement"] | undefined>;
 };
 
-export type RepoSettingsApplyResult = { settingsUpdated: number; immutableReleasesEnabled: number; rulesetsUpdated: number; rulesetsCreated: number };
+export type RepoSettingsApplyResult = { settingsUpdated: number; sponsorshipsUpdated: number; immutableReleasesEnabled: number; rulesetsUpdated: number; rulesetsCreated: number };
 const CreatedRuleSet = z.object({ id: z.number().int().positive(), name: z.string() });
 
 // GitHub returns ruleset bypass_actors only to callers with write access to the ruleset, so
@@ -207,10 +207,11 @@ export async function inspectRepoSettings(args: {
   const repoSettings = args.config.repo_settings;
   if (!repoSettings) throw new Rejection("repo_settings is not configured");
   const address = { ...splitRepository(args.target.name) };
-  const [repositoryResponse, ruleSets, immutableEnabled] = await Promise.all([
+  const [repositoryResponse, ruleSets, immutableEnabled, sponsorships] = await Promise.all([
     args.adminGH.rest.repos.get(address),
     args.adminGH.paginate("GET /repos/{owner}/{repo}/rulesets", { ...address, per_page: 100 }),
     isImmutableReleasesEnabled(args.adminGH, address),
+    repoSettings.sponsorships ? readSponsorships(args.adminGH, args.target.name) : undefined,
   ]);
   const definitions = repoSettingsRuleSets(args.config);
   const summaries = z.array(z.object({ id: z.number().int().positive(), name: z.string(), source_type: z.string().optional() })).parse(ruleSets);
@@ -242,7 +243,7 @@ export async function inspectRepoSettings(args: {
   }
   return {
     target: args.target,
-    changes: { settings: changedSettings(repositoryResponse.data, repoSettings.settings ?? {}), immutableReleases: !immutableEnabled, rulesets: rulesetsToChange },
+    changes: { settings: changedSettings(repositoryResponse.data, repoSettings.settings ?? {}), immutableReleases: !immutableEnabled, sponsorships: sponsorships !== undefined && sponsorships.hasSponsorshipsEnabled !== repoSettings.sponsorships?.enabled, rulesets: rulesetsToChange },
     activation,
     rulesetIds: ids,
     rulesetEnforcements: enforcements,
@@ -270,12 +271,25 @@ export async function applyRepoSettings(args: {
   if (!repoSettings) throw new Rejection("repo_settings is not configured");
   const address = { ...splitRepository(args.target.name) };
   let settingsUpdated = 0;
+  let sponsorshipsUpdated = 0;
   let immutableReleasesEnabled = 0;
   let rulesetsUpdated = 0;
   let rulesetsCreated = 0;
   if (inspection.changes.settings.length > 0 && repoSettings.settings) {
     await args.adminGH.rest.repos.update({ ...address, ...desiredRepositorySettings(repoSettings.settings) });
     settingsUpdated = 1;
+  }
+  if (inspection.changes.sponsorships && repoSettings.sponsorships) {
+    const current = await readSponsorships(args.adminGH, args.target.name);
+    const enabled = repoSettings.sponsorships.enabled;
+    if (current.hasSponsorshipsEnabled !== enabled) {
+      const response = await args.adminGH.graphql<unknown>("mutation($repositoryId:ID!,$enabled:Boolean!){updateRepository(input:{repositoryId:$repositoryId,hasSponsorshipsEnabled:$enabled}){repository{id hasSponsorshipsEnabled}}}", { repositoryId: current.id, enabled });
+      const result = z.object({ updateRepository: z.object({ repository: SponsorshipState }) }).safeParse(response);
+      if (!result.success || result.data.updateRepository.repository.id !== current.id || result.data.updateRepository.repository.hasSponsorshipsEnabled !== enabled) {
+        throw new Rejection("sponsorship mutation did not confirm the requested repository setting");
+      }
+      sponsorshipsUpdated = 1;
+    }
   }
   if (inspection.changes.immutableReleases) {
     await args.adminGH.request("PUT /repos/{owner}/{repo}/immutable-releases", address);
@@ -303,7 +317,7 @@ export async function applyRepoSettings(args: {
       rulesetsUpdated++;
     }
   }
-  return { settingsUpdated, immutableReleasesEnabled, rulesetsUpdated, rulesetsCreated };
+  return { settingsUpdated, sponsorshipsUpdated, immutableReleasesEnabled, rulesetsUpdated, rulesetsCreated };
 }
 
 function validateDispatchPreflight(preflight: DispatchPreflight): void {
@@ -363,4 +377,13 @@ async function isImmutableReleasesEnabled(gh: GitHub, address: ReturnType<typeof
 
 function status(error: unknown): number | undefined {
   return typeof error === "object" && error !== null && "status" in error && typeof error.status === "number" ? error.status : undefined;
+}
+
+const SponsorshipState = z.object({ id: z.string().min(1), hasSponsorshipsEnabled: z.boolean() });
+async function readSponsorships(gh: GitHub, repository: string): Promise<z.infer<typeof SponsorshipState>> {
+  const { owner, repo } = splitRepository(repository);
+  const response = await gh.graphql<unknown>("query($owner:String!,$name:String!){repository(owner:$owner,name:$name){id hasSponsorshipsEnabled}}", { owner, name: repo });
+  const result = z.object({ repository: SponsorshipState }).safeParse(response);
+  if (!result.success) throw new Rejection("repository sponsorship setting is unavailable or invalid");
+  return result.data.repository;
 }
