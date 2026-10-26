@@ -36,6 +36,35 @@ Managed files map literal relative paths to UTF-8 text. Paths cannot contain tra
 
 Configuration comes from the triggering server commit, `GITHUB_SHA`. Discovery intersects the repositories of the Server App installation on the server's owner with `owners` and the first matching `repositories` entry. Repositories under another owner are not discovered. The actions repository is eligible when installed and configured, including when explicitly selected. It remains subject to its fixed all-paths-sensitive policy. An explicit repository selector limits the run to that repository. When the selected set includes the server, its job runs after the client jobs finish, even when one of them failed, so one broken repository cannot stall the server's own repair. Within a repository, settings, rulesets and immutable releases are applied before managed files, so a rejected `csm-ci/repo-settings` branch does not block them.
 
+## Sponsorships
+
+The optional global `repo_settings.sponsorships` block configures the Sponsor button separately from its funding content:
+
+```yaml
+repo_settings:
+  sponsorships:
+    enabled: true
+    github: [your-sponsors-login]
+```
+
+`enabled` is required and accepts `true` or `false`. Omission of the block leaves the button setting unmanaged. The optional `github` list contains one to four explicit recipient logins. No account is inferred from the repository owner. Each login has 1 to 39 ASCII alphanumeric characters or single hyphens between alphanumeric characters. Empty values, whitespace, URLs, leading `@`, invalid characters, leading or trailing hyphens, consecutive hyphens, and case-insensitive duplicates are rejected. Logins are normalized to lowercase in their configured order. Four total recipients is the supported subset here, not GitHub's platform limit. Syntax validation does not prove that an account exists or accepts sponsorships.
+
+When `github` is present, the server generates the entire `.github/FUNDING.yml` with a quoted YAML list and a trailing newline:
+
+```yaml
+github: ["your-sponsors-login"]
+```
+
+Generation also runs with `enabled: false`, which allows a funding PR before button activation. Omitting `github` leaves funding content unmanaged by the generator, even when the button is enabled. A literal managed funding file can be distributed in that case. This also applies to a Server-source additional file when that feature is available. Configuring a managed file at `.github/FUNDING.yml` while `github` is present fails validation; neither producer overrides the other. The combined desired file set uses the existing path, file-count, and byte limits.
+
+Generated content replaces existing recipients and all unconfigured funding providers through the normal managed-file PR. The server does not merge existing provider entries or write directly to default. Removing `github` or the entire block preserves the existing file. An outstanding managed PR that changed the removed path follows the same recovery procedure as other removed managed files in [Configuration](#configuration).
+
+In `reconcile`, the existing target-scoped administration token reads the repository node ID and `hasSponsorshipsEnabled` through GraphQL. The server reports drift and repairs it through `updateRepository`, using `repositoryId` and `hasSponsorshipsEnabled`. Missing or invalid fields and API errors fail the run. A repeat with no drift makes no sponsorship mutation. Existing final revalidation still applies. A lost mutation response requires a state read before another write. `managed-files-only` proposes the same funding content without reading or changing the setting or minting an administration token.
+
+The setting result and funding-file PR result are separate. An enabled setting with a pending PR is not completed funding setup. The generated file reaches default only after normal review, CI, approval, and protected merging. An exact repeat reuses the PR and head; matching default-branch content needs no PR. GraphQL `fundingLinks` exposes resolved funding links, not a recipient-write API or proof that a pending PR has merged. See [GitHub's sponsor-button documentation](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/displaying-a-sponsor-button-in-your-repository) and [GraphQL repository reference](https://docs.github.com/en/graphql/reference/repos#updaterepositoryinput).
+
+Implementation must verify setting changes with the existing Server App and record testing-repository run URLs, generated PRs, repeat behavior, and merged default-branch content in `docs/handoff.md`. Permission failures remain errors. Only the operator changes App permissions or credentials. Production recipients must come from explicit reviewed Server configuration.
+
 ## Rulesets and emergency stop
 
 The rulesets have fixed meanings from the [security specification](first-release-plan.md#s6-placement-of-secrets-and-permissions):
