@@ -18,7 +18,7 @@ inputs:
     required: true
 outputs:
   result:
-    description: success or failure.
+    description: success, failure, or skipped when the pull request closed or its head changed.
 runs:
   using: node24
   main: ../../../dist/server-policy-check.js

@@ -9,14 +9,17 @@ const head = "a".repeat(40);
 const pull: PullFacts = { number: 12, state: "open", draft: false, headSha: head, headRepository: "owner/repo", baseRepository: "owner/repo", baseRef: "main", defaultBranch: "main", authorId: 10 };
 const base = "/repos/owner/repo";
 
-function setup(checkRuns: unknown[]) {
+function setup(checkRuns: unknown[], current = { state: "open", head: { sha: head } }, commits: unknown[] = [{ sha: head, commit: { verification: { verified: true } }, author: { id: 10, login: "alice" }, committer: { id: 10, login: "alice" } }], pullStatus = 200) {
   const sent: { method: string; path: string; body: Record<string, unknown> }[] = [];
+  const reads: string[] = [];
   const fetch = (async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
     const method = (init?.method ?? "GET").toUpperCase();
+    if (method === "GET") reads.push(url.pathname);
     if (init?.body) sent.push({ method, path: url.pathname, body: JSON.parse(String(init.body)) as Record<string, unknown> });
     const routes = [
-      { method: "GET", path: `${base}/pulls/12/commits`, body: [{ sha: head, commit: { verification: { verified: true } }, author: { id: 10, login: "alice" }, committer: { id: 10, login: "alice" } }] },
+      { method: "GET", path: `${base}/pulls/12/commits`, body: commits },
+      { method: "GET", path: `${base}/pulls/12`, body: current, status: pullStatus },
       { method: "GET", path: `${base}/commits/${head}/check-runs`, body: checkRuns },
       { method: "POST", path: `${base}/check-runs`, status: 201, body: { id: 99 } },
       { method: "PATCH", path: `${base}/check-runs/7`, body: { id: 7 } },
@@ -24,7 +27,7 @@ function setup(checkRuns: unknown[]) {
     const route = routes.find((r) => r.method === method && r.path === url.pathname);
     return route ? new Response(JSON.stringify(route.body), { status: route.status ?? 200, headers: { "content-type": "application/json" } }) : new Response(JSON.stringify({ message: "Not Found" }), { status: 404, headers: { "content-type": "application/json" } });
   }) as typeof globalThis.fetch;
-  return { server: github("token", fetch), sent };
+  return { server: github("token", fetch), sent, reads };
 }
 
 describe("updatePolicyCheck", () => {
@@ -42,6 +45,42 @@ describe("updatePolicyCheck", () => {
     ]);
     const results = await evaluatePullPolicies({ server: github("token", fetch), config: protectedConfig, repository: "owner/server", pull });
     expect(results.find((result) => result.type === "sensitive-paths")).toEqual({ type: "sensitive-paths", ok: false, problems: ["sensitive paths need a trusted approver's /approve: ordinary.txt"] });
+  });
+
+  test.each([[[]], [[{ id: 7, name: "csm-ci/policy", external_id: head, app: { id: 1 } }]]])("skips a closed PR without evaluating or publishing, checks %j", async (checks) => {
+    const { server, sent, reads } = setup(checks, { state: "closed", head: { sha: head } }, []);
+    const outcome = await updatePolicyCheck({ server, config: config(), repository: "owner/repo", pull: { ...pull, state: "closed" } });
+    expect(outcome).toEqual({ result: "skipped", reason: "#12 is closed" });
+    expect(sent).toEqual([]);
+    expect(reads).toEqual([]);
+  });
+
+  const races = [
+    ["closure", { state: "closed", head: { sha: head } }, "#12 closed before policy publication"],
+    ["head change", { state: "open", head: { sha: "b".repeat(40) } }, "#12 head moved before policy publication"],
+  ] as const;
+  test.each(races)("skips publication after %s during evaluation", async (_name, current, reason) => {
+    for (const checks of [[], [{ id: 7, name: "csm-ci/policy", external_id: head, app: { id: 1 } }]]) {
+      const { server, sent, reads } = setup(checks, current);
+      expect(await updatePolicyCheck({ server, config: config(), repository: "owner/repo", pull })).toEqual({ result: "skipped", reason });
+      expect(sent).toEqual([]);
+      expect(reads.at(-1)).toBe(`${base}/pulls/12`);
+    }
+  });
+
+  test.each([403, 404, 422, 500])("propagates final PR read failure %s without publishing", async (status) => {
+    const { server, sent } = setup([], undefined, undefined, status);
+    await expect(updatePolicyCheck({ server, config: config(), repository: "owner/repo", pull })).rejects.toMatchObject({ status });
+    expect(sent).toEqual([]);
+  });
+
+  test("an open PR with no commits still publishes both trust failures", async () => {
+    const { server, sent } = setup([], undefined, []);
+    expect(await updatePolicyCheck({ server, config: config(), repository: "owner/repo", pull })).toEqual({ result: "published", results: [
+      { type: "signed-commits", ok: false, problems: ["pull request has no commits"] },
+      { type: "trusted-committers", ok: false, problems: ["pull request has no commits"] },
+    ] });
+    expect(sent[0]?.body.conclusion).toBe("failure");
   });
 
   test("creates a current-head check run with the Server App and a result table", async () => {

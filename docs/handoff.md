@@ -545,6 +545,8 @@ The harness runs in this order.
 
 ### 7.3 Cautions when writing scenarios
 
+The issue #72 regression uses the current session's authorization for necessary live e2e to reset only the just-created, harness-owned ephemeral testing-client PR branch to testing-client `main`. It resets while the PR is open because GitHub retains the old head snapshot after an explicit close; GitHub may then close the zero-commit PR automatically. This authorization excludes production branches and shared managed refs such as `release/next` and `csm-ci/repo-settings`; the historical live coverage gaps for existing securefix route and release branches remain. This setup observation does not establish a passing candidate feature suite.
+
 - **Cleanup:** Open PRs with `withPr` (`e2e/approve.ts`), and close the PR and delete the branch in `finally`. If you kill the process, PRs stay open. Close the open PRs on branches that start with `e2e-`.
 
   ```bash

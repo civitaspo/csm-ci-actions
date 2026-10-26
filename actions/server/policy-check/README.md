@@ -18,7 +18,7 @@ Read [policy-check behavior](../../../docs/policy-check.md) for default trust ru
 
 | Output | Value |
 |---|---|
-| `result` | `success` or `failure`. |
+| `result` | `success`, `failure`, or `skipped` when the pull request closed or its head changed. |
 
 ## Use in the server workflow
 

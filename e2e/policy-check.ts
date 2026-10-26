@@ -95,6 +95,38 @@ export const policyCheck: Scenario[] = [
     }),
   },
   {
+    name: "a delayed request after resetting a PR to main and closing it leaves shared-SHA checks untouched",
+    run: async (ctx) => {
+      const { pr, since } = await openPolicyPr(ctx, "signed");
+      try {
+        await expectPolicy(ctx, pr, since, "success");
+        const { data: main } = await ctx.gh.rest.git.getRef({ ...splitRepository(CLIENT), ref: "heads/main" });
+        await ctx.gh.rest.git.updateRef({ ...splitRepository(CLIENT), ref: `heads/${pr.branch}`, sha: main.object.sha, force: true });
+        const reset = await until("the PR head reset to main", async () => {
+          const { data: current } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
+          return current.head.sha === main.object.sha && current.base.sha === main.object.sha && current.commits === 0 ? current : undefined;
+        });
+        if (reset.state === "open") await ctx.gh.rest.pulls.update({ ...splitRepository(CLIENT), pull_number: pr.number, state: "closed" });
+        await until("the closed PR retains the zero-commit head", async () => {
+          const { data: current } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
+          return current.state === "closed" && current.head.sha === main.object.sha && current.base.sha === main.object.sha && current.commits === 0 ? current : undefined;
+        });
+        const snapshot = async () => {
+          const checks = await ctx.gh.paginate(ctx.gh.rest.checks.listForRef, { ...splitRepository(CLIENT), ref: main.object.sha, per_page: 100 });
+          return JSON.stringify(checks.filter((check) => check.name === "csm-ci/policy" && Number(check.app?.id) === SERVER_APP_ID).sort((a, b) => String(a.id).localeCompare(String(b.id))));
+        };
+        const before = await snapshot();
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const request = await smokeRequest(ctx, "policy-check", String(pr.number));
+          await expectOp(ctx, { kind: "policy-check", repository: CLIENT, args: { pull_number: pr.number }, label: request.label }, request.since, "success", /Policy check skipped: #[0-9]+ is closed/);
+          assert(await snapshot() === before, "the closed PR request created or overwrote a policy check on main");
+        }
+      } finally {
+        await closePolicyPr(ctx, pr);
+      }
+    },
+  },
+  {
     name: "an unsigned commit fails the signed-commits policy",
     run: async (ctx) => {
       const { pr, since } = await openPolicyPr(ctx, "unsigned");

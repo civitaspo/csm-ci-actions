@@ -14,7 +14,13 @@ async function main(): Promise<void> {
   const server = github(core.getInput("server-token", { required: true }));
   const repository = core.getInput("repository", { required: true });
   const pull = await fetchPull(server, repository, Number(core.getInput("pull-number", { required: true })));
-  const results = await runPolicyCheck({ server, config, repository, pull });
+  const outcome = await runPolicyCheck({ server, config, repository, pull });
+  if (outcome.result === "skipped") {
+    core.setOutput("result", "skipped");
+    core.info(`Policy check skipped: ${outcome.reason}`);
+    return;
+  }
+  const results = outcome.results;
   core.setOutput("result", results.every((r) => r.ok) ? "success" : "failure");
   core.info(policySummary(results));
 }
