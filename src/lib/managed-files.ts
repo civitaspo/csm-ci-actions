@@ -66,7 +66,7 @@ export function validateManagedFiles(files: Readonly<Record<string, string>>): M
   return entries;
 }
 
-function validateManagedPath(path: string): void {
+export function validateManagedPath(path: string): void {
   if (path.length === 0 || path.startsWith("/") || /^[A-Za-z]:/u.test(path) || path.includes("\\") || /[\u0000-\u001f\u007f]/u.test(path)) {
     throw new Rejection(`managed file path ${JSON.stringify(path)} is absolute or contains a control character`);
   }
@@ -169,9 +169,10 @@ async function readFileAtRef(gh: GitHub, owner: string, repo: string, path: stri
   return { content: Buffer.from(data.content.replaceAll("\n", ""), "base64").toString("utf8") };
 }
 
-async function findTreeEntry(gh: GitHub, owner: string, repo: string, path: string, ref: string): Promise<GitTreeEntry | null> {
+export async function findTreeEntry(gh: GitHub, owner: string, repo: string, path: string, ref: string): Promise<GitTreeEntry | null> {
   const { data: commit } = await gh.rest.repos.getCommit({ owner, repo, ref });
   let treeSha = commit.commit.tree.sha;
+  if (!treeSha) throw new Rejection("managed files commit has no Git tree SHA");
   const segments = path.split("/");
   for (const [index, segment] of segments.entries()) {
     const { data: tree } = await gh.rest.git.getTree({ owner, repo, tree_sha: treeSha });

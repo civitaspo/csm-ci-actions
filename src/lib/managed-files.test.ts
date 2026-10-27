@@ -209,7 +209,7 @@ describe("inspectManagedFiles", () => {
   });
 
   test.each([false, true])("creates the managed branch and PR without resetting, generated funding=%s", async (funding) => {
-    const files = funding ? repoSettingsManagedFiles({ managed_files: {}, sponsorships: { enabled: false, github: ["user"] } }) : input.files;
+    const files = funding ? repoSettingsManagedFiles({ additional_managed_files: {}, sponsorships: { enabled: false, github: ["user"] } }) : input.files;
     const read = githubFixture({ targetMissing: true, funding });
     let createdRef = false;
     let createdPr = false;
@@ -241,7 +241,7 @@ describe("inspectManagedFiles", () => {
   });
 
   test("generated funding reuses an exact existing PR and needs no PR when default matches", async () => {
-    const files = repoSettingsManagedFiles({ managed_files: {}, sponsorships: { enabled: true, github: ["user"] } });
+    const files = repoSettingsManagedFiles({ additional_managed_files: {}, sponsorships: { enabled: true, github: ["user"] } });
     const content = files[".github/FUNDING.yml"] ?? "";
     const existing = await inspectManagedFiles(githubFixture({ funding: true, targetContent: content }), { ...input, files });
     expect(existing.changedPaths).toEqual([".github/FUNDING.yml"]);

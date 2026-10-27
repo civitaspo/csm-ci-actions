@@ -80,12 +80,17 @@ const Sponsorships = z.strictObject({
     .min(1).max(4).refine((logins) => new Set(logins).size === logins.length, "duplicate GitHub recipient login").optional(),
 });
 
-export function repoSettingsManagedFiles(settings: { managed_files: Record<string, string>; sponsorships?: z.infer<typeof Sponsorships> | undefined } | undefined): Record<string, string> {
+export function repoSettingsManagedFiles(settings: { additional_managed_files: Record<string, string>; sponsorships?: z.infer<typeof Sponsorships> | undefined } | undefined, files: Record<string, string> = {}): Record<string, string> {
   const recipients = settings?.sponsorships?.github;
-  return { ...settings?.managed_files, ...(recipients ? { ".github/FUNDING.yml": `github: [${recipients.map((login) => JSON.stringify(login)).join(", ")}]\n` } : {}) };
+  return { ...files, ...(recipients ? { ".github/FUNDING.yml": `github: [${recipients.map((login) => JSON.stringify(login)).join(", ")}]\n` } : {}) };
 }
 
-const RepoSettings = z.strictObject({
+const RepoSettings = z.preprocess((input, ctx) => {
+  if (typeof input === "object" && input !== null && Object.hasOwn(input, "managed_files")) {
+    ctx.addIssue({ code: "custom", message: "managed_files was removed: commit inline contents as Server source files and replace the key with repo_settings.additional_managed_files" });
+  }
+  return input;
+}, z.strictObject({
   sponsorships: Sponsorships.optional(),
   settings: z.strictObject({
     delete_branch_on_merge: z.boolean().optional(),
@@ -97,35 +102,28 @@ const RepoSettings = z.strictObject({
     has_projects: z.boolean().optional(),
     allow_update_branch: z.boolean().optional(),
   }).optional(),
-  managed_files: z.record(z.string(), z.string()).default({}),
+  additional_managed_files: z.record(z.string(), z.string()).default({}),
 }).superRefine((value, ctx) => {
-  if (value.sponsorships?.github && Object.hasOwn(value.managed_files, ".github/FUNDING.yml")) {
-    ctx.addIssue({ code: "custom", path: ["managed_files", ".github/FUNDING.yml"], message: "destination is reserved by sponsorships.github" });
+  if (value.sponsorships?.github && Object.hasOwn(value.additional_managed_files, ".github/FUNDING.yml")) {
+    ctx.addIssue({ code: "custom", path: ["additional_managed_files", ".github/FUNDING.yml"], message: "destination is reserved by sponsorships.github" });
   }
-  const files = repoSettingsManagedFiles(value);
+  const files = repoSettingsManagedFiles(value, value.additional_managed_files);
   const paths = Object.keys(files);
-  if (paths.length > 512) ctx.addIssue({ code: "custom", path: ["managed_files"], message: "must contain at most 512 files" });
-  let totalBytes = 0;
+  if (paths.length > 512) ctx.addIssue({ code: "custom", path: ["additional_managed_files"], message: "must contain at most 512 files" });
   for (const path of paths) {
-    const content = files[path] ?? "";
-    const bytes = new TextEncoder().encode(content).byteLength;
-    totalBytes += bytes;
     if (!isSafeManagedFilePath(path)) {
-      ctx.addIssue({ code: "custom", path: ["managed_files", path], message: "must be a safe literal relative file path" });
-    }
-    if (bytes > 8 * 1024 * 1024) {
-      ctx.addIssue({ code: "custom", path: ["managed_files", path], message: "file must be at most 8 MiB" });
+      ctx.addIssue({ code: "custom", path: ["additional_managed_files", path], message: "must be a safe literal relative file path" });
     }
   }
-  if (totalBytes > 10 * 1024 * 1024) {
-    ctx.addIssue({ code: "custom", path: ["managed_files"], message: "total file content must be at most 10 MiB" });
+  for (const source of Object.values(value.additional_managed_files)) {
+    if (!isSafeManagedFilePath(source)) ctx.addIssue({ code: "custom", path: ["additional_managed_files", source], message: "source must be a safe literal relative file path" });
   }
   for (const path of paths) {
     if (paths.some((other) => other !== path && other.startsWith(`${path}/`))) {
-      ctx.addIssue({ code: "custom", path: ["managed_files", path], message: "file paths must not contain a file as a directory prefix" });
+      ctx.addIssue({ code: "custom", path: ["additional_managed_files", path], message: "file paths must not contain a file as a directory prefix" });
     }
   }
-});
+}));
 export type RepoSettingsConfig = z.infer<typeof RepoSettings>;
 
 function isSafeManagedFilePath(path: string): boolean {

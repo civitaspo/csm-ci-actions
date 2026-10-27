@@ -260,6 +260,8 @@ Pushes infer the version through git-cliff. Manual dispatches may supply an exac
 
 Install the approver App on the server as well as the clients before enabling controlled merges there. Add the client approval, policy-check, and merge callers to the server too, using the same Client App variables and key as other clients. Its label caller handles incoming requests, while its client callers submit requests for its own pull requests. Add the global [`repo_settings` configuration](repo-settings.md) and ensure the server is included in `repositories`.
 
+Use `additional_managed_files` to map literal target paths to UTF-8 files committed in this Server repository, for example `.github/PULL_REQUEST_TEMPLATE.md: managed-files/pull-request-template.md`. Sources are relative to the repository root even with a nested `config-path`, and are read at the same immutable Server commit as configuration. No templating occurs. The combined delivered set allows 512 files, 8 MiB per file and 10 MiB total. Removing an entry preserves the target file. Existing inline deployments must follow the [staged migration](repo-settings.md#migrate-deployed-inline-content) before upgrading all parser pins; `managed_files` is rejected.
+
 Add `.github/workflows/csm-ci-repo-settings.yml` to the server's default branch:
 
 ```yaml

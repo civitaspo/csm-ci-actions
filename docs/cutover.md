@@ -69,7 +69,7 @@ From here on, every change to `csm-ci-server` goes through a pull request, `/app
 
 ## 5. Enable repo-settings on the server
 
-1. In one pull request, add the `repo_settings` block ([repo-settings.md](repo-settings.md)) with `managed_files: {}`, and `.github/workflows/csm-ci-repo-settings.yml` from [setup.md section 6](setup.md#6-add-repository-settings-reconciliation). Its schedule may fire as soon as it merges, so merge it when you are ready to do step 5.2.
+1. In one pull request, add the `repo_settings` block ([repo-settings.md](repo-settings.md)) with `additional_managed_files: {}`, and `.github/workflows/csm-ci-repo-settings.yml` from [setup.md section 6](setup.md#6-add-repository-settings-reconciliation). Its schedule may fire as soon as it merges, so merge it when you are ready to do step 5.2.
 2. Dispatch `csm-ci-repo-settings` with `repository: <owner>/csm-ci-server`. It creates `integrity`, `review-and-checks`, `controlled-merges` and `release-tags`, activates `controlled-merges` after its preflight, and enables immutable releases.
 3. Check: `gh api repos/<owner>/csm-ci-server/rulesets --jq '.[] | [.name, .enforcement]'` shows the four rulesets active, and `gh api repos/<owner>/csm-ci-server/immutable-releases` shows `"enabled": true`. Repeat check 4.2 with another small pull request.
 

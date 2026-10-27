@@ -72,18 +72,18 @@ Do not add caller-level concurrency that cancels unrelated labels. The reusable 
 Repository protection and file distribution are different parts of setup:
 
 - `controlled-merges` is a GitHub ruleset that limits default-branch updates to PR merges by the Server App, so changes go through the server's `/merge` validation. Other rulesets enforce required checks and release-tag protection.
-- `managed-files-only` is an execution mode of the repository-settings workflow. It opens or updates PRs containing files specified by `managed_files` in `csm-ci.yaml`, without changing repository settings or protection rules. Use it to distribute the required client workflows before enabling protection.
+- `managed-files-only` is an execution mode of the repository-settings workflow. It opens or updates PRs containing files specified by `additional_managed_files` in `csm-ci.yaml`, without changing repository settings or protection rules. Use it to distribute the required client workflows before enabling protection.
 
 Follow this order for a new client:
 
 1. Create and install the Apps and store credentials as described in [setup](docs/setup.md) and [trust and credentials](#trust-and-credentials).
-2. Add the target repository and enabled operations to the server's `csm-ci.yaml`. Add the server callers above. Configure `managed_files` with the client workflow files you want to distribute, including the merge and policy-check callers required for protection.
+2. Add the target repository and enabled operations to the server's `csm-ci.yaml`. Add the server callers above. Commit the client workflow source files in the Server repository outside `.github/workflows/`. Configure `additional_managed_files` to map each target workflow path to its Server source path, including the merge and policy-check callers required for protection.
 3. Dispatch `server-repo-settings.yml` through its caller with `mode: managed-files-only`. It opens a `csm-ci/repo-settings` PR in each configured target, or the selected `repository`.
 4. Review and merge those PRs through the repository's current process. Confirm the client workflows are on the default branch and the configured required checks run.
 5. Dispatch the same caller with `mode: reconcile`. It checks the activation prerequisites, applies repository settings and rulesets, and reconciles managed files. A failed activation preflight stops administrative changes.
 6. Use `/merge` on PRs during normal operation. The client merge workflow sends the request; the server checks the requester, approval, policies, and required checks before the Server App squash-merges the PR.
 
-The `managed_files` map distributes any configured, permitted file contents as literal text. It does not expand templates or create Apps, installations, variables, or secrets. See [repository settings](docs/repo-settings.md) for the configuration shape and activation prerequisites, and [client callers](docs/setup.md#5-add-the-client-workflows) for the event filters each operation needs. Securefix runs as a step after the client's tools rather than as a separate thin workflow.
+The `additional_managed_files` map copies UTF-8 source contents from the same Server commit as `csm-ci.yaml`. Source paths start at the Server repository root, even with a nested configuration path. It does not expand templates or create Apps, installations, variables, or secrets. Existing inline deployments must follow the [staged migration](docs/repo-settings.md#migrate-deployed-inline-content) before upgrading parser pins. See [repository settings](docs/repo-settings.md) for the configuration shape and activation prerequisites, and [client callers](docs/setup.md#5-add-the-client-workflows) for the event filters each operation needs. Securefix runs as a step after the client's tools rather than as a separate thin workflow.
 
 Add the following caller to the server's default branch. Manual dispatch defaults to bootstrap; the daily schedule reconciles settings:
 

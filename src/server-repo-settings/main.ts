@@ -1,5 +1,5 @@
 import * as core from "@actions/core";
-import { repoSettingsManagedFiles } from "../lib/config.ts";
+import { loadAdditionalManagedFiles } from "../lib/additional-managed-files.ts";
 import { applyManagedFiles, inspectManagedFiles } from "../lib/managed-files.ts";
 import { applyRepoSettings, discoverRepoSettingsTargets, inspectRepoSettings, inspectRepoSettingsPreflight } from "../lib/repo-settings.ts";
 import { github, loadConfig, splitRepository } from "../lib/github.ts";
@@ -89,7 +89,7 @@ async function main(): Promise<void> {
   }
   if (mode === "managed-inspect" || mode === "managed-apply") {
     const { data: repo } = await readGH.rest.repos.get(address);
-    const files = repoSettingsManagedFiles(config.repo_settings);
+    const files = await loadAdditionalManagedFiles(configGH, { repository: serverRepository, sha: env("GITHUB_SHA"), settings: config.repo_settings });
     if (mode === "managed-inspect") {
       const result = await inspectManagedFiles(readGH, { repository: target.name, defaultBranch: repo.default_branch, serverBotId: config.apps.server_bot_id, files });
       core.setOutput("result", result.status);

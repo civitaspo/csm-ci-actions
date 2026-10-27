@@ -17,11 +17,8 @@ repo_settings:
     has_wiki: false
     has_projects: false
     allow_update_branch: true
-  managed_files:
-    .github/PULL_REQUEST_TEMPLATE.md: |
-      ## Why
-
-      ## Verification
+  additional_managed_files:
+    .github/PULL_REQUEST_TEMPLATE.md: managed-files/pull-request-template.md
 ```
 
 Omitted repository settings remain unchanged. The merge-method settings accept only the values shown above.
@@ -34,7 +31,7 @@ Inspection reports drift for each configured field and fails if a configured fie
 
 When `allow_squash_merge` is explicitly `true`, reconciliation also enforces `squash_merge_commit_title: PR_TITLE` and `squash_merge_commit_message: PR_BODY`. These fixed values use the pull request title and description for both single-commit and multi-commit squash merges. Do not add these fields to `csm-ci.yaml`; they are implied by `allow_squash_merge: true`. Inspection reports drift in each field and fails if either field is missing. Sync repairs either field even when squash merging is already enabled. A repeat with no further settings drift makes no settings write. If `allow_squash_merge` or the entire `settings` block is omitted, both fields remain unchanged, even when the repository already allows squash merges. The fixed rulesets still apply.
 
-The currently deployed `managed_files` format maps literal relative paths to inline UTF-8 text. Its planned replacement and required migration are defined in [Additional managed files](#additional-managed-files-planned). Paths cannot contain traversal, Git metadata, glob syntax, or conflicting parent and child file names. Files use the securefix size limits. Removing a path from configuration stops managing it; it does not delete the file. If `csm-ci/repo-settings` still holds a commit that changed the removed path, a later run that needs to reuse it rejects the branch as changing an unmanaged path. Verify ownership before closing its pull request and deleting that owned branch. The next run starts it again from the default branch. An empty desired set or matching default content needs no branch reuse and does not prove ownership of an existing branch.
+`additional_managed_files` maps literal destinations to committed Server source files. See [Additional managed files](#additional-managed-files) for exact-commit loading, limits and migration. Removing a destination stops managing it and never deletes it. A pending managed branch that changed a removed path fails its existing history check when reuse is needed. Verify ownership before closing its pull request and deleting the owned branch; the next run starts from default. An empty desired set or matching default content needs no branch reuse and does not establish ownership of an existing branch.
 
 Configuration comes from the triggering server commit, `GITHUB_SHA`. Discovery intersects the repositories of the Server App installation on the server's owner with `owners` and the first matching `repositories` entry. Repositories under another owner are not discovered. The actions repository is eligible when installed and configured, including when explicitly selected. It remains subject to its fixed all-paths-sensitive policy. An explicit repository selector limits the run to that repository. When the selected set includes the server, its job runs after the client jobs finish, even when one of them failed, so one broken repository cannot stall the server's own repair. Within a repository, settings, rulesets and immutable releases are applied before managed files, so a rejected `csm-ci/repo-settings` branch does not block them.
 
@@ -150,11 +147,11 @@ Run all required local gates and independent specification review. Run affected 
 
 The latest stable release observed on 2026-10-26 is `v0.1.0`, whose prepare interface lacks the required root-version input and explicit Secret contracts. An intended compatible stable release is a deployment gate. Review its exact release PR and candidate under the normal checks and obtain publication authorization. Do not publish a throwaway release or choose an arbitrary version for this generator. The release need not contain the generator if the deployed runtime does, but its client interfaces must support every emitted caller and preserve deployed client behavior. Full-SHA tests cannot satisfy the published-stable acceptance case. Report that gap until an authorized intended release exists. This specification itself authorizes no publication, credential, App permission, or production configuration change and requires no live e2e.
 
-## Additional managed files, planned
+## Additional managed files
 
-This is the planned contract for [issue #78](https://github.com/civitaspo/csm-ci-actions/issues/78), not behavior available at current parser pins. A separate implementation and the migration below must complete before using `additional_managed_files`. Until then, keep the deployed inline configuration above.
+The runtime implements [issue #78](https://github.com/civitaspo/csm-ci-actions/issues/78). Upgrade every strict parser pin through the migration below before deploying this schema. Older deployed readers may still require the removed inline format.
 
-After deployment, the optional global map associates each target destination with a source file committed in the Server repository:
+The optional global map associates each target destination with a source file committed in the Server repository:
 
 ```yaml
 repo_settings:
