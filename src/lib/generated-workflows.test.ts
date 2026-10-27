@@ -23,7 +23,8 @@ for (let mask = 0; mask < 32; mask++) {
       const workflow = parse(text);
       expect(text).toContain(`v1.2.3 (${revision.sha})`);
       expect(workflow.permissions).toEqual({});
-      expect(workflow.jobs[caller].uses).toContain(`@${revision.sha}`);
+      expect(workflow.jobs[caller].uses).toBe(`civitaspo/csm-ci-actions/.github/workflows/${STANDARD_CALLERS[caller as keyof typeof STANDARD_CALLERS]}@${revision.sha}`);
+      expect(text).toContain(`@${revision.sha} # v1.2.3\n`);
       expect(workflow.jobs[caller].secrets).toEqual({ CSM_CI_CLIENT_APP_PRIVATE_KEY: "${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}" });
       expect(workflow.concurrency).toBeUndefined();
       if (caller === "release-pr") {

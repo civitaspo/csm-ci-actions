@@ -136,6 +136,13 @@ test.each([
   expect(f.requests.filter(({ body }) => typeof body === "object" && body !== null && "query" in body && typeof body.query === "string" && body.query.startsWith("mutation"))).toEqual([]);
 });
 
+test("accepts an owned file whose bytes already equal the desired output", async () => {
+  const f = fixture({ contents: { [defaultSha]: { [path]: "new" } } });
+  const result = await inspectGeneratedWorkflows(f.gh, { ...base, generated, additional: {} });
+  expect(result.record.files).toEqual({ [path]: digest("new") });
+  expect(result.deletions).toEqual([]);
+});
+
 test.each(["active", "deletion"])("rejects additional producer collision with %s", async (kind) => {
   await expect(inspectGeneratedWorkflows(fixture().gh, { ...base, generated: kind === "active" ? generated : { ...generated, files: {} }, additional: { [path]: "new" } })).rejects.toThrow(`managed files contain duplicate producer destination "${path}"`);
 });

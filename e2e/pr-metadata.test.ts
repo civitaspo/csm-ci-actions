@@ -274,6 +274,18 @@ describe("generated output contract before annotation", () => {
   test("accepts the complete original output", () => {
     expect(() => assertGeneratedMetadata({ title: "expected", body: "generated" }, { title: "expected", body: "generated" })).not.toThrow();
   });
+  test.each([
+    ["the plain managed body", "", true],
+    ["a released-revision line", `\n\nStandard client workflows: v0.2.0 (${"a".repeat(40)}).`, true],
+    ["a short SHA", "\n\nStandard client workflows: v0.2.0 (abc1234).", false],
+    ["an appended edit", `\n\nStandard client workflows: v0.2.0 (${"a".repeat(40)}).\nmore`, false],
+  ])("managed metadata accepts %s: %j", async (_name, suffix, ok) => {
+    const body = `Update files managed by csm-ci.\n\n<!-- csm-ci:repo-settings:managed-files -->${suffix}`;
+    const gh = github("test", fakeFetch([{ method: "GET", path: `${repo}/pulls/17`, body: { title: MANAGED_FILES_TITLE, body } }]));
+    if (ok) await expect(assertManagedMetadata(gh, CLIENT, 17)).resolves.toBeUndefined();
+    else await expect(assertManagedMetadata(gh, CLIENT, 17)).rejects.toThrow("unexpected generated PR body");
+  });
+
   test.each(["title", "body"])("managed metadata failure prevents annotation writes: %s", async (field) => {
     const actual = { title: MANAGED_FILES_TITLE, body: "Update files managed by csm-ci.\n\n<!-- csm-ci:repo-settings:managed-files -->", [field]: "changed" };
     const api = fakeFetch([{ method: "GET", path: `${repo}/pulls/17`, body: actual }]);

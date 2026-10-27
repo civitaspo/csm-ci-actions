@@ -139,7 +139,11 @@ export function assertGeneratedMetadata(actual: { title: string; body: string | 
   if (actual.title !== expected.title) throw new Error("unexpected generated PR title");
   if (actual.body !== expected.body) throw new Error("unexpected generated PR body");
 }
+const MANAGED_BODY = "Update files managed by csm-ci.\n\n<!-- csm-ci:repo-settings:managed-files -->";
+// Generated callers append exactly one released-revision line to the managed body.
+const GENERATED_CALLERS_LINE = /^\n\nStandard client workflows: v\d+\.\d+\.\d+ \([0-9a-f]{40}\)\.$/u;
 export async function assertManagedMetadata(gh: GitHub, repository: string, number: number): Promise<void> {
   const { data } = await gh.rest.pulls.get({ ...splitRepository(repository), pull_number: number });
-  assertGeneratedMetadata(data, { title: MANAGED_FILES_TITLE, body: "Update files managed by csm-ci.\n\n<!-- csm-ci:repo-settings:managed-files -->" });
+  const suffix = data.body?.startsWith(MANAGED_BODY) ? data.body.slice(MANAGED_BODY.length) : "";
+  assertGeneratedMetadata(data, { title: MANAGED_FILES_TITLE, body: GENERATED_CALLERS_LINE.test(suffix) ? MANAGED_BODY + suffix : MANAGED_BODY });
 }
