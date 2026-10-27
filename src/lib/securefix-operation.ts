@@ -2,7 +2,8 @@ import { type Config, type SecurefixRoute } from "./config.ts";
 import { type GitHub, splitRepository } from "./github.ts";
 import { MAX_SECUREFIX_FILE_SIZE, MAX_SECUREFIX_TOTAL_SIZE, SECUREFIX_ARTIFACT, bindSecurefixPullRequest, findSecurefixRoute, readSecurefixArtifact, validateRouteChanges, validateSecurefixRouteCommitFile, validateSecurefixRouteHead, validateSecurefixRun, type SecurefixChange, type SecurefixManifest, type SecurefixRun, SecurefixRunSchema } from "./securefix.ts";
 import { Rejection } from "./request.ts";
-import { GitRefChanged, resetBranchWithLease } from "./git-ref.ts";
+import { GitRefChanged } from "./git-ref.ts";
+import { rebuildBranchWithLease } from "./branch-rebuild.ts";
 import { isServerMadeCommit as verifyServerMadeCommit, loadServerOwnedHistory } from "./server-owned-history.ts";
 
 type Artifact = { id: number; name: string; expired: boolean; size_in_bytes: number };
@@ -101,11 +102,24 @@ export async function applySecurefix(gh: GitHub, config: Config, repository: str
     return { status: "already-applied", commit, pullRequest };
   }
   const expectedHead = context.run.head_sha;
-  if (context.route) await resetRouteBranch(context, context.route, expectedHead, inspection.routeTargetSha ?? null, writeToken);
+  const rebuild = context.route !== null && inspection.routeTargetSha !== expectedHead;
   let commit: string;
   try {
-    commit = await createCommit(gh, context, branch, expectedHead, manifest.message, changes);
+    commit = rebuild
+      ? await rebuildBranchWithLease({
+          remote: `https://github.com/${context.repository}.git`,
+          sourceBranch: context.run.head_branch,
+          sourceSha: expectedHead,
+          targetBranch: branch,
+          expectedTargetSha: inspection.routeTargetSha ?? null,
+          token: writeToken,
+          temporaryName: "route",
+          commit: (temporaryBranch) => createCommit(gh, context, temporaryBranch, expectedHead, manifest.message, changes),
+          deleteBranch: async (temporaryBranch) => { await gh.rest.git.deleteRef({ owner: context.owner, repo: context.repo, ref: `heads/${temporaryBranch}` }); },
+        })
+      : await createCommit(gh, context, branch, expectedHead, manifest.message, changes);
   } catch (error) {
+    if (error instanceof GitRefChanged) throw new Rejection("securefix route branch or source moved before the conditional reset");
     const applied = await isAlreadyApplied(gh, config, context, changes);
     if (applied) {
       const commit = await branchHead(gh, context, branch);
@@ -115,7 +129,7 @@ export async function applySecurefix(gh: GitHub, config: Config, repository: str
       }
       return { status: "already-applied", commit };
     }
-    if (isCompareAndSwapFailure(error) || await branchHead(gh, context, branch) !== expectedHead) throw new Rejection("the branch moved after the request");
+    if (isCompareAndSwapFailure(error) || (!rebuild && await branchHead(gh, context, branch) !== expectedHead)) throw new Rejection("the branch moved after the request");
     throw error;
   }
   let pullRequest: number | undefined;
@@ -291,23 +305,6 @@ async function validateRouteBranch(gh: GitHub, config: Config, context: Context)
     }
   }
   return targetSha;
-}
-
-async function resetRouteBranch(context: Context, route: SecurefixRoute, expectedHead: string, observedTargetSha: string | null, token: string): Promise<void> {
-  if (observedTargetSha === expectedHead) return;
-  try {
-    await resetBranchWithLease({
-      remote: `https://github.com/${context.repository}.git`,
-      sourceBranch: context.run.head_branch,
-      targetBranch: route.to,
-      sourceSha: expectedHead,
-      expectedTargetSha: observedTargetSha,
-      token,
-    });
-  } catch (error) {
-    if (error instanceof GitRefChanged) throw new Rejection("securefix route branch or source moved before the conditional reset");
-    throw error;
-  }
 }
 
 async function createCommit(gh: GitHub, context: Context, branch: string, expectedHead: string, message: string, changes: readonly SecurefixChange[]): Promise<string> {

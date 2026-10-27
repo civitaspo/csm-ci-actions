@@ -261,7 +261,7 @@ Run the affected approve, policy-check, and merge suites sequentially, then smok
   - Changes stay within `paths`. For files marked `version-only`, we do not use a parser per format. We check only a line-level diff: every changed line must match `^\s*"?version"?\s*[=:]`. This one function covers Cargo, pyproject, and package.json. `.release-version` must be semver.
 - **Server-owned branches** (`release/next`, `csm-ci/repo-settings`)
   - Confirm that every commit after the merge-base is server-made and is a change within range.
-  - Then reset to the head of default and write.
+  - Then build the new commit on a temporary branch at the head of default and move the branch to it in one leased update, so the branch never equals its base and its open pull request stays open.
 
 ### S5. Comment commands (`/approve`, `/merge`)
 
