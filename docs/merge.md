@@ -20,7 +20,7 @@ The client workflow listens for newly created pull request comments whose body i
 
 `bun e2e/run.ts --ref <sha> --feature merge` exercises the merge scenarios against the testing repositories, including an explicitly approved workflow change and its exact merged content.
 
-A deployed server workflow that omits workflows write from its final merge token cannot merge the workflow change that upgrades that token. If `controlled-merges` permits only the Server App, an operator merge cannot bypass that restriction. Bootstrap requires a concrete, separately authorized recovery procedure under the [cutover runbook](cutover.md#rollback-for-one-repository), with the affected settings saved and protection restored afterward. This specification does not authorize changing App permissions or disabling protection.
+A deployed server workflow that omits workflows write from its final merge token cannot merge the workflow change that upgrades that token. If `controlled-merges` permits only the Server App, an operator merge cannot bypass that restriction. Bootstrap requires a concrete, separately authorized recovery procedure under [break glass](repo-settings.md#break-glass), with the affected settings saved and protection restored afterward. This specification does not authorize changing App permissions or disabling protection.
 
 ## Repository permission for Bot requests
 

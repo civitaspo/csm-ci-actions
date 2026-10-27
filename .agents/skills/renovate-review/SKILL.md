@@ -52,7 +52,7 @@ Prepare read-only evidence for the batch, then advance one PR at a time per repo
 3. Revalidate again before a covered `/merge`. A User must be in `trust.mergers`. A Bot must satisfy the effective Bot-request setting, `trust.bot_mergers`, and ownership of the PR and every effective commit identity. Use the existing Server path in [merge](../../../docs/merge.md), with no direct merge or protection bypass.
 4. Wait for the correlated Server run and receipt. Verify GitHub's merge commit and `merged_by` against the configured Server App identity. Then verify post-merge CI and applicable release results.
 5. Refresh the next PR after every merge or rebase. The previous merge changes its base even when its head stays unchanged. Wait for Renovate and current-head checks where needed, then reassess before the next action.
-6. Stop advancement on unexpected changes, a failed gate, an authorization gap, or missing evidence. Inspect current comments, reviews, receipts, and PR state before retrying a write whose response was lost. Use [handoff correlation and cleanup rules](../../../docs/handoff.md#7-using-the-e2e-and-cautions).
+6. Stop advancement on unexpected changes, a failed gate, an authorization gap, or missing evidence. Inspect current comments, reviews, receipts, and PR state before retrying a write whose response was lost. Use [testing correlation and cleanup rules](../../../docs/testing.md#writing-scenarios).
 
 The Server pins the head and validates the default base branch. It does not lease the reviewed base SHA or enforce the agent assessment. External base revalidation reduces stale assessments but cannot make the batch atomic.
 

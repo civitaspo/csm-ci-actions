@@ -86,6 +86,8 @@ repositories:
   - { name: your-account/*, ops: [approve, merge, policy-check] }
 ```
 
+Prefer an explicit list of repositories in production. A wildcard enrolls every repository the Server App is later installed on, and the next reconcile then requires `csm-ci/policy` on a repository without callers. The first matching entry wins, so keep the server's entry first when you use globs.
+
 The schema rejects unknown keys and rejects the Server or Approver bot in any trust list. Every operation reads `csm-ci.yaml` from the triggering server commit, `GITHUB_SHA`; merge readiness reloads it from the current default branch.
 
 ## Explicit secret contract migration
@@ -144,7 +146,7 @@ The example enables approval. If Terraform provider publication is enabled, add 
       CSM_CI_TERRAFORM_PROVIDER_GPG_PASSPHRASE: ${{ secrets.CSM_CI_TERRAFORM_PROVIDER_GPG_PASSPHRASE }}
 ```
 
-Omit feature-specific names when their features are disabled. Keep the Server App key mapping in every label caller. The [isolated probe](handoff.md#explicit-secret-contract-probe) verified environment availability and required mapping validation. Full runtime verification remains a separate rollout gate.
+Omit feature-specific names when their features are disabled. Keep the Server App key mapping in every label caller. The [isolated probe](testing.md#github-behavior-relied-on) verified environment availability and required mapping validation. Full runtime verification remains a separate rollout gate.
 
 `.github/workflows/csm-ci-check.yml` validates `csm-ci.yaml` and lints the workflows on every change:
 

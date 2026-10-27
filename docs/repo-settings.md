@@ -125,7 +125,7 @@ Implement table-driven cases for every selection combination, prepare-only and p
 
 Cover producer collisions with writes and deletions, replacement of differing and header callers, equal-byte no-ops, header deletion at standard and non-standard paths, preservation of files without the first-line header, last-caller deletion, rejected pending histories, recovery, and an unchanged second sync. Assert rejection messages and mutation-check every changed rule. Update fixtures, generated bundles, repo-settings, release, setup, and cutover instructions together.
 
-Run all required local gates and independent specification review. Run affected repo-settings and release-pr feature suites, affected client suites, and smoke at the signed pushed implementation SHA. After an authorized merge, run affected CI suites and smoke through the runner checkout on `main`. Record exact runtime and Server configuration SHAs, generated PRs, run URLs, skips, and restoration in `docs/handoff.md`.
+Run all required local gates and independent specification review. Run affected repo-settings and release-pr feature suites, affected client suites, and smoke at the signed pushed implementation SHA. After an authorized merge, run affected CI suites and smoke through the runner checkout on `main`. Record exact runtime and Server configuration SHAs, generated PRs, run URLs, skips, and restoration in the PR.
 
 The latest stable release observed on 2026-10-27 is `v0.1.0`, whose prepare interface lacks the required root-version input and explicit Secret contracts. An intended compatible stable release is a deployment gate. Review its exact release PR and candidate under the normal checks and obtain publication authorization. Do not publish a throwaway release or choose an arbitrary version for this generator. The release need not contain the generator if the deployed runtime does, but its client interfaces must support every emitted caller and preserve deployed client behavior. Full-SHA tests cannot satisfy the published-stable acceptance case. Report that gap until an authorized intended release exists. The runtime does not authorize publication, credential, App permission, or production configuration changes. Live e2e remains required after the compatible stable release gate.
 
@@ -157,7 +157,7 @@ Source-only changes propose the same signed Server-owned PR updates as inline co
 
 ### Migrate deployed inline content
 
-Perform this procedure only after the runtime has passed the required local checks, independent review, repo-settings live tests, and smoke. Follow [cutover](cutover.md) for production PRs, protections, snapshots, and rollout. This specification does not authorize credential or App permission changes.
+Perform this procedure only after the runtime has passed the required local checks, independent review, repo-settings live tests, and smoke. This specification does not authorize credential or App permission changes.
 
 1. Inventory the inline destinations, exact bytes and caller pins, existing managed branches and open PRs, and current parser workflow revisions. Confirm ownership before any later branch recovery. Drain old configuration-writing runs and recheck queued runs so an older writer cannot race migration.
 2. In a reviewed Server PR, add ordinary source files with those exact inline bytes and omit `managed_files` while retaining repository settings. Keep source copies outside runnable Server workflows. This temporarily pauses additional-file management without changing target files, existing managed branches, or their PRs. An empty desired set makes no file write and does not inspect existing branch ownership. Unrelated managed PRs do not need merging.
@@ -167,7 +167,7 @@ Perform this procedure only after the runtime has passed the required local chec
 
 The final runtime rejects the removed `repo_settings.managed_files` key, including an empty map or both keys together. Its error directs the operator to commit the inline contents as Server files and replace the key with `repo_settings.additional_managed_files`. The migration does not retain two runtime formats.
 
-Implementation must update fixtures and harness configuration rewrites, generated bundles, setup examples, and cutover's empty-map instructions together. Table-driven and mutation tests cover changed rejection rules, exact-commit resolution, preserved bytes, source-only updates, identical retries, removal, and safe existing-PR reuse. Record live evidence and any existing verification gaps in `docs/handoff.md`; this specification has no live execution evidence of its own.
+Implementation must update fixtures and harness configuration rewrites, generated bundles, and setup examples together. Table-driven and mutation tests cover changed rejection rules, exact-commit resolution, preserved bytes, source-only updates, identical retries, removal, and safe existing-PR reuse. Record live evidence and any existing verification gaps in the PR; this specification has no live execution evidence of its own.
 
 ## Sponsorships
 
@@ -198,7 +198,7 @@ When the `settings` target is selected, the existing target-scoped administratio
 
 The inspection reports `changes.sponsorships`, and administration apply reports `sponsorshipsUpdated` separately from `settingsUpdated`. Managed-file inspection and apply retain their separate result and PR number. The setting result and funding-file PR result are separate. An enabled setting with a pending PR is not completed funding setup. The generated file reaches default only after normal review, CI, approval, and protected merging. An exact repeat reuses the PR and head; matching default-branch content needs no PR. GraphQL `fundingLinks` exposes resolved funding links, not a recipient-write API or proof that a pending PR has merged. See [GitHub's sponsor-button documentation](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/displaying-a-sponsor-button-in-your-repository) and [GraphQL repository reference](https://docs.github.com/en/graphql/reference/repos#updaterepositoryinput).
 
-Implementation must verify setting changes with the existing Server App and record testing-repository run URLs, generated PRs, repeat behavior, and merged default-branch content in `docs/handoff.md`. Permission failures remain errors. Only the operator changes App permissions or credentials. Production recipients must come from explicit reviewed Server configuration.
+Implementation must verify setting changes with the existing Server App and record testing-repository run URLs, generated PRs, repeat behavior, and merged default-branch content in the PR. Permission failures remain errors. Only the operator changes App permissions or credentials. Production recipients must come from explicit reviewed Server configuration.
 
 ## Rulesets and emergency stop
 
@@ -221,6 +221,18 @@ A scheduled run does not create `controlled-merges` or activate a disabled rules
 - An existing `controlled-merges` ruleset has only the Server App's `pull_request` bypass.
 
 The checks run only when a dispatch would activate the ruleset. A dispatch for a repository whose `controlled-merges` is already active repairs drift without them. A failed preflight fails the run before administrative changes. App permission proof uses the official token action. The collaborator-permission endpoint does not reliably describe whether an App's approval counts.
+
+A reconcile takes over any existing ruleset that has one of these four names. Before enrolling a repository that already has protection, rename such rulesets (for example to `legacy-<name>`) and remove them once the csm-ci rulesets are active and a protected merge has passed.
+
+To change one field of a ruleset, send the full body, because only omitting `enforcement` is verified to keep the current value:
+
+```bash
+gh api repos/<owner>/<repo>/rulesets/<id> | jq '{name, target, enforcement, conditions, rules, bypass_actors} + {enforcement: "disabled"}' | gh api -X PUT repos/<owner>/<repo>/rulesets/<id> --input -
+```
+
+### Break glass
+
+When csm-ci itself cannot merge, stop repo-settings from touching the repository first, because a scheduled run re-activates `integrity`, `review-and-checks` and `release-tags`. Disable the workflow with `gh workflow disable csm-ci-repo-settings -R <owner>/<server-repo>`, or uninstall the Server App from the repository. Then disable the blocking rulesets with the command above. The same applies to the server repository itself. Save the affected settings first and restore protection afterward.
 
 ## Targets
 
