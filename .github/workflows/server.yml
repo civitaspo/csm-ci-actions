@@ -1,9 +1,18 @@
 name: csm-ci server
 
-# Called from the server repository on `label: created` with `secrets: inherit`.
+# Called from the server repository on `label: created` with a named secret mapping.
 # Each job checks out csm-ci-actions at job.workflow_sha so it runs the actions of the same commit.
 on:
   workflow_call:
+    secrets:
+      CSM_CI_SERVER_APP_PRIVATE_KEY:
+        required: true
+      CSM_CI_APPROVER_APP_PRIVATE_KEY:
+        required: false
+      CSM_CI_TERRAFORM_PROVIDER_GPG_PRIVATE_KEY:
+        required: false
+      CSM_CI_TERRAFORM_PROVIDER_GPG_PASSPHRASE:
+        required: false
     inputs:
       config-path:
         description: Path of csm-ci.yaml in the server repository.

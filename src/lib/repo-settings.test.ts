@@ -328,8 +328,18 @@ describe("inspectRepoSettings", () => {
   const dispatchRejects: [string, DispatchOptions, string][] = [
     ["caller is not distributed", { event: "workflow_dispatch" }, "caller workflow has not been distributed"],
     ["caller job is conditional", { jobIf: "${{ github.event_name == 'push' }}" }, "caller workflow has not been distributed"],
-    ["caller job does not inherit secrets", { secretsLine: "" }, "caller workflow has not been distributed"],
-    ["caller job passes explicit secrets instead of inheriting", { secretsLine: "secrets:\n      token: x" }, "caller workflow has not been distributed"],
+    ["caller job has no secret mapping", { secretsLine: "" }, "caller workflow has not been distributed"],
+    ["caller job maps an undeclared credential", { secretsLine: "secrets:\n      token: x" }, "caller workflow has not been distributed"],
+    ["caller inherits all credentials", { secretsLine: "secrets: inherit" }, "caller workflow has not been distributed"],
+    ["caller omits required name", { secretsLine: "secrets: {}" }, "caller workflow has not been distributed"],
+    ["caller renames the required mapping", { secretsLine: "secrets:\n      TOKEN: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}" }, "caller workflow has not been distributed"],
+    ["caller uses a literal credential", { secretsLine: "secrets:\n      CSM_CI_CLIENT_APP_PRIVATE_KEY: literal" }, "caller workflow has not been distributed"],
+    ["caller maps another secret", { secretsLine: "secrets:\n      CSM_CI_CLIENT_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}" }, "caller workflow has not been distributed"],
+    ["caller maps a non-string value", { secretsLine: "secrets:\n      CSM_CI_CLIENT_APP_PRIVATE_KEY: true" }, "caller workflow has not been distributed"],
+    ["caller forwards an extra credential", { secretsLine: "secrets:\n      CSM_CI_CLIENT_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}\n      CSM_CI_OWNER_TOKEN: ${{ secrets.CSM_CI_OWNER_TOKEN }}" }, "caller workflow has not been distributed"],
+    ["caller maps an array value", { secretsLine: "secrets:\n      CSM_CI_CLIENT_APP_PRIVATE_KEY: [\"${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}\"]" }, "caller workflow has not been distributed"],
+    ["caller prefixes the secret expression", { secretsLine: "secrets:\n      CSM_CI_CLIENT_APP_PRIVATE_KEY: prefix${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}" }, "caller workflow has not been distributed"],
+    ["caller suffixes the secret expression", { secretsLine: "secrets:\n      CSM_CI_CLIENT_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}suffix" }, "caller workflow has not been distributed"],
     ["caller trigger types omit created", { types: "[edited]" }, "caller workflow has not been distributed"],
     ["approver identity differs from config", { approverId: 999 }, "approver bot does not have write permission"],
     ["approver id matches but login differs", { approverLogin: "someone-else[bot]" }, "approver bot does not have write permission"],
@@ -483,11 +493,48 @@ describe("auto-merge queue preflight", () => {
 
 describe("inspectRepoSettingsPreflight", () => {
   test.each([
+    "${{secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY}}",
+    "${{  secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY  }}",
+  ])("accepts same-name expression whitespace %s", async (expression) => {
+    const fetch = dispatchFetch({ secretsLine: `secrets:\n      CSM_CI_CLIENT_APP_PRIVATE_KEY: ${expression}` });
+    const result = await applyRepoSettings({ readGH: github("read", fetch), adminGH: github("admin", fetch), config: configWithSettings(), target: { name: "owner/client", isServer: false }, mode: "dispatch", approverAppSlug: "approver" });
+    expect(result.rulesetsUpdated).toBe(1);
+  });
+
+  const serverSecret = "CSM_CI_SERVER_APP_PRIVATE_KEY";
+  const optionalSecrets = ["CSM_CI_APPROVER_APP_PRIVATE_KEY", "CSM_CI_TERRAFORM_PROVIDER_GPG_PRIVATE_KEY", "CSM_CI_TERRAFORM_PROVIDER_GPG_PASSPHRASE"];
+  const mapping = (name: string) => `${name}: \${{ secrets.${name} }}`;
+  const serverMappings: [string, string, boolean][] = [
+    ["required mapping only", `secrets:\n      ${mapping(serverSecret)}`, true],
+    ["all feature mappings", `secrets:\n      ${[serverSecret, ...optionalSecrets].map(mapping).join("\n      ")}`, true],
+    ["required mapping with whitespace", `secrets:\n      ${serverSecret}: \"\${{  secrets.CSM_CI_SERVER_APP_PRIVATE_KEY  }}\"`, true],
+    ["inheritance", "secrets: inherit", false],
+    ["no mapping", "", false],
+    ["empty mapping", "secrets: {}", false],
+    ["renamed required mapping", `secrets:\n      RENAMED: \${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}`, false],
+    ["literal required mapping", `secrets:\n      ${serverSecret}: literal`, false],
+    ["wrong required mapping", `secrets:\n      ${serverSecret}: \${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}`, false],
+    ["extra credential", `secrets:\n      ${mapping(serverSecret)}\n      ${mapping("CSM_CI_OWNER_TOKEN")}`, false],
+    ...optionalSecrets.flatMap((name): [string, string, boolean][] => [
+      [`only optional ${name}`, `secrets:\n      ${mapping(name)}`, false],
+      [`optional ${name}`, `secrets:\n      ${mapping(serverSecret)}\n      ${mapping(name)}`, true],
+      [`wrong optional ${name}`, `secrets:\n      ${mapping(serverSecret)}\n      ${name}: \${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}`, false],
+      [`literal optional ${name}`, `secrets:\n      ${mapping(serverSecret)}\n      ${name}: literal`, false],
+      [`renamed optional ${name}`, `secrets:\n      ${mapping(serverSecret)}\n      RENAMED: \${{ secrets.${name} }}`, false],
+    ]),
+  ];
+  test.each(serverMappings)("server label caller with %s is distributed: %s", async (_name, secretsLine, expected) => {
+    const fetch = serverCallerPreflightFetch(["client-merge.yml", "server.yml"], secretsLine);
+    const result = await inspectRepoSettingsPreflight({ readGH: github("read", fetch), target: { name: "owner/server", isServer: true } });
+    expect(result.callerDistributed).toBe(expected);
+  });
+
+  test.each([
     ["owner and repository in another case", "Civitaspo/CSM-CI-Actions/.github/workflows/client-merge.yml@e2e", true],
     ["a workflow path in another case", "civitaspo/csm-ci-actions/.github/workflows/CLIENT-MERGE.yml@e2e", false],
     ["no ref", "civitaspo/csm-ci-actions/.github/workflows/client-merge.yml@", false],
   ])("caller reference with %s counts as distributed: %s", async (_name, uses, expected) => {
-    const workflow = `on:\n  issue_comment:\n    types: [created]\njobs:\n  merge:\n    uses: ${uses}\n    secrets: inherit\n`;
+    const workflow = `on:\n  issue_comment:\n    types: [created]\njobs:\n  merge:\n    uses: ${uses}\n    secrets:\n      CSM_CI_CLIENT_APP_PRIVATE_KEY: \${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}\n`;
     const fetch = fakeFetch([
       { method: "GET", path: "/repos/owner/client", body: { default_branch: "main" } },
       { method: "GET", path: "/repos/owner/client/contents/.github%2Fworkflows", body: [{ name: "merge.yml", type: "file" }] },
@@ -591,7 +638,7 @@ type DispatchOptions = {
 };
 
 function dispatchFetch(options: DispatchOptions) {
-  const secretsLine = options.secretsLine ?? "secrets: inherit";
+  const secretsLine = options.secretsLine ?? "secrets:\n      CSM_CI_CLIENT_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}";
   const workflow = `on:\n  ${options.event ?? "issue_comment"}:\n    types: ${options.types ?? "[created]"}\njobs:\n  merge:\n    uses: civitaspo/csm-ci-actions/.github/workflows/client-merge.yml@e2e${secretsLine ? `\n    ${secretsLine}` : ""}${options.jobIf ? `\n    if: ${options.jobIf}` : ""}\n`;
   const controlled = {
     id: 81,
@@ -630,13 +677,13 @@ function dispatchFetch(options: DispatchOptions) {
   ]);
 }
 
-function serverCallerPreflightFetch(filenames: readonly string[]) {
+function serverCallerPreflightFetch(filenames: readonly string[], serverSecretsLine = "secrets:\n      CSM_CI_SERVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}") {
   const workflows = filenames.map((filename) => {
     const event = filename === "server.yml" ? "label" : "issue_comment";
     return {
       method: "GET",
       path: `/repos/owner/server/contents/.github%2Fworkflows%2F${filename}`,
-      body: `on:\n  ${event}:\n    types: [created]\njobs:\n  run:\n    uses: civitaspo/csm-ci-actions/.github/workflows/${filename}@e2e\n    secrets: inherit\n`,
+      body: `on:\n  ${event}:\n    types: [created]\njobs:\n  run:\n    uses: civitaspo/csm-ci-actions/.github/workflows/${filename}@e2e\n    ${filename === "server.yml" ? serverSecretsLine : "secrets:\n      CSM_CI_CLIENT_APP_PRIVATE_KEY: \${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}"}\n`,
     };
   });
   return fakeFetch([

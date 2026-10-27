@@ -8,10 +8,13 @@ permissions: {}
 jobs:
   server:
     # e2e branch is moved to the commit under test by csm-ci-actions/e2e/run.ts.
-    # Environment secrets reach the called job only through inherit.
-    # jactionlint ignore=unpinned-uses,secrets-inherit
+    # jactionlint ignore=unpinned-uses
     uses: civitaspo/csm-ci-actions/.github/workflows/server.yml@e2e
-    secrets: inherit
+    secrets:
+      CSM_CI_SERVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+      CSM_CI_APPROVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_APPROVER_APP_PRIVATE_KEY }}
+      CSM_CI_TERRAFORM_PROVIDER_GPG_PRIVATE_KEY: ${{ secrets.CSM_CI_TERRAFORM_PROVIDER_GPG_PRIVATE_KEY }}
+      CSM_CI_TERRAFORM_PROVIDER_GPG_PASSPHRASE: ${{ secrets.CSM_CI_TERRAFORM_PROVIDER_GPG_PASSPHRASE }}
     permissions:
       contents: read
       issues: write

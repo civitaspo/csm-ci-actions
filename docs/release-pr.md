@@ -1,5 +1,7 @@
 # Release pull requests
 
+Reusable client callers declare and map only `CSM_CI_CLIENT_APP_PRIVATE_KEY`. See the [secret contract and staged migration](setup.md#explicit-secret-contract-migration) for server feature credentials and compatible caller pins.
+
 `client-release-prepare.yml` generates a release pull request from the client's default branch. It uses a [pinned and verified](#git-cliff-installation) git-cliff 2.14.2 to infer a version from Git history and generate `CHANGELOG.md`. A manual dispatch can instead supply an explicit semantic version without the `v` prefix.
 
 The generation job checks out the triggering commit with full history and a read-only workflow token. git-cliff runs with `--no-exec`; package-manager scripts and client build scripts are not run. The release-prepare action then uses the shared [securefix client](securefix.md#client-workflow) implementation to package the edits, mint its Client App token through the official action and request the existing securefix operation. It has no environment secrets.

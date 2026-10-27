@@ -2,6 +2,11 @@ name: csm-ci repository settings target
 
 on:
   workflow_call:
+    secrets:
+      CSM_CI_SERVER_APP_PRIVATE_KEY:
+        required: true
+      CSM_CI_APPROVER_APP_PRIVATE_KEY:
+        required: false
     inputs:
       repository:
         description: Validated owner/repo target selected by the server workflow.

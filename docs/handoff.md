@@ -189,7 +189,7 @@ Each item was verified by running real workflows, not decided from the docs. If 
 
 The historical no-secret-map run [40099955263](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40099955263) and inherited-secret run [40100014166](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40100014166) motivated the current inheritance requirement. They did not test explicit named mappings. Their workflow success conclusions alone do not establish secret availability. Variables are visible without inheritance.
 
-The later [explicit secret contract probe](#explicit-secret-contract-probe) verified named mappings while retaining the server environment and its deployment policy. This supersedes the conclusion that inheritance is the only supported GitHub forwarding mechanism. Production runtime migration remains separate. Existing inheritance suppressions remain until callers and reusable workflows migrate together.
+The later [explicit secret contract probe](#explicit-secret-contract-probe) verified named mappings while retaining the server environment and its deployment policy. This supersedes the conclusion that inheritance is the only supported GitHub forwarding mechanism. Runtime workflows now declare named contracts, and testing fixtures map them explicitly. Production rollout remains separate. Existing production callers retain their old pins and inheritance suppressions until pins and mappings migrate together.
 
 ### 3.3 `actions/create-github-app-token` v3.3.0
 
@@ -260,7 +260,7 @@ Verify the approver's identity after the approval by looking at the review's `us
 | Rule | What it reports | Response |
 |---|---|---|
 | `concurrency-limits` | There is no concurrency | Suppress (label and client events must not cancel each other) |
-| `secrets-inherit` | It uses `secrets: inherit` | Suppress (section 3.2) |
+| `secrets-inherit` | An old deployed caller uses `secrets: inherit` | Retain only until its compatible pin and mapping rollout (section 3.2) |
 | `unpinned-uses` | It is not pinned by SHA | Suppress only for `@e2e` in the testing fixtures |
 | `dangerous-triggers` | It uses `pull_request_target` or `issue_comment` | Suppress (it does not check out the PR. The only key that crosses over is the Client App's key) |
 | `github-app` | It specifies only `owner` and no `repositories` | Suppress only for the probe |
@@ -987,7 +987,7 @@ The review covered repo-settings, the shared server-owned history proof, the sec
 | 3. Trusted internal event mode | Retain the target helper for trusted workflows on the server default branch. The pinned configuration, server/default-ref checks and schedule-to-dispatch rejection still apply. Direct callers can bypass outer ordering; write access to the trusted server branch is already inside S1. |
 | 4. Poisoned managed branch | Fail closed. Untrusted commits, paths or ambiguous PRs require operator investigation; they are never overwritten to restore service. Administrative repair precedes managed-file inspection, and one client failure does not stop server reconciliation. |
 | 5. Compare pagination before trust checks | Verify each page before requesting another. An untrusted first page must stop further pagination. Preserve final head, linear-history, changed-file completeness and duplicate checks. Do not introduce an arbitrary history limit or rely on the earlier handoff's unsupported approximate compare cap. |
-| 6. Caller presence without ref provenance | Retain the S1 decision. Preflight checks the caller path, event, inherited secrets and lack of a job condition. It intentionally does not establish the referenced action revision's provenance. |
+| 6. Caller presence without ref provenance | Retain the S1 decision. Preflight checks the caller path, event, explicit same-name secret mappings and lack of a job condition. It intentionally does not establish the referenced action revision's provenance. |
 | 7. Existing-branch reset | Retain conditional Git leases and expected-head checks. Live changed-content resets remain outside the authorized tests. GitHub PR-head convergence after a reset and the exact workflows permission requirement remain unverified. Re-dispatch after convergence; investigate persistent mismatches. |
 | 8. Recursive omission of metadata keys | Accept as compatibility debt for the current fixed rulesets. No current managed parameter depends on nested `id`, `_links`, `source` or `source_type`. Review this comparison before adding ruleset parameters. |
 | 9. Extra approval for unattributed changes | Keep PR 26's `false`. The plan requires one approving review and stale-approval dismissal; it does not require this additional condition, whose GitHub semantics remain unverified. |
@@ -1386,3 +1386,25 @@ The refreshed integration passes all 1,339 tests and 2,941 assertions, frozen de
 Independent GPT-6.1-Sol medium review of the refreshed diff and governing specification found no actionable findings. The reviewer independently passed 291 focused tests and confirmed preservation of repo-settings, managed-file, sponsorship, and notification behavior.
 
 The final integration is based on signed issue 70 head `0e051fe21fe44e31c5d8b4cdb230d51d8256e4de`, whose chain includes final issues 65, 66, 67, and 78. It applies only the reviewed issue 74 delta from signed candidate `15e2280a3376aae837a27b86ab8b10551cf13683` and preserves the complete preceding handoff evidence. Runtime source, tests, fixtures, operation documentation, and regenerated bundle deltas retain exact parity with that reviewed candidate. Local verification and independent review are recorded separately for this integrated head; live suites, deployment migration, and post-merge CI remain pending.
+
+## Explicit secret contract runtime candidate
+
+The issue #76 runtime declares required Client App and Server App names and optional approval and provider signing names in reusable workflows. Both nested repo-settings calls forward only Server App and approver App names. Testing callers use explicit same-name mappings. Privileged jobs retain `environment: csm-ci`, and release builds retain no environment or credentials. Production caller pins and inheritance remain unchanged pending their staged rollout.
+
+Activation discovery now requires the named merge and server-label contracts. Table-driven tests cover omitted optional names, required names, inheritance, renamed names, literals, incorrect references, non-string values, extra names, expression whitespace, and unchanged trigger, job-condition, and repository-path checks. Rejections retain `caller workflow has not been distributed`; the action adapter still reports `caller workflow is not distributed on <repository>` for its earlier preflight. Provider action tests execute missing-key and missing-passphrase failures before signing and publication without signing credentials.
+
+The original candidate local verification passed all 1,108 tests with 2,026 assertions, typecheck, build, root workflow lint, and action-lock generation and verification. The configured five-workflow lock list is unchanged, and regeneration leaves the lockfile unchanged. Twenty-four isolated mutation checks detected each changed discovery guard, required and optional declaration changes, and removal of either named secret from either nested call. Each mutant had a 30-second deadline, and the candidate files were never mutated.
+
+The earlier [availability probe](#explicit-secret-contract-probe) remains the environment-bound evidence. This candidate has not yet completed its live feature suites or smoke. Online fixture lint against `@e2e` must run after the testing ref selects the candidate; the old ref's contracts reject the new named mappings. Client requests, App token minting, selected-operation missing approver credentials, both nested repo-settings edges, bootstrap activation, and provider signing under the migrated runtime remain live gates. No credential, App permission, environment policy, testing state, or production state changed while preparing this candidate.
+
+### Refreshed secret-contract integration
+
+The issue #76 runtime is integrated on the signed #74 chain at base `15e2280a3376aae837a27b86ab8b10551cf13683`. All source, test, fixture, workflow, and rebuilt bundle deltas match the reviewed original #76 candidate exactly. The handoff preserves the intervening integration evidence. Repository settings, sponsorships, additional managed files, notification behavior, repository policy compatibility, and the current-main visibility and baseline fixes are retained.
+
+All required local gates pass, including 1,409 tests with 3,032 assertions, typecheck, build, root jactionlint, action-lock generation, and action-lock verification. The lockfile remains unchanged. All 24 secret-contract mutants were rerun individually in isolated copies with 30-second bounds and detected by behavioral tests. The first full test invocation selected a mise Python shim inside sanitized Terraform subprocesses; direct pinned Bun with Python 3.13 ahead of the shim passed the complete suite. Live verification remains pending at this refreshed candidate; no live suites, testing or production settings, credentials, or App permissions changed.
+
+Independent review of the refreshed diff and governing specification found no actionable findings and independently passed 225 focused tests. The handoff-only verification update was also reviewed.
+
+### Integration after final repository-policy verification
+
+The #76 secret-contract delta is integrated on the signed final #74 chain at `5cbe7433ad0143f47e1af35a56e31abbde1399fd`. The complete prior integration evidence is retained. Every non-handoff delta matches the reviewed candidate `658822a9c7fa59110c7dfc92af77023e1a3c7dba` exactly. Live feature suites and smoke remain required against the new signed full SHA; production caller rollout remains separate.

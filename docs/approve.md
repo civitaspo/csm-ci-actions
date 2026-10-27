@@ -1,5 +1,7 @@
 # approve
 
+Reusable client callers declare and map only `CSM_CI_CLIENT_APP_PRIVATE_KEY`. See the [secret contract and staged migration](setup.md#explicit-secret-contract-migration) for server feature credentials and compatible caller pins.
+
 approve gives a pull request the approval that the repository's ruleset requires. The approval comes from the approver App, never from a person's token. The server decides from facts it reads itself, so the client only says which pull request or comment to look at.
 
 ## Triggers
