@@ -1,4 +1,5 @@
 import { digest } from "../src/lib/generated-workflows.ts";
+import { resolveWorkflowRelease } from "../src/lib/workflow-release.ts";
 import { parseOwnership, recoverWorkflowOwnership } from "../src/lib/workflow-ownership.ts";
 import { MANAGED_FILES_TITLE, readFileAtRef } from "../src/lib/managed-files.ts";
 import { isServerMadeCommit } from "../src/lib/server-owned-history.ts";
@@ -231,6 +232,8 @@ async function dispatchReconciliation(
     "event-mode": eventMode,
     mode: operationMode,
     ...(configPath ? { "config-path": configPath } : {}),
+    // The schedule branch calls the target workflow directly, so it supplies what discovery would resolve.
+    ...(eventMode === "schedule" ? { "workflow-release": JSON.stringify(await resolveWorkflowRelease(ctx.gh, [])) } : {}),
   });
   const namedJobs = await until(`repo-settings jobs for ${run.html_url}`, async () => {
     const result = await ctx.gh.rest.actions.listJobsForWorkflowRun({ ...splitRepository(SERVER), run_id: run.id });

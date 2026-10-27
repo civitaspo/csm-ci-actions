@@ -30,6 +30,10 @@ on:
         description: Optional csm-ci.yaml path for controlled fixture scenarios.
         required: false
         type: string
+      workflow-release:
+        description: Released revision JSON for the schedule branch, which skips discovery.
+        required: false
+        type: string
 
 permissions: {}
 
@@ -52,6 +56,7 @@ jobs:
     # jactionlint ignore=unpinned-uses
     uses: civitaspo/csm-ci-actions/.github/workflows/server-repo-settings-target.yml@e2e
     with:
+      workflow-release: ${{ inputs.workflow-release }}
       repository: ${{ inputs.repository }}
       event-mode: ${{ inputs.event-mode }}
       mode: ${{ inputs.mode || 'reconcile' }}
