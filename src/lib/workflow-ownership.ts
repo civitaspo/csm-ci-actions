@@ -96,7 +96,9 @@ export async function inspectGeneratedWorkflows(gh: GitHub, input: { repository:
     const priorDigest = prior?.files[path];
     const value = await readFileAtRef(gh, address.owner, address.repo, path, input.defaultSha);
     if (priorDigest !== undefined) {
-      if (value.content !== null && digest(value.content) !== priorDigest) throw new Rejection(`generated workflow ${JSON.stringify(path)} was customized; preserve it and review ownership`);
+      // Bytes already equal to the desired output need no overwrite, so they cannot be lost custom content.
+      const desired = active && value.content === input.generated.files[path];
+      if (value.content !== null && digest(value.content) !== priorDigest && !desired) throw new Rejection(`generated workflow ${JSON.stringify(path)} was customized; preserve it and review ownership`);
       if (!active && value.content !== null) deletions.push(path);
     } else {
       const adoption = input.generated.adoption[path];
