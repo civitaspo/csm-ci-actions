@@ -1,7 +1,7 @@
 # Handoff: implementing csm-ci-actions from Phase 2
 
 This document is written so that you can continue the implementation from Phase 2 onward with this document alone.
-[docs/first-release-plan.md](first-release-plan.md) is the source of truth for the specification. This document supplements it.
+[design.md](design.md) and the operation pages define supported behavior. This document supplements them. The original implementation plan it refers to is kept at a [fixed commit](https://github.com/civitaspo/csm-ci-actions/blob/8b6fc9b1323796d0cdebc14ee4d27e06dbaa8949/docs/first-release-plan.md).
 This document records four things.
 
 - Decisions made during implementation
@@ -9,7 +9,7 @@ This document records four things.
 - Details of the testing environment
 - Working procedures
 
-If first-release-plan.md and this document disagree, first-release-plan.md wins. Fix the disagreement in a PR.
+If the design or an operation page disagrees with this document, the design or operation page wins. Fix the disagreement in a PR.
 
 - Written on: 2026-10-25 (JST)
 - `main` at the time of writing: `7d51bc9` (Phase 1 done)
@@ -339,7 +339,7 @@ The label name is `csm-ci-<kind>-<16 hex>` (50 characters or fewer). The descrip
 
 We did Phases 0 and 1 with this procedure. Follow the same procedure.
 
-1. **Check the specification.** Read the relevant phase in first-release-plan.md, and S1 to S7. Do not add features that first-release-plan.md does not have (ponytail). If you decide a feature should be added, send the first-release-plan.md update as a PR first.
+1. **Check the specification.** Read the relevant operation page and S1 to S7 in design.md. Do not add features that they do not describe (ponytail). If you decide a feature should be added, send the design or operation page update as a PR first.
 2. **Verify assumptions about external behavior against real runs.** Put a temporary workflow in a testing repo, try it, and delete it afterward. Record the URL of the resulting run in the decision log and in first-release-plan.md.
 3. **Decide the data shape first.** Separate pure functions (decisions) from functions that call APIs (fact collection). Test decisions with table-driven tests.
 4. **Cover every rejection condition with table-driven tests, one case per row.** Also assert the wording of the rejection reason.
@@ -364,7 +364,7 @@ We did Phases 0 and 1 with this procedure. Follow the same procedure.
 
 8. **Run the e2e.** See section 7.
 9. **Before you open a PR, ask a fresh subagent for an independent review.**
-   - Give it the specification (the relevant section of first-release-plan.md) and the diff. Ask it, as an attacker, to look for places weaker than the specification, changes the tests cannot catch, and code outside the plan.
+   - Give it the specification (the relevant operation page and design.md) and the diff. Ask it, as an attacker, to look for places weaker than the specification, changes the tests cannot catch, and code outside the plan.
    - Do not give it your conclusions.
    - Check each finding yourself before you fix it. In Phases 0 and 1, every review found real holes.
      - S3 could be disabled through config.
@@ -1182,7 +1182,7 @@ The owner subsequently requested eligible Renovate auto-merges and `/merge` comm
 
 ## Explicit secret contract probe
 
-Issue [#76](https://github.com/civitaspo/csm-ci-actions/issues/76) now has a separate [specification](first-release-plan.md#explicit-secret-contract-and-staged-migration). It is not a completed runtime migration.
+Issue [#76](https://github.com/civitaspo/csm-ci-actions/issues/76) now has a separate [specification](https://github.com/civitaspo/csm-ci-actions/blob/8b6fc9b1323796d0cdebc14ee4d27e06dbaa8949/docs/first-release-plan.md#explicit-secret-contract-and-staged-migration). It is not a completed runtime migration.
 
 The [positive run](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40303489939), attempt 1, used testing-server caller `1ebcba6b0054f0ab352610318cd9a5dc6035d6e4`, reusable candidate `b99d243b4f07a56a9b85f87b254ae4555c8610b9`, and nested leaves `75b1a47c2b78dbf1cfe04785e8cb96f931ec2d77`. All four expected Boolean availability assertions completed successfully, with none skipped. These were the direct environment job, nested discovery, nested client target, and nested server-after-clients target. The direct job checked all four configured names. Nested discovery checked the Server App key only. Each nested target checked the Server App and approver App keys. The nested wrapper declared and forwarded only those two names, never provider signing credentials. All checks used Boolean availability expressions without printing values or lengths.
 

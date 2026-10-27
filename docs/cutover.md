@@ -1,6 +1,6 @@
 # Production cutover runbook
 
-This runbook describes the production migration from `civitaspo/securefix-server` to `csm-ci-server` running csm-ci-actions. All ten selected repositories have completed their protected-merge and applicable release verification. [handoff.md](handoff.md#34-production-provider-verification) and the server's [production verification](https://github.com/civitaspo/csm-ci-server/blob/main/verification.md) record the executed steps. The additional Renovate caller rollout and legacy archival are tracked separately. This is Phase 7 of [first-release-plan.md](first-release-plan.md#phase-7-production-migration).
+This runbook describes the production migration from `civitaspo/securefix-server` to `csm-ci-server` running csm-ci-actions. All ten selected repositories have completed their protected-merge and applicable release verification. [handoff.md](handoff.md#34-production-provider-verification) and the server's [production verification](https://github.com/civitaspo/csm-ci-server/blob/main/verification.md) record the executed steps. The additional Renovate caller rollout and legacy archival are tracked separately.
 
 Names come from the plan's "Naming list". Replace `<owner>` with the account that owns the repositories and `<sha>` with the reviewed csm-ci-actions commit on `main` that you pin. The wizard registers the Apps under a personal account, so `<owner>` is that user.
 
