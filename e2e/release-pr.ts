@@ -49,7 +49,7 @@ async function expectReleasePr(ctx: Ctx, run: Run, runIds: Set<number>, version?
   const actual = (await read(ctx, ".release-version", branch)).trim();
   assert(parseSemVer(actual), `generated version ${JSON.stringify(actual)} is not SemVer`);
   if (version) assert(actual === version, `expected version ${version}, received ${actual}`);
-  assert(pr.title === `release-pr: chore(release): v${actual}`, `unexpected release PR title ${JSON.stringify(pr.title)}`);
+  assert(pr.title === `chore(release): v${actual}`, `unexpected release PR title ${JSON.stringify(pr.title)}`);
   assert(pr.body?.includes(`<!-- csm-ci:securefix:${run.id} -->`), "release PR body does not identify the latest run");
   const changelog = await read(ctx, "CHANGELOG.md", branch);
   assert(changelog.length > 0 && changelog.includes(actual), "CHANGELOG does not include the release version");
@@ -95,6 +95,7 @@ export const releasePr: Scenario[] = [
       const version = `1.1.${Date.now()}`;
       const first = await dispatch(ctx, CLIENT, "csm-ci-release-pr.yml", { version });
       const pr = await expectReleasePr(ctx, first, ids, version);
+      await ctx.gh.rest.pulls.update({ ...repo, pull_number: pr.number, title: `release-pr: chore(release): v${version}` });
       const repeated = await dispatch(ctx, CLIENT, "csm-ci-release-pr.yml", { version });
       const updated = await expectReleasePr(ctx, repeated, ids, version);
       assert(updated.number === pr.number && updated.head.sha === pr.head.sha, "repeated generation replaced the PR or changed its exact generated commit");
