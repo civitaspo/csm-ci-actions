@@ -90,7 +90,7 @@ The local clone is at `~/src/github.com/civitaspo/csm-ci-actions`.
 
 ### 2.3 Environments, variables and secrets
 
-Follow the naming rules in the plan's "Naming list".
+Follow the naming rules in the [Naming list](design.md#naming-list).
 
 - Store each App credential as a pair: `CSM_CI_<ROLE>_APP_CLIENT_ID` (variable) and `CSM_CI_<ROLE>_APP_PRIVATE_KEY` (secret).
 - `<ROLE>` is the App name with `testing-csm-ci-` or `csm-ci-` removed, in upper snake case.
@@ -340,7 +340,7 @@ The label name is `csm-ci-<kind>-<16 hex>` (50 characters or fewer). The descrip
 We did Phases 0 and 1 with this procedure. Follow the same procedure.
 
 1. **Check the specification.** Read the relevant operation page and S1 to S7 in design.md. Do not add features that they do not describe (ponytail). If you decide a feature should be added, send the design or operation page update as a PR first.
-2. **Verify assumptions about external behavior against real runs.** Put a temporary workflow in a testing repo, try it, and delete it afterward. Record the URL of the resulting run in the decision log and in first-release-plan.md.
+2. **Verify assumptions about external behavior against real runs.** Put a temporary workflow in a testing repo, try it, and delete it afterward. Record the URL of the resulting run in the decision log and in the operation page.
 3. **Decide the data shape first.** Separate pure functions (decisions) from functions that call APIs (fact collection). Test decisions with table-driven tests.
 4. **Cover every rejection condition with table-driven tests, one case per row.** Also assert the wording of the rejection reason.
 5. **Verify with mutation.** Remove one rejection condition at a time and confirm that a test fails. If a mutation survives, add a test.
@@ -383,13 +383,13 @@ We did Phases 0 and 1 with this procedure. Follow the same procedure.
     - When you merge stacked PRs, retarget the base of the child PR.
 12. **Decision log.**
     - `decisions.tsv` (columns: ts, phase, decision, why, evidence, result) records decisions. It sits at the repo root. Git does not track it. It is listed in `.git/info/exclude`.
-    - The key decisions so far are copied into this document and first-release-plan.md.
+    - The key decisions so far are copied into this document and design.md or the operation page.
 
 ---
 
 ## 6. Implementation instructions for the remaining phases
 
-first-release-plan.md is the source of truth for each phase's specification. This section adds only implementation notes. The DoD (first-release-plan.md "DoD (all phases)") is as follows.
+This section records the original per-phase implementation notes. The DoD (first-release-plan.md "DoD (all phases)") is as follows.
 
 - Unit tests, table-driven tests, mutation
 - e2e in the testing environment

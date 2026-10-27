@@ -90,6 +90,6 @@ For workflow failures, also check these repository-specific constraints:
 
 ## Keep credentials with the operator
 
-- Names of Apps, environments, variables, and secrets come only from the plan's Naming list.
+- Names of Apps, environments, variables, and secrets come only from the [Naming list](docs/design.md#naming-list).
 - Keep strong runtime credentials in the server's `csm-ci` environment. Client repositories hold only the Client App key. Use the separate `csm-ci-e2e` environment for privileged test credentials.
 - Agents never create, read, register, revoke, or change private keys, PATs, or GitHub App permissions. Ask the user to handle those operations. Metadata-only checks may confirm secret names and placement. Never print credential values in commands, logs, review evidence, or chat.
