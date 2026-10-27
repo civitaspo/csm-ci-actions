@@ -3,9 +3,12 @@ import { type GitHub, splitRepository } from "./github.ts";
 import { evaluatePolicies, type PolicyResult } from "./policies/index.ts";
 import { evaluateTrust, fetchCommitFacts } from "./trust.ts";
 import type { PullFacts } from "./command.ts";
+import { publishPolicyReport } from "./policy-report.ts";
+import type { ServerRun } from "./notify.ts";
 
 const ALWAYS: Policy[] = [{ type: "signed-commits" }, { type: "trusted-committers" }];
 export type PolicyCheckContext = { server: GitHub; config: Config; repository: string; pull: PullFacts };
+type PublicationContext = PolicyCheckContext & { serverRun: ServerRun; requestKind?: "approve" | "policy-check"; requestCommentId?: number };
 
 export function effectivePolicies(config: Config, repository: string): Policy[] {
   const override = repositoryEntry(config, repository)?.sensitive_paths;
@@ -53,7 +56,7 @@ export type PolicyCheckOutcome =
   | { result: "published"; results: PolicyResult[] }
   | { result: "skipped"; reason: string };
 
-export async function updatePolicyCheck(ctx: PolicyCheckContext): Promise<PolicyCheckOutcome> {
+export async function updatePolicyCheck(ctx: PublicationContext): Promise<PolicyCheckOutcome> {
   if (ctx.pull.state !== "open") return { result: "skipped", reason: `#${ctx.pull.number} is closed` };
   const { owner, repo } = splitRepository(ctx.repository);
   const results = await evaluatePullPolicies(ctx);
@@ -71,9 +74,10 @@ export async function updatePolicyCheck(ctx: PolicyCheckContext): Promise<Policy
   } else {
     await ctx.server.rest.checks.create({ owner, repo, name: "csm-ci/policy", external_id: ctx.pull.headSha, head_sha: ctx.pull.headSha, status: "completed", completed_at: completedAt, conclusion: ok ? "success" : "failure", output });
   }
+  await publishPolicyReport({ server: ctx.server, repository: ctx.repository, pullNumber: ctx.pull.number, head: ctx.pull.headSha, serverBotId: ctx.config.apps.server_bot_id, serverRun: ctx.serverRun, requestKind: ctx.requestKind ?? "policy-check", ...(ctx.requestCommentId === undefined ? {} : { requestCommentId: ctx.requestCommentId }) }, results);
   return { result: "published", results };
 }
 
-export async function runPolicyCheck(ctx: PolicyCheckContext): Promise<PolicyCheckOutcome> {
+export async function runPolicyCheck(ctx: PublicationContext): Promise<PolicyCheckOutcome> {
   return updatePolicyCheck(ctx);
 }

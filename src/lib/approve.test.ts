@@ -15,7 +15,7 @@ const alice = { id: 10, login: "alice", type: "User" };
 const mallory = { id: 66, login: "mallory", type: "User" };
 
 function receiptBody(fetch: ReturnType<typeof fakeFetch>): string {
-  const request = fetch.requests.find((request) => request.method === "POST" && request.path === `${P}/issues/12/comments`);
+  const request = fetch.requests.find((request) => request.method === "POST" && request.path === `${P}/issues/12/comments` && !request.body?.includes("csm-ci:policy-failure"));
   return z.object({ body: z.string() }).parse(JSON.parse(request?.body ?? "{}")).body;
 }
 function expectReceipt(body: string, operation: string): void {
@@ -104,10 +104,10 @@ describe("runApprove automatic", () => {
     ["declined", { commits: [commit(HEAD, { committer: mallory, author: mallory })] }],
     ["already-approved", { reviews: [{ user: { id: APPROVER_BOT_ID }, state: "APPROVED", commit_id: HEAD }] }],
     ["dismissed", { pullAfter: pull({ head: { sha: NEXT, repo: { full_name: "owner/repo" } } }) }],
-  ] satisfies [Awaited<ReturnType<typeof runApprove>>["result"], Setup][])("automatic %s does not emit a result comment", async (result, setup) => {
+  ] satisfies [Awaited<ReturnType<typeof runApprove>>["result"], Setup][])("automatic %s has no command receipt", async (result, setup) => {
     const { ctx, server } = context(setup);
     expect((await runApprove(ctx, { pull_number: 12 })).result).toBe(result);
-    expect(server.calls).not.toContain(`POST ${P}/issues/12/comments`);
+    expect(server.requests.filter((r) => r.method === "POST" && r.path === `${P}/issues/12/comments`)).toHaveLength(result === "declined" || result === "dismissed" ? 1 : 0);
   });
 
   test("approves a pull request whose commits are all trusted", async () => {
@@ -293,6 +293,7 @@ describe("what approve sends", () => {
       { method: "POST", path: "/graphql", body: { data: { node: { databaseId: 9, lastEditedAt: null } } } },
       { method: "POST", path: `${P}/issues/comments/9/reactions`, status: 201, body: {} },
       { method: "GET", path: `${P}/commits/${HEAD}/check-runs`, body: [] },
+      { method: "GET", path: `${P}/issues/12/comments`, body: [] },
       { method: "POST", path: `${P}/check-runs`, status: 201, body: { id: 88 } },
     ]);
     await runApprove({ ...ctx, server: github("s", recording(server, sent)), approver: github("a", recording(approver, sent)) }, { pull_number: 12, comment_id: 9 });
@@ -355,5 +356,40 @@ describe("approval repository policy overrides", () => {
     expect(outcome.result).toBe("declined");
     expect(outcome.problems.join("; ")).toMatch(message);
     expect(approver.calls).toEqual([]);
+  });
+});
+
+describe("policy report full evaluation boundaries", () => {
+  test.each(["automatic", "/recheck", "/approve", "/approve preflight failure"])("%s resolves history only after a passing full evaluation", async (mode) => {
+    const report = { id: 101, node_id: "report-node", user: { id: SERVER_BOT_ID, type: "Bot" }, body: "<!-- csm-ci:policy-failure -->\nold failure", issue_url: "https://api.github.com/repos/owner/repo/issues/12" };
+    const { ctx, server } = context({ issueComments: [report], ...(mode === "/recheck" ? { comment: comment({ body: "/recheck" }) } : {}), ...(mode.includes("failure") ? { commits: [commit(HEAD, { committer: mallory, author: mallory })] } : {}) });
+    const events: string[] = [];
+    const fetch = Object.assign(async (input: Parameters<typeof globalThis.fetch>[0], init?: Parameters<typeof globalThis.fetch>[1]) => {
+      const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+      const method = init?.method ?? "GET";
+      events.push(`${method} ${url.pathname}`);
+      const answer = (data: unknown) => new Response(JSON.stringify(data), { headers: { "content-type": "application/json" } });
+      if (url.pathname === `${P}/issues/comments/101`) return answer(report);
+      if (url.pathname === "/graphql") {
+        const request = z.object({ query: z.string(), variables: z.object({ id: z.string().optional(), classifier: z.string().optional() }) }).parse(JSON.parse(String(init?.body)));
+        if (request.variables.id === "report-node") {
+          if (request.query.startsWith("mutation")) {
+            events.push(`minimize ${request.variables.classifier}`);
+            return answer({ data: { minimizeComment: { minimizedComment: { isMinimized: true, minimizedReason: "resolved" } } } });
+          }
+          return answer({ data: { node: { id: "report-node", databaseId: 101, body: report.body, author: { __typename: "Bot", databaseId: SERVER_BOT_ID }, issue: { number: 12, repository: { nameWithOwner: "owner/repo" } }, isMinimized: true, minimizedReason: "outdated" } } });
+        }
+      }
+      return server(input, init);
+    }, { preconnect: () => {} });
+    const operation = runApprove({ ...ctx, server: github("s", fetch) }, { pull_number: 12, ...(mode === "automatic" ? {} : { comment_id: 9 }) });
+    if (mode.includes("failure")) {
+      await expect(operation).rejects.toThrow("/approve cannot proceed because policy checks failed");
+      expect(events.filter((e) => e.startsWith("minimize"))).toEqual([]);
+    } else {
+      expect((await operation).result).toBe("approved");
+      expect(events.filter((e) => e.startsWith("minimize"))).toEqual(["minimize RESOLVED"]);
+      expect(events.indexOf(`POST ${P}/check-runs`)).toBeLessThan(events.indexOf("minimize RESOLVED"));
+    }
   });
 });

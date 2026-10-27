@@ -1,3 +1,5 @@
+import { z } from "zod";
+import { POLICY_FAILURE_MARKER } from "../src/lib/policy-report.ts";
 import { withRepositoryPolicy } from "./repository-policy.ts";
 import { type GitHub, splitRepository } from "../src/lib/github.ts";
 import { marker } from "../src/lib/notify.ts";
@@ -92,6 +94,20 @@ function untrusted(ctx: Ctx) {
   return ctx.untrusted;
 }
 
+async function policyReports(ctx: Ctx, pr: Pr) {
+  const comments = await ctx.gh.paginate(ctx.gh.rest.issues.listComments, {
+    ...splitRepository(CLIENT), issue_number: pr.number, per_page: 100, mediaType: { format: "full" },
+  });
+  const reports = [];
+  for (const comment of comments.filter((c) => Number(c.user?.id) === 347400474 && c.user?.type === "Bot" && c.body?.startsWith(`${POLICY_FAILURE_MARKER}\n`))) {
+    const response: unknown = await ctx.gh.graphql("query($id: ID!) { node(id: $id) { ... on IssueComment { databaseId isMinimized minimizedReason } } }", { id: comment.node_id });
+    const { node } = z.object({ node: z.object({ databaseId: z.number(), isMinimized: z.boolean(), minimizedReason: z.string().nullable() }) }).parse(response);
+    assert(node.databaseId === Number(comment.id), "policy report GraphQL identity differs from REST");
+    reports.push({ id: Number(comment.id), body: comment.body ?? "", html: comment.body_html ?? "", ...node });
+  }
+  return reports;
+}
+
 export const policyCheck: Scenario[] = [
   {
     name: "repository sensitivity with empty exemptions requires command approval and recovers",
@@ -100,10 +116,40 @@ export const policyCheck: Scenario[] = [
       const { pr, since } = await openPolicyPr(ctx, "signed");
       try {
         await expectPolicy(ctx, pr, since, "failure", "sensitive-paths");
+        const first = await until("one active policy failure report", async () => {
+          const reports = await policyReports(ctx, pr);
+          return reports.length === 1 && !reports[0]?.isMinimized ? reports[0] : undefined;
+        });
+        assert(first.body.includes("sensitive paths need a trusted approver"), "policy report omits its actual reason");
+        assert(first.html.includes("<sub>"), "policy metadata does not render as subscript");
+        assert(first.html.indexOf("Policy check failed") < first.html.indexOf("<sub>"), "the actionable failure is inside metadata");
+        await requestPolicy(ctx, pr);
+        const retried = await policyReports(ctx, pr);
+        assert(retried.length === 1 && retried[0]?.id === first.id, "identical policy retry duplicated the active report");
+        const changedSince = new Date(Date.now() - 2_000);
+        const changed = await ctx.gh.graphql<{ createCommitOnBranch: { commit: { oid: string } } }>(
+          "mutation($i: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $i) { commit { oid } } }",
+          { i: { branch: { repositoryNameWithOwner: CLIENT, branchName: pr.branch }, expectedHeadOid: pr.head,
+            message: { headline: "e2e change the policy failure" },
+            fileChanges: { additions: [{ path: `e2e/${pr.branch}-second.txt`, contents: Buffer.from("another sensitive path\n").toString("base64") }] } } },
+        );
+        pr.head = changed.createCommitOnBranch.commit.oid;
+        await expectPolicy(ctx, pr, changedSince, "failure", "sensitive-paths");
+        await until("superseded policy failure is outdated", async () => {
+          const reports = await policyReports(ctx, pr);
+          return reports.length === 2 && reports.filter((r) => !r.isMinimized).length === 1 && reports.find((r) => r.id === first.id)?.minimizedReason?.toLowerCase() === "outdated" ? true : undefined;
+        });
         const command = await postComment(ctx, pr, "/approve");
         await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: command.id } }, command.since, "success");
         const refreshed = await checkForHead(ctx, pr);
         assert(refreshed.conclusion === "success", `command approval left policy ${refreshed.conclusion}`);
+        await until("all policy failure history is resolved", async () => {
+          const reports = await policyReports(ctx, pr);
+          return reports.length === 2 && reports.every((r) => r.isMinimized && r.minimizedReason?.toLowerCase() === "resolved") ? true : undefined;
+        });
+        await requestPolicy(ctx, pr);
+        const recovered = await policyReports(ctx, pr);
+        assert(recovered.length === 2 && recovered.every((r) => r.minimizedReason?.toLowerCase() === "resolved"), "repeated recovery changed resolved history");
       } finally { await closePolicyPr(ctx, pr); }
     }),
   },

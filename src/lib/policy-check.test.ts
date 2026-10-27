@@ -5,6 +5,7 @@ import { config, fakeFetch } from "./testing.ts";
 import { github } from "./github.ts";
 import { effectivePolicies, evaluatePullPolicies, policySummary, updatePolicyCheck } from "./policy-check.ts";
 
+const serverRun = { serverUrl: "https://github.com", repository: "owner/server", id: "345", attempt: "2" };
 const head = "a".repeat(40);
 const pull: PullFacts = { number: 12, state: "open", draft: false, headSha: head, headRepository: "owner/repo", baseRepository: "owner/repo", baseRef: "main", defaultBranch: "main", authorId: 10 };
 const base = "/repos/owner/repo";
@@ -21,6 +22,8 @@ function setup(checkRuns: unknown[], current = { state: "open", head: { sha: hea
       { method: "GET", path: `${base}/pulls/12/commits`, body: commits },
       { method: "GET", path: `${base}/pulls/12`, body: current, status: pullStatus },
       { method: "GET", path: `${base}/commits/${head}/check-runs`, body: checkRuns },
+      { method: "GET", path: `${base}/issues/12/comments`, body: [] },
+      { method: "POST", path: `${base}/issues/12/comments`, status: 201, body: { id: 100 } },
       { method: "POST", path: `${base}/check-runs`, status: 201, body: { id: 99 } },
       { method: "PATCH", path: `${base}/check-runs/7`, body: { id: 7 } },
     ];
@@ -64,7 +67,7 @@ describe("updatePolicyCheck", () => {
 
   test.each([[[]], [[{ id: 7, name: "csm-ci/policy", external_id: head, app: { id: 1 } }]]])("skips a closed PR without evaluating or publishing, checks %j", async (checks) => {
     const { server, sent, reads } = setup(checks, { state: "closed", head: { sha: head } }, []);
-    const outcome = await updatePolicyCheck({ server, config: config(), repository: "owner/repo", pull: { ...pull, state: "closed" } });
+    const outcome = await updatePolicyCheck({ server, config: config(), repository: "owner/repo", serverRun, pull: { ...pull, state: "closed" } });
     expect(outcome).toEqual({ result: "skipped", reason: "#12 is closed" });
     expect(sent).toEqual([]);
     expect(reads).toEqual([]);
@@ -77,7 +80,7 @@ describe("updatePolicyCheck", () => {
   test.each(races)("skips publication after %s during evaluation", async (_name, current, reason) => {
     for (const checks of [[], [{ id: 7, name: "csm-ci/policy", external_id: head, app: { id: 1 } }]]) {
       const { server, sent, reads } = setup(checks, current);
-      expect(await updatePolicyCheck({ server, config: config(), repository: "owner/repo", pull })).toEqual({ result: "skipped", reason });
+      expect(await updatePolicyCheck({ server, config: config(), repository: "owner/repo", serverRun, pull })).toEqual({ result: "skipped", reason });
       expect(sent).toEqual([]);
       expect(reads.at(-1)).toBe(`${base}/pulls/12`);
     }
@@ -85,13 +88,13 @@ describe("updatePolicyCheck", () => {
 
   test.each([403, 404, 422, 500])("propagates final PR read failure %s without publishing", async (status) => {
     const { server, sent } = setup([], undefined, undefined, status);
-    await expect(updatePolicyCheck({ server, config: config(), repository: "owner/repo", pull })).rejects.toMatchObject({ status });
+    await expect(updatePolicyCheck({ server, config: config(), repository: "owner/repo", serverRun, pull })).rejects.toMatchObject({ status });
     expect(sent).toEqual([]);
   });
 
   test("an open PR with no commits still publishes both trust failures", async () => {
     const { server, sent } = setup([], undefined, []);
-    expect(await updatePolicyCheck({ server, config: config(), repository: "owner/repo", pull })).toEqual({ result: "published", results: [
+    expect(await updatePolicyCheck({ server, config: config(), repository: "owner/repo", serverRun, pull })).toEqual({ result: "published", results: [
       { type: "signed-commits", ok: false, problems: ["pull request has no commits"] },
       { type: "trusted-committers", ok: false, problems: ["pull request has no commits"] },
     ] });
@@ -100,7 +103,7 @@ describe("updatePolicyCheck", () => {
 
   test("creates a current-head check run with the Server App and a result table", async () => {
     const { server, sent } = setup([]);
-    await updatePolicyCheck({ server, config: config(), repository: "owner/repo", pull });
+    await updatePolicyCheck({ server, config: config(), repository: "owner/repo", serverRun, pull });
     const create = sent.find((r) => r.method === "POST" && r.path === `${base}/check-runs`);
     expect(create?.body).toMatchObject({ name: "csm-ci/policy", external_id: head, head_sha: head, status: "completed", completed_at: expect.any(String), conclusion: "success" });
     expect(create?.body.output).toMatchObject({ title: "Policies passed" });
@@ -109,12 +112,12 @@ describe("updatePolicyCheck", () => {
 
   test("updates only a check created by the configured Server App", async () => {
     const own = setup([{ id: 7, name: "csm-ci/policy", external_id: head, app: { id: 1 } }]);
-    await updatePolicyCheck({ server: own.server, config: config(), repository: "owner/repo", pull });
+    await updatePolicyCheck({ server: own.server, config: config(), repository: "owner/repo", serverRun, pull });
     const update = own.sent.find((r) => r.method === "PATCH" && r.path === `${base}/check-runs/7`);
     expect(update).toBeDefined();
     expect(update?.body).toMatchObject({ status: "completed", completed_at: expect.any(String), conclusion: "success" });
     const other = setup([{ id: 7, name: "csm-ci/policy", external_id: head, app: { id: 2 } }]);
-    await updatePolicyCheck({ server: other.server, config: config(), repository: "owner/repo", pull });
+    await updatePolicyCheck({ server: other.server, config: config(), repository: "owner/repo", serverRun, pull });
     expect(other.sent.some((r) => r.method === "POST" && r.path === `${base}/check-runs`)).toBe(true);
     expect(other.sent.some((r) => r.method === "PATCH")).toBe(false);
   });
@@ -185,4 +188,22 @@ describe("effective repository policies", () => {
     const results = await evaluatePullPolicies({ server: github("token", fetch), config: cfg, repository: "owner/repo", pull });
     expect(results.at(-1)).toEqual({ type: "sensitive-paths", ok, problems: ok ? [] : ["sensitive paths need a trusted approver's /approve: global/file"] });
   });
+});
+
+test("each serialized full refresh reevaluates current facts even when the pinned head is unchanged", async () => {
+  const commit = { sha: head, commit: { verification: { verified: true } }, author: { id: 10 }, committer: { id: 10 } };
+  const fetch = fakeFetch([
+    { method: "GET", path: `${base}/pulls/12/commits`, body: [commit], then: [[{ ...commit, commit: { verification: { verified: false } } }], [commit]] },
+    { method: "GET", path: `${base}/pulls/12`, body: { state: "open", head: { sha: head } } },
+    { method: "GET", path: `${base}/commits/${head}/check-runs`, body: [] },
+    { method: "POST", path: `${base}/check-runs`, body: { id: 99 } },
+    { method: "GET", path: `${base}/issues/12/comments`, body: [] },
+    { method: "POST", path: `${base}/issues/12/comments`, body: { id: 100 } },
+  ]);
+  const context = { server: github("s", fetch), config: config(), repository: "owner/repo", serverRun, pull };
+  for (let i = 0; i < 3; i++) await updatePolicyCheck(context);
+  const checks = fetch.requests.filter((r) => r.method === "POST" && r.path === `${base}/check-runs`).map((r) => JSON.parse(r.body ?? "{}").conclusion);
+  expect(checks).toEqual(["success", "failure", "success"]);
+  expect(fetch.calls.filter((r) => r === `GET ${base}/pulls/12/commits`)).toHaveLength(3);
+  expect(fetch.requests.filter((r) => r.method === "POST" && r.path === `${base}/issues/12/comments`)).toHaveLength(1);
 });

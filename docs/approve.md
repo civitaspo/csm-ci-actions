@@ -41,7 +41,7 @@ The client workflow sends a comment request only when the commenter's associatio
 
 An accepted `/approve` command receives a terminal receipt. The normal-size message distinguishes a completed approval, an approval dismissed because the head moved, a declined request, and an operational failure. Dismissals and failures include the available reason and ask the approver to resolve it, review the current head, and post a new exact `/approve` comment. Acceptance remains the rocket reaction, not a separate authorization acknowledgment.
 
-A separate `<sub>` footer contains HTML links to the original request, the pinned head with a short SHA, and the actual server workflow run and attempt. The hidden receipt marker stays independent of this presentation. Automatic approval and `/recheck` remain silent. Replayed commands and requests rejected before acceptance receive no new receipt.
+A separate `<sub>` footer contains HTML links to the original request, the pinned head with a short SHA, and the actual server workflow run and attempt. The hidden receipt marker stays independent of this presentation. Automatic approval and `/recheck` produce policy failure reports through their full refresh; they have no command receipts. Replayed commands and requests rejected before acceptance receive no new receipt.
 
 ## Rejections
 
@@ -63,7 +63,7 @@ The approver's identity is checked after the review exists. An installation toke
 
 ## Policy refresh
 
-Automatic approval, `/recheck`, and the final `/approve` refresh update `csm-ci/policy` through the shared full evaluation path. The [policy failure report lifecycle](policy-check.md#failure-reports-and-recovery) applies to those full refreshes when implemented. Prospective `/approve` preflight cannot resolve policy failure reports. Automatic approval and `/recheck` still produce no command receipt.
+Automatic approval, `/recheck`, and the final `/approve` refresh update `csm-ci/policy` through the shared full evaluation path. The [policy failure report lifecycle](policy-check.md#failure-reports-and-recovery) applies to those full refreshes. Prospective `/approve` preflight cannot resolve policy failure reports. Automatic approval and `/recheck` still produce no command receipt.
 
 ## Not done here
 

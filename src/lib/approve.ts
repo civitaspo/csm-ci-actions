@@ -7,7 +7,7 @@ import { Rejection } from "./request.ts";
 import { fetchComment } from "./github-comment.ts";
 export { fetchComment } from "./github-comment.ts";
 
-export type ApproveContext = { server: GitHub; approver: GitHub; config: Config; repository: string; serverRun: ServerRun; now: () => Date };
+export type ApproveContext = { server: GitHub; approver: GitHub; config: Config; repository: string; serverRun: ServerRun; now: () => Date; requestCommentId?: number };
 export type ApproveOutcome = { result: "approved" | "already-approved" | "declined" | "dismissed"; head: string; problems: string[] };
 
 export async function fetchPull(gh: GitHub, repository: string, pullNumber: number): Promise<PullFacts> {
@@ -55,7 +55,7 @@ async function policyProblems(ctx: ApproveContext, pull: PullFacts): Promise<str
 }
 
 async function refreshPolicy(ctx: ApproveContext, pull: PullFacts): Promise<void> {
-  await updatePolicyCheck({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull });
+  await updatePolicyCheck({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, serverRun: ctx.serverRun, requestKind: "approve", ...(ctx.requestCommentId === undefined ? {} : { requestCommentId: ctx.requestCommentId }) });
 }
 
 export async function autoApprove(ctx: ApproveContext, pull: PullFacts): Promise<ApproveOutcome> {
@@ -102,6 +102,7 @@ async function react(ctx: ApproveContext, commentId: number): Promise<void> {
 }
 
 export async function runApprove(ctx: ApproveContext, args: { pull_number: number; comment_id?: number }): Promise<ApproveOutcome> {
+  ctx = { ...ctx, ...(args.comment_id === undefined ? {} : { requestCommentId: args.comment_id }) };
   const pull = await fetchPull(ctx.server, ctx.repository, args.pull_number);
   if (args.comment_id === undefined) {
     checkPullState(pull);

@@ -1408,3 +1408,25 @@ Independent review of the refreshed diff and governing specification found no ac
 ### Integration after final repository-policy verification
 
 The #76 secret-contract delta is integrated on the signed final #74 chain at `5cbe7433ad0143f47e1af35a56e31abbde1399fd`. The complete prior integration evidence is retained. Every non-handoff delta matches the reviewed candidate `658822a9c7fa59110c7dfc92af77023e1a3c7dba` exactly. Live feature suites and smoke remain required against the new signed full SHA; production caller rollout remains separate.
+
+## Issue 71 runtime candidate: policy report lifecycle
+
+The `codex/issue-71-runtime` candidate starts at signed issue 74 compatibility candidate `15e2280a3376aae837a27b86ab8b10551cf13683`. It retains the issue 65, 66, 67, 70, 74, and 78 behavior and legacy protected-repository sensitivity. It implements the policy report contract approved in specification PR #84 (`611e294f49c4577be0ab3a2cc927fcfe9494a75d`). This is an implementation candidate, not a deployment record.
+
+Full policy publication now posts owned, bounded failure reports and reuses identical active reports. Superseded reports use `OUTDATED`; a passing full evaluation resolves all owned reports with `RESOLVED`, including outdated history. REST and GraphQL identity checks and a fresh PR/head read precede minimization. Approval preflight and merge evaluation remain free of report side effects. The existing normalized repository/PR job concurrency serializes publication, and every full refresh reevaluates current facts after acquiring that serialization. The standalone Server token now requests pull-requests write access; no App permission or credential was changed.
+
+Local coverage includes lifecycle transitions, every policy's actual reason, hostile and truncated details, all-page listing, missing or changed identity, stale heads and closed PRs, definitive REST errors, uncertain comment creation recovery, GraphQL errors, and unsuccessful minimization. Full refresh tests cover automatic approval, `/approve`, and `/recheck`; preflight rejection cannot resolve reports. Thirty individually isolated mutants were killed within a 15-second bound each. An independent reviewer inspected the complete specification and diff, including the e2e additions, with no actionable findings.
+
+The serial policy-check sensitivity scenario now checks rendered `<sub>` metadata, active retry identity, a signed head change and outdated report, recovery of both active and outdated history through `/approve`, and repeated recovery. It has not been run. No live e2e, PR, merge, testing fixture write, production change, or credential administration was performed for this candidate. Before a PR or deployment, run the complete affected policy-check and approve suites sequentially and then smoke at the signed pushed full head SHA; verify the existing Server App's comment and minimization capabilities, and record exact run URLs and skips. CI-only identity cases remain a post-merge gate after authorized merging.
+
+### Policy report integration on standard client workflows
+
+The issue #71 runtime is integrated on signed #77-on-#76 candidate `bac386297626f068eda15ddee3fbd580e6fb73d1`. All source, test, workflow, and rebuilt bundle deltas match the reviewed issue #71 candidate `1b77e3876fcf4e13f6323f34cfe7fb217405d06c`. The appended evidence preserves both earlier candidates. Explicit secret mappings, standard caller generation and ownership, repository-policy compatibility, managed files, sponsorships, and prior repository settings remain unchanged.
+
+Frozen dependency installation, typecheck, all 1,628 tests with 4,070 assertions, build, root jactionlint, and verification of the unchanged action lock pass with pinned tools. All 30 policy-report mutations were rerun individually in isolated copies with 15-second limits and were killed by behavioral tests. Python 3.13 was selected for existing Terraform subprocess tests. No live e2e, PR, merge, testing or production mutation, credential administration, or App permission change was performed. Affected live policy-check and approve suites, smoke, and post-merge CI identity cases remain required.
+
+Independent review of the complete integration diff against issue #71 and specification PR #84 found unresolved handoff conflict markers. They were removed while preserving both predecessor records; the reviewer rechecked the final document and clean diff and found no remaining actionable findings.
+
+### Integration on corrected final standard-workflow chain
+
+The reviewed issue #71 delta is integrated on signed #77 final chain `ae0fc07b3c1bdd5b4b28cd8dc8619f93d049994f`. The preceding handoff is preserved in full, including the final cleanup ownership correction. Every non-handoff source delta matches reviewed candidate `1da52bd64a0b24c3ba6d439b3102b9ce076f9d20`; generated bundles are rebuilt on the final dependency chain. Live policy-check, approve, repo-settings, release-pr and smoke verification remains parent-owned and pending. Compatible published stable release availability and operator-owned App permissions remain separate gates.

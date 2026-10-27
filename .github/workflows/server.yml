@@ -79,7 +79,7 @@ jobs:
           owner: ${{ needs.intake.outputs.owner }}
           repositories: ${{ needs.intake.outputs.name }}
           permission-contents: read
-          permission-pull-requests: ${{ needs.intake.outputs.kind == 'approve' && 'write' || 'read' }}
+          permission-pull-requests: write
           permission-checks: write
       - id: securefix-read-token
         if: needs.intake.outputs.kind == 'securefix'
