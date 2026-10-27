@@ -256,7 +256,7 @@ export async function runMerge(ctx: MergeContext, args: MergeArgs, expected: Mer
     for (let attempt = 0; ; attempt++) {
       let data: Awaited<ReturnType<typeof write.rest.pulls.merge>>["data"];
       try {
-        ({ data } = await write.rest.pulls.merge({ ...splitRepository(ctx.repository), pull_number: pull.number, sha: expected.head, merge_method: "squash", commit_title: raw.title, commit_message: commitMessage }));
+        ({ data } = await write.rest.pulls.merge({ ...splitRepository(ctx.repository), pull_number: pull.number, sha: expected.head, merge_method: "squash", commit_title: `${raw.title} (#${pull.number})`, commit_message: commitMessage }));
       } catch (error) {
         if (status(error) === 409) throw new Rejection(`pull request #${pull.number} cannot merge because its base changed`);
         const code = status(error);
