@@ -1,3 +1,71 @@
+## [0.2.0] - 2026-10-27
+
+### 🚀 Features
+
+- *(release)* Preserve dbt package root versions
+- *(release)* Preserve raw Rust binary contracts
+- *(release)* Preserve Terraform Registry signing
+- *(skills)* Package the Renovate review procedure
+- *(repo-settings)* Manage sponsorships and funding recipients
+- *(repo-settings)* Load additional managed files from Server repository files
+- *(policy)* Add repository policy overrides
+- *(policy-check)* Report rejection reasons and resolve comments after passing
+- *(policy)* Remove repository-name protection
+
+### 🐛 Bug Fixes
+
+- *(release)* Lock dependencies in shared release workflows
+- *(client)* Lock all shared request workflows
+- *(merge)* Forward bot requests on their own pull requests
+- *(e2e)* Preserve release verification across fixture types
+- *(merge)* Allow explicitly approved workflow changes
+- *(e2e)* Pin the public Terraform verification fingerprint
+- *(policy)* Skip checks for closed pull requests
+- *(repo-settings)* Enforce PR squash title and description
+- *(e2e)* Wait for repository settings to converge
+- *(repo-settings)* Reconcile wiki, projects, and branch updates
+- *(release-pr)* Preserve semantic pull request titles
+- *(notifications)* Restore context and run links in approval and merge comments
+- *(repo-settings)* Use a Conventional Commit title for managed-file pull requests
+
+### 📚 Documentation
+
+- *(plan)* Preserve dbt package release versions
+- *(release)* Specify raw Cargo binary publication
+- *(plan)* Support lockfile-enforced release callers
+- *(plan)* Cover all locked client workflows
+- *(release)* Specify Terraform provider signing
+- *(plan)* Permit bot merge requests on their own pull requests
+- Define the development workflow and troubleshooting checks
+- *(repo-settings)* Define squash commit message reconciliation
+- *(renovate)* Define supervised agent review procedure
+- *(repo-settings)* Specify repository feature settings
+- *(merge)* Permit workflow writes on the final merge token
+- *(policy)* Specify failure reports and resolved recovery
+- *(policy)* Specify repository overrides and protected migration
+- *(repo-settings)* Specify sponsorship configuration and funding ownership
+- *(repo-settings)* Specify Server-source managed files and migration
+- *(workflows)* Define explicit secret contracts
+- *(repo-settings)* Specify generated client workflow ownership
+- *(plan)* Define the repository-owned git-cliff installer
+
+### 🚜 Refactor
+
+- *(ci)* Aggregate checks through reusable workflows
+- *(workflows)* Declare explicit secret contracts
+
+### 🧪 Testing
+
+- *(merge)* Exercise native bot comment requests
+
+### ⚙️ Miscellaneous Tasks
+
+- *(merge)* Update the actions caller and Renovate requests
+- *(renovate)* Disable Dependency Dashboard
+
+### 💼 Other
+
+- *(release-pr)* Install git-cliff from a pinned release digest
 ## [0.1.0] - 2026-10-25
 
 ### 🚀 Features
@@ -45,3 +113,4 @@
 ### ⚙️ Miscellaneous Tasks
 
 - *(ci)* Bootstrap managed client callers (#36)
+- *(release)* V0.1.0
