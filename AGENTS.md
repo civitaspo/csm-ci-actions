@@ -7,7 +7,7 @@ Follow this workflow for changes to csm-ci-actions and its live testing environm
 1. Inspect the working tree, branch, remote `main`, and related pull requests. Preserve unrelated work and start each new PR from the intended base.
 2. Read [docs/design.md](docs/design.md), including the security design and Naming list, and the affected operation's page in `docs/`. Together they define supported behavior. Change them in a separate PR before adding behavior outside them.
 3. Read [docs/handoff.md](docs/handoff.md) for verified GitHub behavior and testing constraints. Use the current code and live GitHub state to check whether an older status or open item still applies. The design and operation pages win if documents disagree.
-4. Trace the affected operation's callers, implementation, tests, fixtures, and generated files. For setup or production administration, also read [docs/setup.md](docs/setup.md) and [docs/cutover.md](docs/cutover.md).
+4. Trace the affected operation's callers, implementation, tests, fixtures, and generated files. For setup or production administration, also read [docs/setup.md](docs/setup.md) and [docs/repo-settings.md](docs/repo-settings.md).
 
 ## Develop one complete change
 
@@ -74,7 +74,7 @@ For workflow failures, also check these repository-specific constraints:
 
 ## Verify production results
 
-- Read [docs/cutover.md](docs/cutover.md) before production configuration, ruleset, or caller changes. Snapshot affected settings and identify managed resources by ID and full configuration. Preserve unrelated protection and settings.
+- Read [docs/repo-settings.md](docs/repo-settings.md#rulesets-and-emergency-stop) before production configuration, ruleset, or caller changes. Snapshot affected settings and identify managed resources by ID and full configuration. Preserve unrelated protection and settings.
 - Roll out to one repository at a time. Finish its original CI jobs, approval, policy, protected merge, and applicable release checks before starting the next repository.
 - Treat client CI and server publication as separate gates. For releases, follow [docs/release.md](docs/release.md) and [docs/release-attestation.md](docs/release-attestation.md). Verify the actual asset set, digests, checksums, attestations, and supported installation path. For Terraform providers, also verify the public GPG signature, Registry discovery, and provider loading.
 - Use intended versions for production releases. Immutable tags and assets are permanent. A docs change alone does not establish runtime or release compatibility.

@@ -86,6 +86,8 @@ repositories:
   - { name: your-account/*, ops: [approve, merge, policy-check] }
 ```
 
+Prefer an explicit list of repositories in production. A wildcard enrolls every repository the Server App is later installed on, and the next reconcile then requires `csm-ci/policy` on a repository without callers. The first matching entry wins, so keep the server's entry first when you use globs.
+
 The schema rejects unknown keys and rejects the Server or Approver bot in any trust list. Every operation reads `csm-ci.yaml` from the triggering server commit, `GITHUB_SHA`; merge readiness reloads it from the current default branch.
 
 ## Explicit secret contract migration

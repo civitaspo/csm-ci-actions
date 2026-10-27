@@ -858,7 +858,7 @@ The S4 history proof moved from securefix into `src/lib/server-owned-history.ts`
 
 ## 20. Final report: first release through Phase 6
 
-Phases 2 to 6 are merged. Phase 7 is the user's runbook in [cutover.md](cutover.md); nothing was executed in production. Every merge below passed `status-check`, and each feature's CI e2e and smoke ran from `main` right after the merge.
+Phases 2 to 6 are merged. Phase 7 is the user's runbook in [cutover.md](https://github.com/civitaspo/csm-ci-actions/blob/df380ff6fd0f99f9ff91bb7dc377f6250730b408/docs/cutover.md); nothing was executed in production. Every merge below passed `status-check`, and each feature's CI e2e and smoke ran from `main` right after the merge.
 
 ### Merged pull requests and post-merge CI e2e
 
@@ -903,7 +903,7 @@ Phases 2 to 6 are merged. Phase 7 is the user's runbook in [cutover.md](cutover.
 
 1. Install the testing approver App on `testing-csm-ci-server` to verify `controlled-merges` activation on a server. Production needs the same on `csm-ci-server`.
 2. Provision the Client App repository variables and key on the server repository, so the server's own merge caller works.
-3. Every Phase 7 step in [cutover.md](cutover.md): repository and App creation, credentials, caller migration and retiring securefix-server.
+3. Every Phase 7 step in [cutover.md](https://github.com/civitaspo/csm-ci-actions/blob/df380ff6fd0f99f9ff91bb7dc377f6250730b408/docs/cutover.md): repository and App creation, credentials, caller migration and retiring securefix-server.
 4. Renovate PRs 2, 3, 12, 15, 16, 18, 19 and 20 were left untouched. Dependency updates need a rebuilt `dist/` (section 8 item 2).
 
 ### Not verified
@@ -916,7 +916,7 @@ Phases 2 to 6 are merged. Phase 7 is the user's runbook in [cutover.md](cutover.
 ### Process incidents
 
 - An interrupted mutation run left `if (false)` in place of the comparison pagination guard in the uncommitted Phase 6 source, and a later run saved that text as its baseline. It was found by review and restored before the first commit. Section 19 records the mutation-script rule this led to.
-- While reviewing the cutover runbook, a review subagent made read-only `GET` requests to `civitaspo/securefix-server` and one production client repository. Both are outside the three repositories this work was authorized to touch. It wrote nothing. The brief forbade GitHub writes but did not restrict reads to the authorized repositories. Only generic lessons from those reads went into [cutover.md](cutover.md); it names no production repository, ruleset or App ID.
+- While reviewing the cutover runbook, a review subagent made read-only `GET` requests to `civitaspo/securefix-server` and one production client repository. Both are outside the three repositories this work was authorized to touch. It wrote nothing. The brief forbade GitHub writes but did not restrict reads to the authorized repositories. Only generic lessons from those reads went into [cutover.md](https://github.com/civitaspo/csm-ci-actions/blob/df380ff6fd0f99f9ff91bb7dc377f6250730b408/docs/cutover.md); it names no production repository, ruleset or App ID.
 
 ## 21. Single-action securefix client
 
@@ -1341,7 +1341,7 @@ The fixture stores its managed content as an ordinary Server file. Default repo-
 
 At signed candidate `ad5bf1c0f63318b783d82b0539efc0ef49cc33b3`, the local repo-settings suite passed 4/4 and smoke passed 5/5, both with zero skips. The default reconciliation scenario delivered the Server-source fixture file with its exact bytes through [dispatch](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40442116975) and kept the same PR and head on [repeat](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40442218256). The sponsorship scenarios also passed in reconcile and managed-files-only modes ([first](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40441596816), [managed-files-only](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40441976276)). Smoke included the [server check](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40442908099) of the migrated fixture configuration. The changed-content branch-reset case remains unverified.
 
-The production Server configuration still uses the inline `managed_files` key at its current parser pins. Its staged migration in [cutover](cutover.md) remains required before any of its pins move to this runtime. Post-merge CI e2e also remains required.
+The production Server configuration still uses the inline `managed_files` key at its current parser pins. Its staged migration in [cutover](https://github.com/civitaspo/csm-ci-actions/blob/df380ff6fd0f99f9ff91bb7dc377f6250730b408/docs/cutover.md) remains required before any of its pins move to this runtime. Post-merge CI e2e also remains required.
 
 ## 42. Approval and merge receipt context
 
