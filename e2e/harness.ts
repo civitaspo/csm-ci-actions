@@ -148,23 +148,28 @@ export async function recentWorkflowRuns(ctx: Ctx, repository: string, workflow:
 
 // A completed run's jobs and logs do not change. Concurrent scenarios poll the same server runs,
 // so they share these instead of downloading them again on every poll.
-const completedRunJobs = new Map<number, Map<string, { id: number; conclusion: string | null }>>();
-const completedJobLogs = new Map<number, string>();
+type Jobs = Map<string, { id: number; conclusion: string | null }>;
+const completedCaches = new WeakMap<GitHub, { jobs: Map<number, Jobs>; logs: Map<number, string> }>();
+function completedCache(ctx: Ctx) {
+  let cache = completedCaches.get(ctx.gh);
+  if (!cache) completedCaches.set(ctx.gh, cache = { jobs: new Map(), logs: new Map() });
+  return cache;
+}
 
-async function completedJobs(ctx: Ctx, runId: number): Promise<Map<string, { id: number; conclusion: string | null }>> {
-  const cached = completedRunJobs.get(runId);
+async function completedJobs(ctx: Ctx, runId: number): Promise<Jobs> {
+  const cached = completedCache(ctx).jobs.get(runId);
   if (cached) return cached;
   const byName = await jobs(ctx, SERVER, runId);
   // Right after a run completes, its job list can still be empty or unfinished.
-  if (byName.size > 0 && [...byName.values()].every((job) => job.conclusion !== null)) completedRunJobs.set(runId, byName);
+  if (byName.size > 0 && [...byName.values()].every((job) => job.conclusion !== null)) completedCache(ctx).jobs.set(runId, byName);
   return byName;
 }
 
 async function completedJobLog(ctx: Ctx, jobId: number): Promise<string> {
-  const cached = completedJobLogs.get(jobId);
+  const cached = completedCache(ctx).logs.get(jobId);
   if (cached !== undefined) return cached;
   const log = await jobLog(ctx, SERVER, jobId);
-  if (log.length > 0) completedJobLogs.set(jobId, log);
+  if (log.length > 0) completedCache(ctx).logs.set(jobId, log);
   return log;
 }
 
