@@ -2,6 +2,7 @@ import { expect, spyOn, test } from "bun:test";
 import { github } from "../src/lib/github.ts";
 import { fakeFetch } from "../src/lib/testing.ts";
 import { assertRepositorySettings } from "./repo-settings.ts";
+import { testMetadata } from "./test-metadata.ts";
 
 const expected = {
   delete_branch_on_merge: true,
@@ -18,7 +19,7 @@ const expected = {
 
 function context(body: object, then: object[] = []) {
   const fetch = fakeFetch([{ method: "GET", path: "/repos/owner/server", body, then }]);
-  return { ctx: { gh: github("test", fetch, { backoffMs: [] }), urls: [], untrusted: undefined }, fetch };
+  return { ctx: { gh: github("test", fetch, { backoffMs: [] }), urls: [], untrusted: undefined, ...testMetadata }, fetch };
 }
 
 test("waits for settings to converge and records only expected fields", async () => {
@@ -51,7 +52,7 @@ test.each(Object.entries(expected))("a persistent %s mismatch fails at the polli
 
 test.each([403, 404, 422])("propagates HTTP %i instead of treating errors as stale settings", async (status) => {
   const fetch = fakeFetch([{ method: "GET", path: "/repos/owner/server", status, body: { message: "settings read failed" } }]);
-  const ctx = { gh: github("test", fetch, { backoffMs: [] }), urls: [], untrusted: undefined };
+  const ctx = { gh: github("test", fetch, { backoffMs: [] }), urls: [], untrusted: undefined, ...testMetadata };
   await expect(assertRepositorySettings(ctx, "owner/server")).rejects.toThrow("settings read failed");
   expect(fetch.requests).toHaveLength(1);
 });

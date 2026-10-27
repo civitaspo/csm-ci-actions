@@ -3,6 +3,8 @@ import { resolveWorkflowRelease } from "../src/lib/workflow-release.ts";
 import { parseOwnership, recoverWorkflowOwnership } from "../src/lib/workflow-ownership.ts";
 import { MANAGED_FILES_TITLE, readFileAtRef } from "../src/lib/managed-files.ts";
 import { isServerMadeCommit } from "../src/lib/server-owned-history.ts";
+import { prCase } from "./harness.ts";
+import { annotatePr, assertManagedMetadata, labelPr, ownedAnnotationNumber } from "./pr-metadata.ts";
 import { z } from "zod";
 import { type GitHub, splitRepository } from "../src/lib/github.ts";
 import { inspectRepoSettingsPreflight } from "../src/lib/repo-settings.ts";
@@ -386,6 +388,31 @@ async function sponsorState(gh: GitHub) {
 
 export const repoSettings: Scenario[] = [
   ...([true, false, "managed-files-only"] as const).map((setting): Scenario => ({
+    id: `repo-settings.funding-${setting}`,
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: `sponsorship funding PR and repeat with ${setting}`,
+        classification: "positive",
+        checks: [
+          "repository-settings",
+          "metadata-refresh",
+          "replay"
+        ],
+        steps: [
+          {
+            "operation": "repo-settings",
+            "outcome": "permitted",
+            "expected": "The managed funding PR contains configured funding bytes; repeat preserves its PR and head"
+          }
+        ],
+        identity: [
+          "PR author and effective generated commit identity: testing-csm-ci-server[bot] (ID 347400474).",
+          "Request producer: the owner-triggered fixture workflow. The Server App writes configured managed funding files."
+        ]
+      }
+    },
     name: `sponsorship funding PR and repeat with ${setting}`,
     serial: true,
     run: async (ctx) => {
@@ -409,6 +436,9 @@ export const repoSettings: Scenario[] = [
           const head = await managedBranchHead(ctx.gh);
           const pulls = await openManagedPull(ctx.gh);
           assert(head && pulls.length === 1 && pulls[0]?.headSha === head, `missing funding PR (${first.url})`);
+          const owned = await ownedManagedHead(ctx, CLIENT, ["e2e/repo-settings-managed.txt", ".github/FUNDING.yml"]);
+          const ownedNumber = ownedAnnotationNumber(owned, pulls[0]!.number);
+          await labelPr(ctx.gh, CLIENT, ownedNumber, ctx.run, prCase(ctx, "fixture"));
           const funding = await ctx.gh.rest.repos.getContent({ ...splitRepository(CLIENT), path: ".github/FUNDING.yml", ref: head, mediaType: { format: "raw" } });
           const fundingContent: unknown = funding.data;
           assert(fundingContent === 'github: ["civitaspo"]\n', `incorrect generated funding content (${first.url})`);
@@ -416,6 +446,8 @@ export const repoSettings: Scenario[] = [
           const repeated = await openManagedPull(ctx.gh);
           assert(await managedBranchHead(ctx.gh) === head && repeated.length === 1 && repeated[0]?.number === pulls[0]?.number, `funding replay changed its PR or head (${repeat.url})`);
           for (const step of ["Apply repository settings", "Apply managed files"]) assert(repeat.stepConclusions.get(step) === "skipped", `funding repeat did not skip ${step} (${repeat.url})`);
+          await assertManagedMetadata(ctx.gh, CLIENT, ownedNumber);
+          await annotatePr(ctx.gh, CLIENT, ownedNumber, ctx.run, prCase(ctx, "fixture"));
           if (operationMode === "managed-files-only") {
             assert(first.stepConclusions.get("Mint administration write token") === "skipped", `funding-only minted an administration token (${first.url})`);
           }
@@ -432,6 +464,58 @@ export const repoSettings: Scenario[] = [
     },
   })),
   {
+    id: "repo-settings.reconciliation",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "dispatch repairs settings and ruleset drift, managed files create one stable PR, and schedule preserves the disabled stop",
+        classification: "positive",
+        checks: [
+          "repository-settings",
+          "branch-ownership",
+          "replay"
+        ],
+        steps: [
+          {
+            "operation": "repo-settings",
+            "outcome": "permitted",
+            "expected": "Dispatch repairs settings and managed files; repeat preserves the PR and schedule preserves the disabled stop"
+          }
+        ],
+        identity: [
+          "PR author and effective generated commit identity: testing-csm-ci-server[bot] (ID 347400474).",
+          "Request producer: the owner-triggered fixture workflow. The Server App writes only the configured managed branch and paths."
+        ]
+      },
+      "server-bootstrap": {
+        id: "server-bootstrap",
+        target: "server",
+        title: "Managed-files-only bootstrap PR for the testing server",
+        classification: "mixed",
+        checks: [
+          "repository-settings",
+          "branch-ownership",
+          "replay"
+        ],
+        steps: [
+          {
+            operation: "repo-settings",
+            outcome: "permitted",
+            expected: "Managed-files-only creates one server managed-file PR; repeating preserves its PR and head without minting administration credentials"
+          },
+          {
+            operation: "repo-settings",
+            outcome: "rejected",
+            expected: "Later normal dispatch rejects the missing caller before writes"
+          }
+        ],
+        identity: [
+          "PR author and effective commit identity: testing-csm-ci-server[bot] (ID 347400474).",
+          "Request producer: the owner-triggered fixture workflow; this PR manages only e2e/repo-settings-managed.txt; server callers remain undistributed."
+        ]
+      }
+    },
     name: "dispatch repairs settings and ruleset drift, managed files create one stable PR, and schedule preserves the disabled stop",
     serial: true,
     run: async (ctx) => {
@@ -456,6 +540,9 @@ export const repoSettings: Scenario[] = [
         const { data: createdPull } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: managedPull.number });
         const { data: createdCommit } = await ctx.gh.rest.repos.getCommit({ ...splitRepository(CLIENT), ref: observedHead });
         assert(createdPull.title === MANAGED_FILES_TITLE && createdCommit.commit.message.split("\n")[0] === MANAGED_FILES_TITLE, `managed-files pull request or commit subject is not ${MANAGED_FILES_TITLE} (${initial.url})`);
+        const owned = await ownedManagedHead(ctx);
+        ownedAnnotationNumber(owned, managedPull.number);
+        await labelPr(ctx.gh, CLIENT, managedPull.number, ctx.run, prCase(ctx, "fixture"));
 
         const { data: generatedCommit } = await ctx.gh.rest.repos.getCommit({ ...splitRepository(CLIENT), ref: observedHead });
         const { data: clientInfo } = await ctx.gh.rest.repos.get(splitRepository(CLIENT));
@@ -521,6 +608,8 @@ export const repoSettings: Scenario[] = [
         await dispatchReconciliation(ctx, CLIENT, "schedule", undefined, { createdRulesetIds });
         await assertRepositorySettings(ctx, CLIENT);
         await assertControlledMergesDisabled(ctx);
+        await assertManagedMetadata(ctx.gh, CLIENT, managedPull.number);
+        await annotatePr(ctx.gh, CLIENT, managedPull.number, ctx.run, prCase(ctx, "fixture"));
       }, [
         () => cleanupManagedState(ctx, observedHead, managedPull),
         () => restoreRepository(ctx.gh, CLIENT, snapshot, createdRulesetIds),
@@ -577,6 +666,9 @@ export const repoSettings: Scenario[] = [
         const bootstrapPull = bootstrapPulls[0];
         assert(bootstrapPull?.headSha === bootstrapHead, "managed-files-only pull request head does not match its branch (" + first.url + ")");
 
+        const bootstrapOwned = await ownedManagedHead(ctx, SERVER);
+        ownedAnnotationNumber(bootstrapOwned, bootstrapPull.number);
+        await labelPr(ctx.gh, SERVER, bootstrapPull.number, ctx.run, prCase(ctx, "server-bootstrap"));
         const second = await dispatchReconciliation(ctx, SERVER, "dispatch", undefined, {
           operationMode: "managed-files-only",
           createdRulesetIds: bootstrapCreatedRulesetIds,
@@ -588,6 +680,8 @@ export const repoSettings: Scenario[] = [
           assert(second.stepConclusions.get(name) === "skipped", "repeated managed-files-only did not skip " + name + " (" + second.url + ")");
         }
 
+        await assertManagedMetadata(ctx.gh, SERVER, bootstrapPull.number);
+        await annotatePr(ctx.gh, SERVER, bootstrapPull.number, ctx.run, prCase(ctx, "server-bootstrap"));
         const normal = await dispatchReconciliation(ctx, SERVER, "dispatch", undefined, {
           createdRulesetIds: bootstrapCreatedRulesetIds,
           expectedConclusion: "failure",

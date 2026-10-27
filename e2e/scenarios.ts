@@ -1,0 +1,11 @@
+import type { Feature } from "./pr-metadata.ts";
+import type { Scenario } from "./harness.ts";
+import { smoke } from "./smoke.ts";
+import { approve } from "./approve.ts";
+import { merge } from "./merge.ts";
+import { policyCheck } from "./policy-check.ts";
+import { securefix } from "./securefix.ts";
+import { release } from "./release.ts";
+import { releasePr } from "./release-pr.ts";
+import { repoSettings } from "./repo-settings.ts";
+export const SCENARIOS: Record<Feature, Scenario[]> = { smoke, approve, merge, "policy-check": policyCheck, securefix, release, "release-pr": releasePr, "repo-settings": repoSettings };

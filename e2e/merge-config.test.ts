@@ -1,3 +1,4 @@
+import { testMetadata } from "./test-metadata.ts";
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { z } from "zod";
@@ -25,7 +26,7 @@ test.each([false, true])("nested Bot policy fixture restores original bytes afte
     const content = url.searchParams.get("ref") === "main" ? original : text;
     return Response.json({ type: "file", sha: `blob-${writes}`, content: Buffer.from(content).toString("base64") });
   }, { preconnect() {} });
-  const ctx = { gh: github("test", fetch), urls: [], untrusted: undefined };
+  const ctx = { ...testMetadata, gh: github("test", fetch), urls: [], untrusted: undefined };
   const run = withTestBotConfigured(ctx, async () => {
     await withRepositoryPolicy(ctx, { sensitive_paths: { paths: [] }, merge: { allow_bot_requests: true } }, async () => {
       expect(parseConfig(text).trust.bot_mergers).toContainEqual({ id: 347402450, login: "testing-csm-ci-untrusted-committer[bot]" });

@@ -1,3 +1,5 @@
+import { OWNER_IDENTITY } from "./pr-metadata.ts";
+import { prCase } from "./harness.ts";
 import { assert, CLIENT, closeReleasePrIfOwned, configureRelease, dispatch, expectOp, hasStatus, jobs, jobLog, openReleasePr, postComment, recentWorkflowRuns, SERVER, SERVER_BOT_ID, serverRuns, type Ctx, type Conclusion, type ReleaseBuildType, type Run, type Scenario, until, waitRun, withServerConfig, withoutReleaseOperation } from "./harness.ts";
 import { splitRepository } from "../src/lib/github.ts";
 import { CARGO_RAW_TARGETS } from "../src/lib/config.ts";
@@ -37,8 +39,8 @@ function version(): string {
   return `1.0.${Date.now()}`;
 }
 
-async function withPr<T>(ctx: Ctx, ver: string, body: (pr: ReleasePr) => Promise<T>, additions: Record<string, string | null> = {}): Promise<T> {
-  const pr = await openReleasePr(ctx, ver, additions);
+async function withPr<T>(ctx: Ctx, ver: string, body: (pr: ReleasePr) => Promise<T>, additions: Record<string, string | null> = {}, intent = prCase(ctx, "fixture")): Promise<T> {
+  const pr = await openReleasePr(ctx, { intent, version: ver, additions });
   try {
     await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number } }, pr.openedAt, "success");
     return await body(pr);
@@ -84,14 +86,14 @@ async function releasePipeline(ctx: Ctx, since: Date, pr: ReleasePr, label?: str
   return { run, jobRows, label: cleanedLabel };
 }
 
-async function completedRelease(ctx: Ctx, ver: string, buildType: ReleaseBuildType): Promise<{ pipeline: ReleaseRun; pr: ReleasePr; sha: string; clientRun: Run }> {
+async function completedRelease(ctx: Ctx, ver: string, buildType: ReleaseBuildType, intent = prCase(ctx, "fixture")): Promise<{ pipeline: ReleaseRun; pr: ReleasePr; sha: string; clientRun: Run }> {
   return withServerConfig(ctx, configureRelease(buildType), async () => withPr(ctx, ver, async (pr) => {
     const merged = await mergeAsServer(ctx, pr);
     const clientRun = await releaseClientRun(ctx, merged.since, pr);
     assert(clientRun.conclusion === "success", `client release request concluded ${clientRun.conclusion} (${clientRun.html_url})`);
     const pipeline = await releasePipeline(ctx, merged.since, pr);
     return { pipeline, pr, sha: merged.sha, clientRun };
-  }, buildType === "goreleaser" ? { "dist/action.js": null } : buildType === "terraform-provider" ? terraformFixture : {}));
+  }, buildType === "goreleaser" ? { "dist/action.js": null } : buildType === "terraform-provider" ? terraformFixture : {}, intent));
 }
 
 function expectJob(result: ReleaseRun, name: string, conclusion: Conclusion): void {
@@ -166,6 +168,8 @@ async function success(ctx: Ctx, type: ReleaseBuildType): Promise<{ tag: string;
 
 export const release: Scenario[] = [
   {
+    id: "release.disabled",
+    cases: {},
     name: "release request is rejected when release is disabled, and the label is removed",
     serial: true,
     run: async (ctx) => withServerConfig(ctx, withoutReleaseOperation, async () => {
@@ -186,11 +190,54 @@ export const release: Scenario[] = [
       catch (e) { if (!hasStatus(e, 404)) throw e; }
     }),
   },
-  ...(["none", "js-action", "goreleaser", "cargo", "cargo-raw"] as const).map((type) => ({
+  ...(["none", "js-action", "goreleaser", "cargo", "cargo-raw"] as const).map((type): Scenario => ({
+    id: `release.publish-${type}`,
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: `publishes an immutable ${type} release with verified asset attestations`,
+        classification: "positive",
+        checks: [
+          "release-publication",
+          "release-verification"
+        ],
+        steps: [
+          {
+            "operation": "release",
+            "outcome": "permitted",
+            "expected": "The setup PR is deliberately merged by the Server App, then release publication and asset verification succeed"
+          }
+        ],
+        identity: OWNER_IDENTITY
+      }
+    },
     name: `publishes an immutable ${type} release with verified asset attestations`, serial: true,
     run: async (ctx: Ctx) => { await success(ctx, type); },
   })),
   {
+    id: "release.terraform-replay",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "publishes and replays an immutable terraform-provider release with all seventeen verified assets",
+        classification: "positive",
+        checks: [
+          "release-publication",
+          "release-verification",
+          "replay"
+        ],
+        steps: [
+          {
+            "operation": "release",
+            "outcome": "permitted",
+            "expected": "The setup PR merges, publication succeeds, and replay preserves all seventeen verified immutable assets"
+          }
+        ],
+        identity: OWNER_IDENTITY
+      }
+    },
     name: "publishes and replays an immutable terraform-provider release with all seventeen verified assets",
     serial: true,
     run: async (ctx) => withServerConfig(ctx, configureRelease("terraform-provider"), async () => {
@@ -217,6 +264,27 @@ export const release: Scenario[] = [
     }),
   },
   {
+    id: "release.none-replay",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "replaying a completed none release preserves the immutable release and asset digests",
+        classification: "positive",
+        checks: [
+          "release-publication",
+          "replay"
+        ],
+        steps: [
+          {
+            "operation": "release",
+            "outcome": "permitted",
+            "expected": "The setup PR merges, publication succeeds, and replay preserves the immutable release and asset digests"
+          }
+        ],
+        identity: OWNER_IDENTITY
+      }
+    },
     name: "replaying a completed none release preserves the immutable release and asset digests",
     serial: true,
     run: async (ctx) => {
@@ -241,6 +309,27 @@ export const release: Scenario[] = [
     },
   },
   {
+    id: "release.stale-dist",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "a stale committed dist file fails the js-action build and still cleans up the request",
+        classification: "negative",
+        checks: [
+          "release-publication",
+          "release-verification"
+        ],
+        steps: [
+          {
+            "operation": "release",
+            "outcome": "rejected",
+            "expected": "After an intentionally successful Server App setup merge, stale dist fails the build and publication is skipped"
+          }
+        ],
+        identity: OWNER_IDENTITY
+      }
+    },
     name: "a stale committed dist file fails the js-action build and still cleans up the request",
     serial: true,
     run: async (ctx) => withServerConfig(ctx, configureRelease("js-action"), () => withPr(ctx, version(), async (pr) => {
@@ -256,11 +345,55 @@ export const release: Scenario[] = [
     }, { "dist/action.js": "stale e2e dist output\n" })),
   },
   {
+    id: "release.tag-collision",
+    cases: {
+      "seed-release": {
+        id: "seed-release",
+        target: "client",
+        title: "Publish the seed release for the tag collision test",
+        classification: "positive",
+        checks: [
+          "release-publication",
+          "head-consistency"
+        ],
+        steps: [
+          {
+            operation: "merge",
+            outcome: "permitted",
+            expected: "Server App deliberately merges the seed PR"
+          },
+          {
+            operation: "release",
+            outcome: "permitted",
+            expected: "Publication creates the existing immutable tag used by the next PR"
+          }
+        ],
+        identity: OWNER_IDENTITY
+      },
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "a tag collision at another merge commit is rejected during planning",
+        classification: "negative",
+        checks: [
+          "release-publication",
+          "head-consistency"
+        ],
+        steps: [
+          {
+            "operation": "release",
+            "outcome": "rejected",
+            "expected": "After an intentionally successful setup merge, release planning rejects a tag pointing to another merge commit"
+          }
+        ],
+        identity: OWNER_IDENTITY
+      }
+    },
     name: "a tag collision at another merge commit is rejected during planning",
     serial: true,
     run: async (ctx) => {
       const ver = version();
-      await completedRelease(ctx, ver, "none");
+      await completedRelease(ctx, ver, "none", prCase(ctx, "seed-release"));
       await withServerConfig(ctx, configureRelease("none"), () => withPr(ctx, ver, async (pr) => {
         const merged = await mergeAsServer(ctx, pr);
         const client = await releaseClientRun(ctx, merged.since, pr);
@@ -273,6 +406,27 @@ export const release: Scenario[] = [
     },
   },
   {
+    id: "release.foreign-release",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "rejects a pre-existing release authored outside the Server App",
+        classification: "negative",
+        checks: [
+          "release-publication",
+          "identity-trust"
+        ],
+        steps: [
+          {
+            "operation": "release",
+            "outcome": "rejected",
+            "expected": "After an intentionally successful setup merge and expected build failure, publication refuses the owner-authored draft release"
+          }
+        ],
+        identity: OWNER_IDENTITY
+      }
+    },
     name: "rejects a pre-existing release authored outside the Server App",
     serial: true,
     run: async (ctx) => {
@@ -311,6 +465,27 @@ export const release: Scenario[] = [
     },
   },
   {
+    id: "release.invalid-version",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "rejects an invalid release version during planning",
+        classification: "negative",
+        checks: [
+          "release-publication",
+          "request-validation"
+        ],
+        steps: [
+          {
+            "operation": "release",
+            "outcome": "rejected",
+            "expected": "After an intentionally successful setup merge, planning rejects the invalid committed version"
+          }
+        ],
+        identity: OWNER_IDENTITY
+      }
+    },
     name: "rejects an invalid release version during planning",
     serial: true,
     run: async (ctx) => withServerConfig(ctx, configureRelease("none"), () => withPr(ctx, `invalid-${Date.now()}`, async (pr) => {
@@ -324,6 +499,27 @@ export const release: Scenario[] = [
     }, { ".release-version": "not-semver\n" })),
   },
   {
+    id: "release.wrong-merger",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "rejects a pull request merged by the owner instead of the Server App",
+        classification: "negative",
+        checks: [
+          "release-publication",
+          "identity-trust"
+        ],
+        steps: [
+          {
+            "operation": "release",
+            "outcome": "rejected",
+            "expected": "The owner intentionally merges the setup PR; release planning rejects it because the Server App did not merge it"
+          }
+        ],
+        identity: OWNER_IDENTITY
+      }
+    },
     name: "rejects a pull request merged by the owner instead of the Server App",
     serial: true,
     run: async (ctx) => withServerConfig(ctx, configureRelease("none"), () => withPr(ctx, version(), async (pr) => {
@@ -339,6 +535,8 @@ export const release: Scenario[] = [
     })),
   },
   {
+    id: "release.tag-rule",
+    cases: {},
     name: "the active release tag ruleset rejects tag creation by the owner",
     serial: true,
     run: async (ctx) => {

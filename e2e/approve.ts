@@ -1,5 +1,7 @@
 import { withRepositoryPolicy } from "./repository-policy.ts";
 import { verifyReceipt } from "./notifications.ts";
+import { OWNER_IDENTITY } from "./pr-metadata.ts";
+import { prCase } from "./harness.ts";
 import { splitRepository } from "../src/lib/github.ts";
 import { marker } from "../src/lib/notify.ts";
 import { completedRequestRuns, matchesAcceptedRequest, runsForComments } from "./correlation.ts";
@@ -29,7 +31,7 @@ const OWNER_EMAIL = "4525500+civitaspo@users.noreply.github.com";
 
 async function withPr(ctx: Ctx, kind: "signed" | "unsigned", fn: (pr: Pr) => Promise<void>, as = ctx.gh, author?: { name: string; email: string }): Promise<void> {
   const since = new Date(Date.now() - 2_000);
-  const pr = await openPr(ctx, kind, as, author);
+  const pr = await openPr(ctx, { intent: prCase(ctx, "fixture"), kind, as, author });
   try {
     // Opening the pull request runs the automatic path once.
     await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number } }, since, "success");
@@ -135,11 +137,13 @@ async function receipts(ctx: Ctx, pr: Pr, commentId: number): Promise<string[]> 
 
 export const approve: Scenario[] = [
   {
+    id: "approve.repository-paths",
+    cases: { fixture: { id: "fixture", target: "client", title: "Repository paths permit automatic approval and recheck", classification: "positive", checks: ["path-safety", "approval-policy"], steps: [{ operation: "approve", outcome: "permitted", expected: "Empty repository paths allow automatic approval of workflow-directory changes" }, { operation: "recheck", outcome: "permitted", expected: "Recheck restores approval after dismissal using the empty repository paths" }], identity: OWNER_IDENTITY } },
     name: "repository paths replace global sensitivity for automatic approval and recheck",
     serial: true,
     run: async (ctx) => withRepositoryPolicy(ctx, { sensitive_paths: { paths: [], exempt: [] } }, async () => {
       const since = new Date(Date.now() - 2_000);
-      const pr = await openPr(ctx, "signed", ctx.gh, undefined, ctx.gh, `.github/e2e-policy-${Date.now()}.txt`);
+      const pr = await openPr(ctx, { intent: prCase(ctx, "fixture"), kind: "signed", as: ctx.gh, prAs: ctx.gh, filePath: `.github/e2e-policy-${Date.now()}.txt` });
       try {
         await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number } }, since, "success");
         assert((await approvedAt(ctx, pr)).length > 0, "empty repository paths did not allow automatic approval");
@@ -152,6 +156,27 @@ export const approve: Scenario[] = [
   },
 
   {
+    id: "approve.trusted-auto",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "a pull request of signed commits by a trusted committer is approved automatically",
+        classification: "positive",
+        checks: [
+          "signature",
+          "identity-trust"
+        ],
+        steps: [
+          {
+            "operation": "approve",
+            "outcome": "permitted",
+            "expected": "Automatic approval approves the signed trusted head"
+          }
+        ],
+        identity: OWNER_IDENTITY
+      }
+    },
     name: "a pull request of signed commits by a trusted committer is approved automatically",
     run: (ctx) =>
       withPr(ctx, "signed", async (pr) => {
@@ -161,6 +186,26 @@ export const approve: Scenario[] = [
       }),
   },
   {
+    id: "approve.unsigned-auto",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "a pull request with an unsigned commit is not approved automatically",
+        classification: "negative",
+        checks: [
+          "signature"
+        ],
+        steps: [
+          {
+            "operation": "approve",
+            "outcome": "rejected",
+            "expected": "Automatic approval creates no approval for an unsigned commit"
+          }
+        ],
+        identity: OWNER_IDENTITY
+      }
+    },
     name: "a pull request with an unsigned commit is not approved automatically",
     run: (ctx) =>
       withPr(ctx, "unsigned", async (pr) => {
@@ -168,6 +213,27 @@ export const approve: Scenario[] = [
       }),
   },
   {
+    id: "approve.command",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "/approve by an approver approves with the command marker, a rocket and a receipt",
+        classification: "positive",
+        checks: [
+          "command-evidence",
+          "approval-policy"
+        ],
+        steps: [
+          {
+            "operation": "approve",
+            "outcome": "permitted",
+            "expected": "The approver command creates one marked approval, reaction and receipt"
+          }
+        ],
+        identity: OWNER_IDENTITY
+      }
+    },
     name: "/approve by an approver approves with the command marker, a rocket and a receipt",
     run: (ctx) =>
       withPr(ctx, "signed", async (pr) => {
@@ -182,6 +248,32 @@ export const approve: Scenario[] = [
       }),
   },
   {
+    id: "approve.replay",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "a replayed /approve label is rejected without another receipt",
+        classification: "mixed",
+        checks: [
+          "replay",
+          "command-evidence"
+        ],
+        steps: [
+          {
+            "operation": "approve",
+            "outcome": "permitted",
+            "expected": "Initial command approves and posts one receipt"
+          },
+          {
+            "operation": "approve",
+            "outcome": "rejected",
+            "expected": "Replay is rejected without another receipt"
+          }
+        ],
+        identity: OWNER_IDENTITY
+      }
+    },
     name: "a replayed /approve label is rejected without another receipt",
     run: (ctx) =>
       withPr(ctx, "signed", async (pr) => {
@@ -193,10 +285,51 @@ export const approve: Scenario[] = [
       }),
   },
   {
+    id: "approve.unsigned-command",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "/approve on an unsigned commit is rejected with a receipt",
+        classification: "negative",
+        checks: [
+          "signature",
+          "command-evidence"
+        ],
+        steps: [
+          {
+            "operation": "approve",
+            "outcome": "rejected",
+            "expected": "The command is rejected with a signature policy failure and receipt"
+          }
+        ],
+        identity: OWNER_IDENTITY
+      }
+    },
     name: "/approve on an unsigned commit is rejected with a receipt",
     run: (ctx) => withPr(ctx, "unsigned", (pr) => expectRejectedCommand(ctx, pr, "/approve", /policy checks failed: signed-commits: [0-9a-f]{40} is not signed and verified/, true)),
   },
   {
+    id: "approve.edited-command",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "an /approve edited after posting is rejected without a receipt",
+        classification: "negative",
+        checks: [
+          "command-evidence"
+        ],
+        steps: [
+          {
+            "operation": "approve",
+            "outcome": "rejected",
+            "expected": "The edited command is rejected without an approval or reaction"
+          }
+        ],
+        identity: OWNER_IDENTITY
+      }
+    },
     name: "an /approve edited after posting is rejected without a receipt",
     run: (ctx) =>
       withPr(ctx, "signed", async (pr) => {
@@ -213,6 +346,26 @@ export const approve: Scenario[] = [
       }),
   },
   {
+    id: "approve.recheck",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "/recheck approves again after the approval was dismissed",
+        classification: "positive",
+        checks: [
+          "approval-policy"
+        ],
+        steps: [
+          {
+            "operation": "approve",
+            "outcome": "permitted",
+            "expected": "Recheck restores the dismissed approval"
+          }
+        ],
+        identity: OWNER_IDENTITY
+      }
+    },
     name: "/recheck approves again after the approval was dismissed",
     run: (ctx) =>
       withPr(ctx, "signed", async (pr) => {
@@ -224,6 +377,31 @@ export const approve: Scenario[] = [
       }),
   },
   {
+    id: "approve.forged-author",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "an App commit made through the REST API with the owner as author is unsigned and not approved",
+        classification: "negative",
+        checks: [
+          "signature",
+          "identity-trust"
+        ],
+        steps: [
+          {
+            "operation": "approve",
+            "outcome": "rejected",
+            "expected": "An unsigned App commit with forged owner author fields receives no approval"
+          }
+        ],
+        identity: [
+          "PR author: civitaspo (ID 4525500).",
+          "REST commit is made by testing-csm-ci-untrusted-committer[bot] (ID 347402450) with forged civitaspo author and committer text. The commit is unsigned; those fields establish no verified effective identity.",
+          "No comment requester; the opening event runs automatic approval."
+        ]
+      }
+    },
     name: "an App commit made through the REST API with the owner as author is unsigned and not approved",
     needsUntrusted: true,
     run: (ctx) =>
@@ -240,6 +418,31 @@ export const approve: Scenario[] = [
       ),
   },
   {
+    id: "approve.untrusted-commit",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "a signed commit by an untrusted App is not approved, even by /approve",
+        classification: "negative",
+        checks: [
+          "signature",
+          "identity-trust"
+        ],
+        steps: [
+          {
+            "operation": "approve",
+            "outcome": "rejected",
+            "expected": "Automatic and command approval both refuse the signed untrusted App commit"
+          }
+        ],
+        identity: [
+          "PR author: civitaspo (ID 4525500).",
+          "Effective commit identity: testing-csm-ci-untrusted-committer[bot] (ID 347402450) via a GitHub-signed App commit. The Bot is absent from trust.committers.",
+          "Command requester: civitaspo (ID 4525500)."
+        ]
+      }
+    },
     name: "a signed commit by an untrusted App is not approved, even by /approve",
     needsUntrusted: true,
     run: (ctx) =>
@@ -254,6 +457,30 @@ export const approve: Scenario[] = [
       ),
   },
   {
+    id: "approve.untrusted-requester",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "a label for an /approve by someone who is not an approver gets no rocket and no receipt",
+        classification: "negative",
+        checks: [
+          "identity-trust",
+          "command-evidence"
+        ],
+        steps: [
+          {
+            "operation": "approve",
+            "outcome": "rejected",
+            "expected": "The second identity is not an approver and receives no receipt or reaction"
+          }
+        ],
+        identity: [
+          "PR author and effective commit identity: civitaspo (ID 4525500).",
+          "Command requester: testing-csm-ci-untrusted-committer[bot] (ID 347402450). The Bot is not an approver and has no qualifying repository association."
+        ]
+      }
+    },
     name: "a label for an /approve by someone who is not an approver gets no rocket and no receipt",
     needsUntrusted: true,
     run: (ctx) =>
@@ -266,6 +493,30 @@ export const approve: Scenario[] = [
       }),
   },
   {
+    id: "approve.prefilter",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "/approve and /recheck from a commenter who is not an owner, member or collaborator create no request",
+        classification: "negative",
+        checks: [
+          "identity-trust",
+          "command-evidence"
+        ],
+        steps: [
+          {
+            "operation": "approve",
+            "outcome": "rejected",
+            "expected": "The client skips second-identity approve and recheck commands without creating a request"
+          }
+        ],
+        identity: [
+          "PR author and effective commit identity: civitaspo (ID 4525500).",
+          "Command requester: testing-csm-ci-untrusted-committer[bot] (ID 347402450). The Bot is not an approver and has no qualifying repository association."
+        ]
+      }
+    },
     name: "/approve and /recheck from a commenter who is not an owner, member or collaborator create no request",
     needsUntrusted: true,
     run: (ctx) =>

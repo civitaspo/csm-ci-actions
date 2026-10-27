@@ -1,3 +1,6 @@
+import { withCleanup } from "./cleanup.ts";
+import { prCase } from "./harness.ts";
+import { annotatePr, assertGeneratedMetadata, labelPr } from "./pr-metadata.ts";
 import { randomUUID } from "node:crypto";
 import { splitRepository } from "../src/lib/github.ts";
 import { parseSemVer } from "../src/release/semver.ts";
@@ -24,9 +27,7 @@ async function withReleaseBranch(ctx: Ctx, run: (runIds: Set<number>) => Promise
     if (!hasStatus(error, 404)) throw error;
   }
   const runIds = new Set<number>();
-  try {
-    await run(runIds);
-  } finally {
+  await withCleanup(() => run(runIds), [async () => {
     for (const pr of await pulls(ctx)) {
       const owned = Number(pr.user?.id) === SERVER_BOT_ID && [...runIds].some((id) => pr.body?.includes(`<!-- csm-ci:securefix:${id} -->`));
       if (!owned) throw new Error(`release PR ${pr.number} is not owned by this scenario; refusing cleanup`);
@@ -35,7 +36,14 @@ async function withReleaseBranch(ctx: Ctx, run: (runIds: Set<number>) => Promise
       await ctx.gh.rest.pulls.update({ ...repo, pull_number: pr.number, state: "closed" });
       await ctx.gh.rest.git.deleteRef({ ...repo, ref: `heads/${branch}` });
     }
-  }
+  }]);
+}
+
+function assertReleaseMetadata(pr: { title: string; body: string | null }, version: string, runId: number): void {
+  assertGeneratedMetadata(pr, {
+    title: `chore(release): v${version}`,
+    body: `Automated update for securefix route release-pr.\n\nchore(release): v${version}\n\n<!-- csm-ci:securefix:${runId} -->`,
+  });
 }
 
 async function expectReleasePr(ctx: Ctx, run: Run, runIds: Set<number>, version?: string) {
@@ -49,8 +57,8 @@ async function expectReleasePr(ctx: Ctx, run: Run, runIds: Set<number>, version?
   const actual = (await read(ctx, ".release-version", branch)).trim();
   assert(parseSemVer(actual), `generated version ${JSON.stringify(actual)} is not SemVer`);
   if (version) assert(actual === version, `expected version ${version}, received ${actual}`);
-  assert(pr.title === `chore(release): v${actual}`, `unexpected release PR title ${JSON.stringify(pr.title)}`);
-  assert(pr.body?.includes(`<!-- csm-ci:securefix:${run.id} -->`), "release PR body does not identify the latest run");
+  assertReleaseMetadata(pr, actual, run.id);
+  await labelPr(ctx.gh, CLIENT, pr.number, ctx.run, prCase(ctx, "fixture"));
   const changelog = await read(ctx, "CHANGELOG.md", branch);
   assert(changelog.length > 0 && changelog.includes(actual), "CHANGELOG does not include the release version");
   const packageJson: unknown = JSON.parse(await read(ctx, "package.json", branch));
@@ -60,11 +68,36 @@ async function expectReleasePr(ctx: Ctx, run: Run, runIds: Set<number>, version?
   assert(await read(ctx, "pyproject.toml", branch) === `[project]\nname = "release-fixture"\nversion = "${actual}"\n\n[tool.fixture]\nversion = "9.0.0"\n`, "root pyproject version was not bumped or other content changed");
   assert(await read(ctx, "dbt_project.yml", branch) === `name: release_fixture\nversion: ${actual} # package version\nconfig-version: 2\nvars:\n  version: 9.0.0\n`, "root dbt version was not bumped or other content changed");
   ctx.urls.push(pr.html_url);
+  await annotatePr(ctx.gh, CLIENT, pr.number, ctx.run, prCase(ctx, "fixture"));
   return pr;
 }
 
 export const releasePr: Scenario[] = [
   {
+    id: "release-pr.root-updates-disabled",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "disabled root version updates preserve manifests and generate only the release version and changelog",
+        classification: "positive",
+        checks: [
+          "path-safety",
+          "release-publication"
+        ],
+        steps: [
+          {
+            "operation": "release-pr",
+            "outcome": "permitted",
+            "expected": "Generation creates only the release version and changelog, preserving root manifests"
+          }
+        ],
+        identity: [
+          "PR author and effective generated commit identity: testing-csm-ci-server[bot] (ID 347400474).",
+          "Request producer: the owner-triggered fixture workflow. The Server App writes only the configured managed branch and paths."
+        ]
+      }
+    },
     name: "disabled root version updates preserve manifests and generate only the release version and changelog",
     serial: true,
     run: (ctx) => withReleaseBranch(ctx, async (ids) => {
@@ -80,15 +113,41 @@ export const releasePr: Scenario[] = [
       assert(open.length === 1 && open[0], "release-pr did not create exactly one pull request");
       const pr = open[0];
       assert(Number(pr.user?.id) === SERVER_BOT_ID && pr.base.ref === "main", "release PR identity or base is incorrect");
+      assertReleaseMetadata(pr, version, run.id);
       assert(await read(ctx, ".release-version", branch) === `${version}\n`, "release version was not generated");
       assert((await read(ctx, "CHANGELOG.md", branch)).includes(version), "changelog was not generated");
       for (const [index, path] of paths.entries()) assert(await read(ctx, path, branch) === originals[index], `${path} changed with root updates disabled`);
       const files = await ctx.gh.paginate(ctx.gh.rest.pulls.listFiles, { ...repo, pull_number: pr.number, per_page: 100 });
       assert(JSON.stringify(files.map((file) => file.filename).sort()) === JSON.stringify([".release-version", "CHANGELOG.md"]), "disabled root updates changed unexpected files");
       ctx.urls.push(pr.html_url);
+      await annotatePr(ctx.gh, CLIENT, pr.number, ctx.run, prCase(ctx, "fixture"));
     }),
   },
   {
+    id: "release-pr.explicit-refresh",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "an explicit release version creates one PR and a repeated request updates its metadata",
+        classification: "positive",
+        checks: [
+          "metadata-refresh",
+          "replay"
+        ],
+        steps: [
+          {
+            "operation": "release-pr",
+            "outcome": "permitted",
+            "expected": "Generation creates one PR; repeated generation refreshes metadata without changing its exact generated commit"
+          }
+        ],
+        identity: [
+          "PR author and effective generated commit identity: testing-csm-ci-server[bot] (ID 347400474).",
+          "Request producer: the owner-triggered fixture workflow. The Server App writes only the configured managed branch and paths."
+        ]
+      }
+    },
     name: "an explicit release version creates one PR and a repeated request updates its metadata",
     serial: true,
     run: (ctx) => withReleaseBranch(ctx, async (ids) => {
@@ -102,6 +161,29 @@ export const releasePr: Scenario[] = [
     }),
   },
   {
+    id: "release-pr.inferred-version",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "a default-branch push infers the version and opens a release PR",
+        classification: "positive",
+        checks: [
+          "release-publication"
+        ],
+        steps: [
+          {
+            "operation": "release-pr",
+            "outcome": "permitted",
+            "expected": "A default-branch push infers the version and opens one release PR"
+          }
+        ],
+        identity: [
+          "PR author and effective generated commit identity: testing-csm-ci-server[bot] (ID 347400474).",
+          "Request producer: the owner-triggered fixture workflow. The Server App writes only the configured managed branch and paths."
+        ]
+      }
+    },
     name: "a default-branch push infers the version and opens a release PR",
     serial: true,
     run: (ctx) => withReleaseBranch(ctx, async (ids) => {
@@ -121,6 +203,8 @@ export const releasePr: Scenario[] = [
     }),
   },
   {
+    id: "release-pr.invalid-version",
+    cases: {},
     name: "an invalid explicit version fails before a securefix artifact or request is created",
     serial: true,
     run: async (ctx) => {
@@ -136,6 +220,8 @@ export const releasePr: Scenario[] = [
     },
   },
   {
+    id: "release-pr.non-default",
+    cases: {},
     name: "a manual dispatch from a non-default branch skips generation and requesting",
     serial: true,
     run: async (ctx) => {

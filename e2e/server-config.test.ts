@@ -1,3 +1,4 @@
+import { testMetadata } from "./test-metadata.ts";
 import { describe, expect, test } from "bun:test";
 import { github } from "../src/lib/github.ts";
 import { CONFIG_YAML, fakeFetch } from "../src/lib/testing.ts";
@@ -11,7 +12,7 @@ function fixture(restoredText = changed) {
     { method: "GET", path: `/repos/${SERVER}/contents/csm-ci.yaml`, body: file("original", CONFIG_YAML), then: [file("changed", changed), file("latest", restoredText), file("restored", CONFIG_YAML)] },
     { method: "PUT", path: `/repos/${SERVER}/contents/csm-ci.yaml`, body: { content: { sha: "changed" } } },
   ]);
-  const ctx: Ctx = { gh: github("test", fetch), urls: [], untrusted: undefined };
+  const ctx: Ctx = { gh: github("test", fetch), urls: [], untrusted: undefined, ...testMetadata };
   return { ctx, fetch };
 }
 
