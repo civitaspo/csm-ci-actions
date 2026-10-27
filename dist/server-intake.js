@@ -36884,7 +36884,7 @@ function validateIntake(event, env, config) {
 }
 function concurrencyKey(request) {
   const n = "pull_number" in request.args ? request.args.pull_number : request.args.run_id;
-  return `${request.repository}#${n}`;
+  return `${request.kind}-${request.repository}#${n}`;
 }
 
 // src/lib/github.ts

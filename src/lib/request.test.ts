@@ -91,9 +91,14 @@ describe("validateIntake", () => {
 });
 
 describe("concurrencyKey", () => {
-  test("uses the pull request or run number", () => {
-    expect(concurrencyKey(parseLabel("csm-ci-merge-a", "Owner/Repo/5/6"))).toBe("owner/repo#5");
-    expect(concurrencyKey(parseLabel("csm-ci-securefix-a", "owner/repo/9"))).toBe("owner/repo#9");
+  test("uses the operation kind and the pull request or run number", () => {
+    expect(concurrencyKey(parseLabel("csm-ci-merge-a", "Owner/Repo/5/6"))).toBe("merge-owner/repo#5");
+    expect(concurrencyKey(parseLabel("csm-ci-securefix-a", "owner/repo/9"))).toBe("securefix-owner/repo#9");
+  });
+  test("separates different kinds on one pull request and keeps the same kind together", () => {
+    const merge = concurrencyKey(parseLabel("csm-ci-merge-a", "owner/repo/5/6"));
+    expect(concurrencyKey(parseLabel("csm-ci-approve-b", "owner/repo/5/7"))).not.toBe(merge);
+    expect(concurrencyKey(parseLabel("csm-ci-merge-c", "Owner/Repo/5/8"))).toBe(merge);
   });
 });
 
