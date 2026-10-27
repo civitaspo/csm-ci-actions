@@ -33,6 +33,10 @@ conventional_commits = true
 filter_unconventional = true
 split_commits = false
 protect_breaking_commits = false
+# Squash merge subjects end with "(#<number>)". GitHub does not autolink it in files, so link it here.
+commit_preprocessors = [
+    { pattern = '\(#([0-9]+)\)', replace = "([#${1}](https://github.com/civitaspo/csm-ci-actions/pull/${1}))" },
+]
 commit_parsers = [
     { message = "^feat", group = "<!-- 0 -->🚀 Features" },
     { message = "^fix", group = "<!-- 1 -->🐛 Bug Fixes" },
