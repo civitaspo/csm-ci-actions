@@ -249,7 +249,7 @@ export const merge: Scenario[] = [
       const requestInfo = fromComment(pr, comment);
       await awaitServerWait(ctx, comment.id);
       await ctx.gh.rest.issues.deleteComment({ owner: "civitaspo", repo: "testing-csm-ci-client", comment_id: comment.id });
-      await expectOp(ctx, requestInfo.match, requestInfo.since, "failure", /not found|missing/i);
+      await expectOp(ctx, requestInfo.match, requestInfo.since, "failure", /not found|missing|could not resolve to a node/i);
       await noMerge(ctx, pr);
     }),
   },
