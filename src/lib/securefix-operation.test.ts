@@ -138,6 +138,10 @@ type RouteOptions = {
   historyFile?: { filename: string; content: Buffer };
   configMissing?: boolean;
   routeTargetBranch?: string;
+  routeName?: string;
+  message?: string;
+  alreadyApplied?: boolean;
+  pullWrites?: Array<{ title: string; body: string; pull_number?: number }>;
 };
 
 async function inspectNewRouteFile(path: string, options: RouteOptions = {}) {
@@ -149,7 +153,7 @@ async function inspectNewRouteFile(path: string, options: RouteOptions = {}) {
     repository,
     run_id: 42,
     head_sha: runSha,
-    message: "Generate file",
+    message: options.message ?? "Generate file",
     files: [{ kind: "write", path, size: content.length, sha256: createHash("sha256").update(content).digest("hex") }],
   };
   await writeFile(join(artifactPath, "manifest.json"), JSON.stringify(manifest));
@@ -181,7 +185,7 @@ async function inspectNewRouteFile(path: string, options: RouteOptions = {}) {
                 files: options.historyFilesUndefined ? undefined : options.historyCommit?.files ?? [],
                 author: { id: options.trustedHistoryCommit === false ? 999 : 3000 },
                 committer: { login: "web-flow" },
-                commit: { verification: { verified: true }, tree: { sha: parentTreeSha } },
+                commit: { verification: { verified: true }, tree: { sha: options.alreadyApplied ? appliedTreeSha : parentTreeSha } },
               } }),
         getContent: async ({ path: contentPath, ref }: { path: string; ref: string }) => {
           if (options.contentError) throw options.contentError;
@@ -189,13 +193,14 @@ async function inspectNewRouteFile(path: string, options: RouteOptions = {}) {
             if (ref === runSha) throw missing;
             return { data: { type: "file", sha: "1".repeat(40) } };
           }
+          if (options.alreadyApplied && ref !== runSha) return { data: { type: "file", sha: "1".repeat(40) } };
           if (options.contentObject) return { data: options.contentObject };
           throw missing;
         },
         compareCommitsWithBasehead: async () => ({ data: { merge_base_commit: { sha: runSha }, ...(options.comparison ?? { ahead_by: 0, commits: [] }) } }),
       },
       git: {
-        getTree: async () => ({ data: { truncated: false, tree: [] } }),
+        getTree: async ({ tree_sha }: { tree_sha: string }) => ({ data: { truncated: false, tree: options.alreadyApplied && tree_sha === appliedTreeSha ? [{ path, type: "blob", mode: "100644", sha: "e".repeat(40) }] : [] } }),
         getBlob: async () => ({ data: { encoding: options.blobEncoding ?? "base64", content: (options.historyFile?.content ?? content).toString("base64") } }),
         getRef: async ({ ref }: { ref: string }) => {
           if (ref === "heads/main") return { data: { object: { sha: runSha } } };
@@ -205,8 +210,14 @@ async function inspectNewRouteFile(path: string, options: RouteOptions = {}) {
       },
       pulls: {
         list: listPulls,
-        update: async ({ pull_number }: { pull_number: number }) => ({ data: { number: pull_number } }),
-        create: async () => ({ data: { number: 88 } }),
+        update: async (input: { pull_number: number; title: string; body: string }) => {
+          options.pullWrites?.push(input);
+          return { data: { number: input.pull_number } };
+        },
+        create: async (input: { title: string; body: string }) => {
+          options.pullWrites?.push(input);
+          return { data: { number: 88 } };
+        },
       },
     },
     paginate: async (method: unknown) => method === listArtifacts ? [artifact] : method === listPulls ? options.routePulls ?? [] : [],
@@ -215,7 +226,7 @@ async function inspectNewRouteFile(path: string, options: RouteOptions = {}) {
       : { repository: { commit: { signature: { isValid: true, wasSignedByGitHub: true } } } },
   } as unknown as GitHub;
   const yaml = CONFIG_YAML
-    .replace("repositories:", options.configMissing ? "repositories:" : `securefix:\n  allow_workflow_changes: false\n  routes:\n    - name: release-pr\n      from: default\n      to: ${options.routeTargetBranch ?? "release/next"}\n      workflow: .github/workflows/release.yml\n      paths: { new-file.txt: any, package.json: version-only }\nrepositories:`)
+    .replace("repositories:", options.configMissing ? "repositories:" : `securefix:\n  allow_workflow_changes: false\n  routes:\n    - name: ${options.routeName ?? "release-pr"}\n      from: default\n      to: ${options.routeTargetBranch ?? "release/next"}\n      workflow: .github/workflows/release.yml\n      paths: { new-file.txt: any, package.json: version-only }\nrepositories:`)
     .replace("ops: [approve, policy-check]", "ops: [approve, policy-check, securefix]");
   try {
     const parsed = parseConfig(yaml);
@@ -348,6 +359,30 @@ describe("securefix retry inspection", () => {
 
   test("allows a new route file when its path allows any contents", async () => {
     expect((await inspectNewRouteFile("new-file.txt")).status).toBe("ready");
+  });
+
+  test.each([
+    { name: "creation", routePulls: [], alreadyApplied: false },
+    { name: "metadata refresh", routePulls: [{ number: 70 }], alreadyApplied: false },
+    { name: "exact replay", routePulls: [{ number: 70 }], alreadyApplied: true },
+  ])("preserves release subjects and other route prefixes on $name", async ({ routePulls, alreadyApplied }) => {
+    for (const routeName of ["release-pr", "generated-files"]) {
+      const pullWrites: NonNullable<RouteOptions["pullWrites"]> = [];
+      const result = await inspectNewRouteFile("new-file.txt", {
+        apply: true,
+        targetSha: alreadyApplied ? appliedSha : runSha,
+        alreadyApplied,
+        routePulls: [...routePulls],
+        routeName,
+        message: "chore(release): v1.2.3\n\nRelease details.",
+        pullWrites,
+      });
+      expect(result.status).toBe(alreadyApplied ? "already-applied" : "applied");
+      expect(pullWrites).toHaveLength(1);
+      expect(pullWrites[0]?.title).toBe(routeName === "release-pr" ? "chore(release): v1.2.3" : "generated-files: chore(release): v1.2.3");
+      expect(pullWrites[0]?.pull_number).toBe(routePulls[0]?.number);
+      expect(pullWrites[0]?.body).toContain("<!-- csm-ci:securefix:42 -->");
+    }
   });
 
   test("rejects a new file whose route requires an original version line", async () => {

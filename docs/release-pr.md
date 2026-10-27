@@ -38,7 +38,11 @@ securefix:
 
 The caller's workflow path must match this route. The server re-fetches its run and requires the run's head to equal the current default-branch head. A concurrent push can therefore make an older request fail; the newer push generates the current release PR.
 
-All writes use securefix's bounded artifact and server-owned branch checks. The server creates or updates the single `release/next` PR, including its title and body. An exact repeated generation reuses the existing commit and refreshes the PR metadata. A changed generation first verifies the existing branch's server-made commits and allowed paths, then conditionally resets it to the current default branch before writing. See [securefix](securefix.md) for the write and retry contract.
+All writes use securefix's bounded artifact and server-owned branch checks. The server creates or updates the single `release/next` PR, including its title and body.
+
+For the `release-pr` route, the title preserves the prepared commit subject, `chore(release): v<version>`, without a route prefix. This applies to creation and metadata refresh, so the protected squash merge uses the same semantic subject. Other securefix routes keep their route-name prefix.
+
+An exact repeated generation reuses the existing commit and refreshes the PR metadata. A changed generation first verifies the existing branch's server-made commits and allowed paths, then conditionally resets it to the current default branch before writing. See [securefix](securefix.md) for the write and retry contract.
 
 If generation produces no file changes, no artifact or request is sent. This workflow only prepares a PR. Merging an approved release PR uses the separate [release publishing](release.md) workflow.
 

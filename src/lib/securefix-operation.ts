@@ -335,7 +335,8 @@ async function ensureRoutePullRequest(gh: GitHub, context: Context, route: Secur
   const base = route.from === "default" ? context.repoInfo.default_branch : route.from;
   const pulls = await gh.paginate(gh.rest.pulls.list, { owner: context.owner, repo: context.repo, state: "open", head: `${context.owner}:${head}`, base, per_page: 100 });
   if (pulls.length > 1) throw new Rejection("securefix route branch has multiple open pull requests");
-  const title = `${route.name}: ${manifest.message.split("\n", 1)[0] ?? manifest.message}`.slice(0, 250);
+  const subject = manifest.message.split("\n", 1)[0] ?? manifest.message;
+  const title = (route.name === "release-pr" ? subject : `${route.name}: ${subject}`).slice(0, 250);
   const body = `Automated update for securefix route ${route.name}.\n\n${manifest.message}\n\n<!-- csm-ci:securefix:${manifest.run_id} -->`;
   const current = pulls[0];
   if (current) {
