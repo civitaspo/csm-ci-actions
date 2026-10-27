@@ -1,5 +1,5 @@
 import { execFile as callbackExecFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile, symlink } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, readFile, rm, writeFile, symlink } from "node:fs/promises";
 import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +12,14 @@ async function workspace(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "release-pr-"));
   await writeFile(join(root, "git-cliff"), "#!/bin/sh\nif [ \"$1\" = \"--bumped-version\" ]; then echo v1.2.3; else printf 'generated\\n' > CHANGELOG.md; fi\n", { mode: 0o755 });
   return root;
+}
+
+// Runs the action entry with the installer replaced by the workspace's stub binary.
+async function cliEntry(root: string): Promise<string> {
+  const entry = join(root, ".cli-entry.ts");
+  const action = join(process.cwd(), "src/client-release-prepare/action.ts");
+  await writeFile(entry, `import { runReleasePrepare } from ${JSON.stringify(action)};\nawait runReleasePrepare(async () => ${JSON.stringify(join(root, "git-cliff"))});\n`);
+  return entry;
 }
 
 test("prepares root versions while preserving every unrelated byte", async () => {
@@ -167,20 +175,20 @@ for (const rejection of rejections) {
     const workspacePath = join(root, "workspace");
     try {
       if (rejection.workspaceKind === "missing") {
-        await expect(prepareRelease({ workspace: workspacePath, version: rejection.version ?? "1.2.3" })).rejects.toThrow(rejection.error);
+        await expect(prepareRelease({ workspace: workspacePath, version: rejection.version ?? "1.2.3", gitCliff: join(root, "git-cliff") })).rejects.toThrow(rejection.error);
         return;
       }
       await mkdir(workspacePath);
       if (rejection.workspaceKind === "file") {
         const file = join(root, "file");
         await writeFile(file, "x");
-        await expect(prepareRelease({ workspace: file, version: "1.2.3" })).rejects.toThrow(rejection.error);
+        await expect(prepareRelease({ workspace: file, version: "1.2.3", gitCliff: join(root, "git-cliff") })).rejects.toThrow(rejection.error);
         return;
       }
       if (rejection.workspaceKind === "symlink") {
         const link = join(root, "link");
         await symlink(workspacePath, link);
-        await expect(prepareRelease({ workspace: link, version: "1.2.3" })).rejects.toThrow(rejection.error);
+        await expect(prepareRelease({ workspace: link, version: "1.2.3", gitCliff: join(root, "git-cliff") })).rejects.toThrow(rejection.error);
         return;
       }
       for (const [path, content] of Object.entries(rejection.files ?? {})) {
@@ -199,8 +207,8 @@ test("CLI reports a git-cliff failure as a failed action", async () => {
   const root = await workspace();
   try {
     await writeFile(join(root, "git-cliff"), "#!/bin/sh\necho deliberate-failure >&2\nexit 23\n", { mode: 0o755 });
-    const env = { ...process.env, INPUT_WORKSPACE: root, PATH: `${root}:${process.env.PATH ?? ""}` };
-    const result = await execFile(process.execPath, ["run", "src/client-release-prepare/main.ts"], { cwd: process.cwd(), env }).then(
+    const env = { ...process.env, INPUT_WORKSPACE: root, RUNNER_TEMP: root };
+    const result = await execFile(process.execPath, ["run", await cliEntry(root)], { cwd: process.cwd(), env }).then(
       (output) => ({ code: 0, stdout: output.stdout, stderr: output.stderr }),
       (error: NodeJS.ErrnoException & { code?: number; stdout?: string; stderr?: string }) => ({ code: Number(error.code), stdout: error.stdout ?? "", stderr: error.stderr ?? "" }),
     );
@@ -215,10 +223,24 @@ test.each(["false", "true", "not-boolean"])("CLI handles update-root-version=%s"
   const original = '[package]\nname = "sample"\nversion = "0.1.0"\n';
   try {
     await writeFile(join(root, "Cargo.toml"), original);
-    const env = { ...process.env, INPUT_WORKSPACE: root, INPUT_VERSION: "2.0.0", "INPUT_UPDATE-ROOT-VERSION": value, PATH: `${root}:${process.env.PATH ?? ""}` };
-    const result = Bun.spawnSync([process.execPath, "run", "src/client-release-prepare/main.ts"], { cwd: process.cwd(), env });
+    const env = { ...process.env, INPUT_WORKSPACE: root, INPUT_VERSION: "2.0.0", "INPUT_UPDATE-ROOT-VERSION": value, RUNNER_TEMP: root };
+    const result = Bun.spawnSync([process.execPath, "run", await cliEntry(root)], { cwd: process.cwd(), env });
     expect(result.exitCode).toBe(value === "not-boolean" ? 1 : 0);
     if (value === "not-boolean") expect(result.stdout.toString() + result.stderr.toString()).toContain('Input does not meet YAML 1.2 "Core Schema" specification: update-root-version');
     expect(await readFile(join(root, "Cargo.toml"), "utf8")).toBe(value === "true" ? original.replace("0.1.0", "2.0.0") : original);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test.each([
+  ["missing runner temp", { RUNNER_TEMP: "" }, "RUNNER_TEMP is required to install git-cliff"],
+  ["Windows runner", { RUNNER_OS: "Windows", RUNNER_ARCH: "X64" }, "git-cliff installation does not support runner platform Windows/X64; supported: Linux/X64, Linux/ARM64, macOS/X64, macOS/ARM64"],
+])("the action entry installs git-cliff before preparing and fails closed on a %s", async (_name, runner, message) => {
+  const root = await workspace();
+  try {
+    const env = { ...process.env, INPUT_WORKSPACE: root, INPUT_VERSION: "2.0.0", RUNNER_TEMP: root, ...runner };
+    const result = Bun.spawnSync([process.execPath, "run", "src/client-release-prepare/main.ts"], { cwd: process.cwd(), env });
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout.toString()).toContain(`::error::${message}`);
+    expect(await readdir(root)).toEqual(["git-cliff"]);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

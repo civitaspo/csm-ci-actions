@@ -12413,7 +12413,7 @@ var require_fetch = __commonJS(function(exports, module) {
   function handleFetchDone(response) {
     finalizeAndReportTiming(response, "fetch");
   }
-  function fetch(input, init = undefined) {
+  function fetch2(input, init = undefined) {
     webidl.argumentLengthCheck(arguments, 1, "globalThis.fetch");
     let p = createDeferredPromise();
     let requestObject;
@@ -13301,7 +13301,7 @@ var require_fetch = __commonJS(function(exports, module) {
     }
   }
   module.exports = {
-    fetch,
+    fetch: fetch2,
     Fetch,
     fetching,
     finalizeAndReportTiming
@@ -24945,11 +24945,122 @@ function error(message, properties = {}) {
   issueCommand("error", toCommandProperties(properties), message instanceof Error ? message.toString() : message);
 }
 
-// src/client-release-prepare/prepare.ts
+// src/client-release-prepare/git-cliff.ts
 import { execFile as callbackExecFile } from "node:child_process";
-import { lstat as lstat2, readFile, writeFile as writeFile2 } from "node:fs/promises";
-import { promisify } from "node:util";
+import { createHash } from "node:crypto";
+import { lstat as lstat2, mkdtemp, writeFile as writeFile2 } from "node:fs/promises";
 import { join } from "node:path";
+import { promisify } from "node:util";
+var execFile = promisify(callbackExecFile);
+var GIT_CLIFF_PIN = {
+  version: "2.14.2",
+  assets: {
+    "Linux/X64": { target: "x86_64-unknown-linux-musl", sha256: "fa21e2fc70046fcfd0e43e5e4613873ab799aff3d9dc8559c00d31b270e417d0" },
+    "Linux/ARM64": { target: "aarch64-unknown-linux-musl", sha256: "4be21b21ec9699af4d330b224aeba8a41d41d8f5b351ca2da8a9ea2bdc36380f" },
+    "macOS/X64": { target: "x86_64-apple-darwin", sha256: "4e647d2deb152aca1e987f225cf42b080b991dd98f3bce4027ef95446d982ac3" },
+    "macOS/ARM64": { target: "aarch64-apple-darwin", sha256: "a0be97e237d440d34c5e508ec21d070b2c85cbb8be48a46a56f9a4e8bd247f05" }
+  }
+};
+var MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
+var DOWNLOAD_ATTEMPTS = 3;
+var DOWNLOAD_TIMEOUT_MS = 120000;
+var RETRY_DELAYS_MS = [250, 1000];
+function selectGitCliffAsset(os, arch, pin = GIT_CLIFF_PIN) {
+  const platform = `${os}/${arch}`;
+  const entry = pin.assets[platform];
+  if (!entry)
+    throw new Error(`git-cliff installation does not support runner platform ${platform}; supported: ${Object.keys(pin.assets).join(", ")}`);
+  if (!/^[0-9a-f]{64}$/u.test(entry.sha256))
+    throw new Error(`pinned git-cliff SHA-256 for ${platform} is missing or malformed`);
+  const name = `git-cliff-${pin.version}-${entry.target}.tar.gz`;
+  return {
+    name,
+    url: `https://github.com/orhun/git-cliff/releases/download/v${pin.version}/${name}`,
+    sha256: entry.sha256,
+    member: `git-cliff-${pin.version}/git-cliff`,
+    version: pin.version
+  };
+}
+function verifyGitCliffArchive(asset, bytes) {
+  const actual = createHash("sha256").update(bytes).digest("hex");
+  if (actual !== asset.sha256)
+    throw new Error(`${asset.name} SHA-256 ${actual} does not match the pinned ${asset.sha256}`);
+}
+async function downloadGitCliffArchive(asset, fetchImpl = fetch, maxBytes = MAX_ARCHIVE_BYTES) {
+  let cause = "";
+  for (let attempt = 1;attempt <= DOWNLOAD_ATTEMPTS; attempt++) {
+    if (attempt > 1)
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[attempt - 2]));
+    let response;
+    try {
+      response = await fetchImpl(asset.url, { redirect: "follow", signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
+    } catch (error) {
+      cause = error instanceof Error ? error.message : String(error);
+      continue;
+    }
+    if (!response.ok) {
+      cause = `HTTP ${response.status}`;
+      await response.body?.cancel().catch(() => {
+        return;
+      });
+      if ([502, 503, 504].includes(response.status))
+        continue;
+      break;
+    }
+    return readBounded(asset, response, maxBytes);
+  }
+  throw new Error(`failed to download ${asset.name}: ${cause}`);
+}
+async function readBounded(asset, response, maxBytes) {
+  if (!response.body)
+    throw new Error(`failed to download ${asset.name}: empty response body`);
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  for (;; ) {
+    let chunk;
+    try {
+      chunk = await reader.read();
+    } catch (error) {
+      throw new Error(`failed to download ${asset.name}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (chunk.done)
+      break;
+    total += chunk.value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => {
+        return;
+      });
+      throw new Error(`${asset.name} exceeds ${maxBytes} bytes`);
+    }
+    chunks.push(chunk.value);
+  }
+  return Buffer.concat(chunks);
+}
+async function installGitCliff(input) {
+  const asset = selectGitCliffAsset(input.os, input.arch, input.pin);
+  const bytes = await downloadGitCliffArchive(asset, input.fetch);
+  verifyGitCliffArchive(asset, bytes);
+  const directory = await mkdtemp(join(input.tempDir, "git-cliff-"));
+  const archive = join(directory, asset.name);
+  await writeFile2(archive, bytes, { flag: "wx" });
+  await execFile("tar", ["-xzf", archive, "-C", directory, asset.member]);
+  const binary = join(directory, asset.member);
+  const info = await lstat2(binary);
+  if (!info.isFile())
+    throw new Error(`${asset.name} member ${asset.member} is not a regular file`);
+  const { stdout } = await execFile(binary, ["--version"]);
+  const reported = stdout.trim();
+  if (reported !== `git-cliff ${asset.version}`)
+    throw new Error(`installed git-cliff reported ${JSON.stringify(reported)}; expected "git-cliff ${asset.version}"`);
+  return binary;
+}
+
+// src/client-release-prepare/prepare.ts
+import { execFile as callbackExecFile2 } from "node:child_process";
+import { lstat as lstat3, readFile, writeFile as writeFile3 } from "node:fs/promises";
+import { promisify as promisify2 } from "node:util";
+import { join as join2 } from "node:path";
 
 // node_modules/yaml/dist/index.js
 var composer = require_composer();
@@ -25008,10 +25119,10 @@ function parseSemVer(value) {
 }
 
 // src/client-release-prepare/prepare.ts
-var execFile = promisify(callbackExecFile);
+var execFile2 = promisify2(callbackExecFile2);
 var VERSION_LINE = /^\s*"?version"?\s*[=:]/u;
 async function prepareRelease(input) {
-  const workspaceInfo = await lstat2(input.workspace).catch((error) => {
+  const workspaceInfo = await lstat3(input.workspace).catch((error) => {
     if (error.code === "ENOENT")
       return;
     throw error;
@@ -25020,7 +25131,7 @@ async function prepareRelease(input) {
     throw new Error("workspace must be a regular directory");
   let version = input.version;
   if (version === undefined) {
-    const result = await execFile(input.gitCliff ?? "git-cliff", ["--bumped-version", "--no-exec"], { cwd: input.workspace });
+    const result = await execFile2(input.gitCliff, ["--bumped-version", "--no-exec"], { cwd: input.workspace });
     version = result.stdout.trim();
     if (version.startsWith("v"))
       version = version.slice(1);
@@ -25057,15 +25168,15 @@ async function prepareRelease(input) {
   if (dbt !== undefined)
     changes.set("dbt_project.yml", replaceDbtVersion(dbt, version));
   for (const [path, text] of changes)
-    await writeFile2(join(input.workspace, path), text);
-  await writeFile2(join(input.workspace, ".release-version"), `${version}
+    await writeFile3(join2(input.workspace, path), text);
+  await writeFile3(join2(input.workspace, ".release-version"), `${version}
 `);
-  await execFile(input.gitCliff ?? "git-cliff", ["--no-exec", "--tag", `v${version}`, "--output", "CHANGELOG.md"], { cwd: input.workspace });
+  await execFile2(input.gitCliff, ["--no-exec", "--tag", `v${version}`, "--output", "CHANGELOG.md"], { cwd: input.workspace });
   return version;
 }
 async function readOptional(root, path) {
-  const absolute = join(root, path);
-  const info = await lstat2(absolute).catch((error) => {
+  const absolute = join2(root, path);
+  const info = await lstat3(absolute).catch((error) => {
     if (error.code === "ENOENT")
       return;
     throw error;
@@ -25077,7 +25188,7 @@ async function readOptional(root, path) {
   return readFile(absolute, "utf8");
 }
 async function assertWritableFile(root, path) {
-  const info = await lstat2(join(root, path)).catch((error) => {
+  const info = await lstat3(join2(root, path)).catch((error) => {
     if (error.code === "ENOENT")
       return;
     throw error;
@@ -25255,14 +25366,24 @@ function replaceCargoLockVersion(text, name, currentVersion, version) {
   return output.join("");
 }
 
-// src/client-release-prepare/main.ts
-try {
-  const version = await prepareRelease({
-    workspace: getInput("workspace", { required: true }),
-    updateRootVersion: getInput("update-root-version") === "" ? true : getBooleanInput("update-root-version"),
-    ...getInput("version") ? { version: getInput("version") } : {}
-  });
-  setOutput("version", version);
-} catch (error) {
-  setFailed(error instanceof Error ? error.message : String(error));
+// src/client-release-prepare/action.ts
+async function runReleasePrepare(install = installGitCliff) {
+  try {
+    const tempDir = process.env.RUNNER_TEMP;
+    if (!tempDir)
+      throw new Error("RUNNER_TEMP is required to install git-cliff");
+    const gitCliff = await install({ os: process.env.RUNNER_OS ?? "", arch: process.env.RUNNER_ARCH ?? "", tempDir });
+    const version = await prepareRelease({
+      workspace: getInput("workspace", { required: true }),
+      gitCliff,
+      updateRootVersion: getInput("update-root-version") === "" ? true : getBooleanInput("update-root-version"),
+      ...getInput("version") ? { version: getInput("version") } : {}
+    });
+    setOutput("version", version);
+  } catch (error) {
+    setFailed(error instanceof Error ? error.message : String(error));
+  }
 }
+
+// src/client-release-prepare/main.ts
+await runReleasePrepare();
