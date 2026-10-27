@@ -256,6 +256,8 @@ For changed content, the server resets the verified managed branch to the observ
 
 The target workflow serializes runs per repository and does not cancel a running attempt. GitHub can replace an older pending run when a newer run enters the same concurrency group. Check the final run result and dispatch again if the requested run was replaced.
 
+The managed commit and pull request title use the Conventional Commit subject `chore(repo-settings): sync managed files`, so a squash merge with `PR_TITLE` keeps it on default. A run that finds an open managed pull request with any other title or body, including the legacy `Sync managed files` title, restores the generated values. When the files already match, it keeps the existing commit. Manual title edits do not persist.
+
 Managed files reach default only through the pull request. A trusted merger requests `/merge` after review. New executable files are unsupported because `createCommitOnBranch` cannot set their executable bit.
 
 ## Credentials

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { type GitHub, splitRepository } from "../src/lib/github.ts";
+import { MANAGED_FILES_TITLE } from "../src/lib/managed-files.ts";
 import { inspectRepoSettingsPreflight } from "../src/lib/repo-settings.ts";
 import { assert, CLIENT, dispatch, hasStatus, jobLog, SERVER, SERVER_BOT_ID, type Ctx, type Scenario, until, withServerConfig } from "./harness.ts";
 import { withCleanup } from "./cleanup.ts";
@@ -7,6 +8,8 @@ import { parseCreatedRulesets, rulesetCleanupPlan } from "./repo-settings-owners
 
 const BRANCH = "csm-ci/repo-settings";
 const MANAGED_MARKER = "<!-- csm-ci:repo-settings:managed-files -->";
+// Earlier server releases used the legacy subject; cleanup still recognizes their branches.
+const MANAGED_SUBJECTS = new Set([MANAGED_FILES_TITLE, "Sync managed files"]);
 const RULESET_NAMES = new Set(["integrity", "review-and-checks", "controlled-merges", "release-tags"]);
 export const UNMANAGED_SQUASH_SETTINGS = {
   squash_merge_commit_title: "COMMIT_OR_PR_TITLE",
@@ -174,7 +177,7 @@ export async function ownedManagedHead(ctx: Pick<Ctx, "gh">, repository = CLIENT
   if (!sha) return undefined;
   const { data: commit } = await ctx.gh.rest.repos.getCommit({ ...splitRepository(repository), ref: sha });
   const changedPaths = commit.files?.map((file) => file.filename) ?? [];
-  if (commit.author?.id !== SERVER_BOT_ID || commit.commit.message !== "Sync managed files" || changedPaths.length === 0 || changedPaths.some((path) => !managedPaths.includes(path))) return undefined;
+  if (commit.author?.id !== SERVER_BOT_ID || !MANAGED_SUBJECTS.has(commit.commit.message) || changedPaths.length === 0 || changedPaths.some((path) => !managedPaths.includes(path))) return undefined;
   if (commit.commit.verification?.verified !== true || commit.commit.verification.reason !== "valid") return undefined;
   const pulls = await openManagedPull(ctx.gh, repository);
   if (pulls.length > 1) return undefined;
@@ -416,6 +419,9 @@ export const repoSettings: Scenario[] = [
         });
         managedPull = pulls[0];
         assert(managedPull, "managed-files pull request was not created");
+        const { data: createdPull } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: managedPull.number });
+        const { data: createdCommit } = await ctx.gh.rest.repos.getCommit({ ...splitRepository(CLIENT), ref: observedHead });
+        assert(createdPull.title === MANAGED_FILES_TITLE && createdCommit.commit.message === MANAGED_FILES_TITLE, `managed-files pull request or commit subject is not ${MANAGED_FILES_TITLE} (${initial.url})`);
 
         const beforeRepeat = await rulesetUpdateTimes(ctx.gh);
         const repeat = await dispatchReconciliation(ctx, CLIENT, "dispatch", undefined, { createdRulesetIds });
@@ -443,8 +449,11 @@ export const repoSettings: Scenario[] = [
           const { data } = await ctx.gh.rest.repos.get(splitRepository(CLIENT));
           assert(data.has_wiki === true && data.has_projects === true && data.allow_update_branch === false, "omitted feature settings were changed");
         });
-        await dispatchReconciliation(ctx, CLIENT, "dispatch", undefined, { createdRulesetIds });
+        await ctx.gh.rest.pulls.update({ ...splitRepository(CLIENT), pull_number: managedPull.number, title: "Sync managed files" });
+        const retitled = await dispatchReconciliation(ctx, CLIENT, "dispatch", undefined, { createdRulesetIds });
         await assertRepositorySettings(ctx, CLIENT);
+        const { data: refreshedPull } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: managedPull.number });
+        assert(refreshedPull.title === MANAGED_FILES_TITLE && refreshedPull.head.sha === observedHead && await managedBranchHead(ctx.gh) === observedHead, `legacy managed-files title was not refreshed in place (${retitled.url})`);
 
         await withServerConfig(ctx, (text) => {
           const changed = text.replace("    allow_squash_merge: true\n", "");

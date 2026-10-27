@@ -79,4 +79,18 @@ describe("managed funding branch cleanup ownership", () => {
     ]);
     expect(await ownedManagedHead({ gh: github("read", fetch) }, CLIENT, allowed)).toEqual(owned ? { sha, pull: { number: 1, headSha: sha } } : undefined);
   });
+
+  test.each([
+    ["current subject", "chore(repo-settings): sync managed files", true],
+    ["legacy subject", "Sync managed files", true],
+    ["other subject", "chore: unrelated", false],
+  ] as const)("checks a branch commit with the %s", async (_name, message, owned) => {
+    const sha = "a".repeat(40);
+    const fetch = fakeFetch([
+      { method: "GET", path: `/repos/${CLIENT}/git/ref/heads%2Fcsm-ci%2Frepo-settings`, body: { object: { sha } } },
+      { method: "GET", path: `/repos/${CLIENT}/commits/${sha}`, body: { author: { id: SERVER_BOT_ID }, commit: { message, verification: { verified: true, reason: "valid" } }, files: [{ filename: "e2e/repo-settings-managed.txt" }] } },
+      { method: "GET", path: `/repos/${CLIENT}/pulls`, body: [{ number: 1, body: "<!-- csm-ci:repo-settings:managed-files -->", head: { sha } }] },
+    ]);
+    expect(await ownedManagedHead({ gh: github("read", fetch) }, CLIENT)).toEqual(owned ? { sha, pull: { number: 1, headSha: sha } } : undefined);
+  });
 });
