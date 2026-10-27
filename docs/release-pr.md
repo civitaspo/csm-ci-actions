@@ -35,7 +35,7 @@ Renovate does not update this pin. No Renovate manager reads `git-cliff.ts`, and
    - the asset `digest` field from the GitHub releases API;
    - a good `gpg --verify` of the `.sig` file by key `1D2D410A741137EBC544826F4A92FA17B6619297`, the key named in upstream's binary release documentation.
 4. Check for GitHub artifact attestations with `gh attestation verify --repo orhun/git-cliff` or the attestations API, and check the release's `immutable` field. Verify any provenance that exists. Do not describe a release as immutable or attested without that evidence.
-5. Extract each binary and confirm the reported version. Change the version and every digest in one PR. Update the table above, the tests and `docs/handoff.md` with the evidence. A human reviewer approves the PR after checking the evidence.
+5. Extract each binary and confirm the reported version. Change the version and every digest in one PR. Update the table above and the tests, and record the evidence in the PR. A human reviewer approves the PR after checking the evidence.
 
 If release age or integrity cannot be established, do not update. An urgent update to fix a published git-cliff vulnerability may skip only the 7-day wait. It still requires every integrity step above. The PR must state the advisory and the skipped wait, and the reviewer must acknowledge both.
 

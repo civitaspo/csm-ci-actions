@@ -6,7 +6,7 @@ Follow this workflow for changes to csm-ci-actions and its live testing environm
 
 1. Inspect the working tree, branch, remote `main`, and related pull requests. Preserve unrelated work and start each new PR from the intended base.
 2. Read [docs/design.md](docs/design.md), including the security design and Naming list, and the affected operation's page in `docs/`. Together they define supported behavior. Change them in a separate PR before adding behavior outside them.
-3. Read [docs/handoff.md](docs/handoff.md) for verified GitHub behavior and testing constraints. Use the current code and live GitHub state to check whether an older status or open item still applies. The design and operation pages win if documents disagree.
+3. Read [docs/testing.md](docs/testing.md) for the testing environment, e2e rules, and verified GitHub behavior. Check assumptions against the current code and live GitHub state. The design and operation pages win if documents disagree.
 4. Trace the affected operation's callers, implementation, tests, fixtures, and generated files. For setup or production administration, also read [docs/setup.md](docs/setup.md) and [docs/repo-settings.md](docs/repo-settings.md).
 
 ## Develop one complete change
@@ -42,7 +42,7 @@ mise run actions-lock-verify
 
 ## Run live e2e safely
 
-Read [README.md](README.md#run-live-e2e-in-the-testing-repositories) for prerequisites and [docs/handoff.md](docs/handoff.md#7-using-the-e2e-and-cautions) for cleanup and correlation rules.
+Read [README.md](README.md#run-live-e2e-in-the-testing-repositories) for prerequisites and [docs/testing.md](docs/testing.md#running-e2e) for cleanup and correlation rules.
 
 ```sh
 GH_TOKEN=$(gh auth token) bun e2e/run.ts --ref <full-head-sha> --feature <feature>
@@ -83,7 +83,7 @@ For workflow failures, also check these repository-specific constraints:
 ## Keep language and reviews consistent
 
 - Everything committed here is English: code, comments, docs, commit messages, PR titles, and PR bodies. CI rejects CJK characters in tracked files. Translate before the first commit.
-- Write direct instructions and concise explanations. Use the repository's names consistently. Put behavior and operator procedures in the operation pages, and verification evidence in `docs/handoff.md`.
+- Write direct instructions and concise explanations. Use the repository's names consistently. Put behavior and operator procedures in the operation pages, verified GitHub behavior in `docs/testing.md`, and verification evidence in the PR body.
 - Never push directly to `main`. Use a branch, open a PR, and squash-merge. Sign commits and include the tool's `Co-Authored-By` trailer.
 - Use Conventional Commit PR titles, such as `fix(merge): ...`. PR bodies use Why, What changed, Scope, Tradeoffs, Blast Radius, and Verification. Drop empty sections. Explain material choices and link verification evidence.
 - Merge only when `status-check` is green and the user authorized merging that PR. A green PR without merge authorization is ready for review. After an authorized merge, verify the merged SHA and complete the affected post-merge CI e2e checks.

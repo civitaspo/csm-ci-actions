@@ -2,7 +2,7 @@
 
 ## Existing Server evidence and future integration gate
 
-Existing server capability has live evidence. The [credentialed merge suite](https://github.com/civitaspo/csm-ci-actions/actions/runs/40255902418) passed all nine scenarios without skips, as recorded in [handoff section 33](../../../../docs/handoff.md#33-native-bot-merge-comments). Its native Bot request reached a successful [Server merge](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40256942388) of [testing PR #597](https://github.com/civitaspo/testing-csm-ci-client/pull/597). Those results prove the bounded server path, not an agent reviewer, this batch procedure, or unattended safety.
+Existing server capability has live evidence. The [credentialed merge suite](https://github.com/civitaspo/csm-ci-actions/actions/runs/40255902418) passed all nine scenarios without skips, as recorded in [handoff section 33](https://github.com/civitaspo/csm-ci-actions/blob/df380ff6fd0f99f9ff91bb7dc377f6250730b408/docs/handoff.md#33-native-bot-merge-comments). Its native Bot request reached a successful [Server merge](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40256942388) of [testing PR #597](https://github.com/civitaspo/testing-csm-ci-client/pull/597). Those results prove the bounded server path, not an agent reviewer, this batch procedure, or unattended safety.
 
 Before enabling any unattended production workflow, validate the chosen agent and actual commenter identity in `testing-csm-ci-client` and `testing-csm-ci-server`. Record exact candidate, caller, and reusable workflow SHAs, PR and comment IDs, assessment head and base, run URLs, receipts, review authors, check producer IDs, merge actor, and post-merge outcome. The pilot must demonstrate:
 
