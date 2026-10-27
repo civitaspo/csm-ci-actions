@@ -37764,19 +37764,21 @@ function repoSettingsRuleSets(config) {
     { name: "release-tags", enforcement: "active", target: "tag", conditions: { ref_name: { include: ["refs/tags/v*"], exclude: [] } }, rules: [{ type: "creation" }, { type: "update" }, { type: "deletion" }], bypass_actors: [{ actor_id: config.apps.server_app_id, actor_type: "Integration", bypass_mode: "always" }] }
   ];
 }
+var ALL_ADMIN_TARGETS = { settings: true, rulesets: true, releases: true };
 var CreatedRuleSet = object({ id: number2().int().positive(), name: string2() });
 async function inspectRepoSettings(args) {
   const repoSettings = args.config.repo_settings;
   if (!repoSettings)
     throw new Rejection("repo_settings is not configured");
+  const targets = args.targets ?? ALL_ADMIN_TARGETS;
   const address = { ...splitRepository(args.target.name) };
   const [repositoryResponse, ruleSets, immutableEnabled, sponsorships] = await Promise.all([
-    args.adminGH.rest.repos.get(address),
-    args.adminGH.paginate("GET /repos/{owner}/{repo}/rulesets", { ...address, per_page: 100 }),
-    isImmutableReleasesEnabled(args.adminGH, address),
-    repoSettings.sponsorships ? readSponsorships(args.adminGH, args.target.name) : undefined
+    targets.settings ? args.adminGH.rest.repos.get(address) : undefined,
+    targets.rulesets ? args.adminGH.paginate("GET /repos/{owner}/{repo}/rulesets", { ...address, per_page: 100 }) : [],
+    targets.releases ? isImmutableReleasesEnabled(args.adminGH, address) : true,
+    targets.settings && repoSettings.sponsorships ? readSponsorships(args.adminGH, args.target.name) : undefined
   ]);
-  const definitions = repoSettingsRuleSets(args.config);
+  const definitions = targets.rulesets ? repoSettingsRuleSets(args.config) : [];
   const summaries = array(object({ id: number2().int().positive(), name: string2(), source_type: string2().optional() })).parse(ruleSets);
   const managed = await Promise.all(summaries.filter((set) => set.source_type === "Repository" && definitions.some((definition) => definition.name === set.name)).map(async (set) => {
     const response = await args.adminGH.request("GET /repos/{owner}/{repo}/rulesets/{ruleset_id}", { ...address, ruleset_id: set.id });
@@ -37812,14 +37814,14 @@ async function inspectRepoSettings(args) {
   }
   return {
     target: args.target,
-    changes: { settings: changedSettings(repositoryResponse.data, repoSettings.settings ?? {}), immutableReleases: !immutableEnabled, sponsorships: sponsorships !== undefined && sponsorships.hasSponsorshipsEnabled !== repoSettings.sponsorships?.enabled, rulesets: rulesetsToChange },
+    changes: { settings: repositoryResponse ? changedSettings(repositoryResponse.data, repoSettings.settings ?? {}) : [], immutableReleases: !immutableEnabled, sponsorships: sponsorships !== undefined && sponsorships.hasSponsorshipsEnabled !== repoSettings.sponsorships?.enabled, rulesets: rulesetsToChange },
     activation,
     rulesetIds: ids,
     rulesetEnforcements: enforcements
   };
 }
 async function applyRepoSettings(args) {
-  const inspection = await inspectRepoSettings({ adminGH: args.adminGH, config: args.config, target: args.target, mode: args.mode });
+  const inspection = await inspectRepoSettings({ adminGH: args.adminGH, config: args.config, target: args.target, mode: args.mode, ...args.targets ? { targets: args.targets } : {} });
   if (inspection.activation) {
     if (!args.approverAppSlug)
       throw new Rejection("approver App slug is required for dispatch preflight");
@@ -37973,23 +37975,37 @@ function repoSettingsEventMode(value, eventName) {
     throw new Error("a scheduled run cannot use dispatch mode");
   return value;
 }
-function repoSettingsOperationMode(value, eventName, eventMode) {
-  const operationMode = value || "reconcile";
-  if (operationMode !== "reconcile" && operationMode !== "managed-files-only") {
-    throw new Error(`unknown repo-settings operation mode ${operationMode}`);
+var REPO_SETTINGS_TARGETS = ["settings", "rulesets", "releases", "managed-files"];
+function repoSettingsSelection(value, eventName, eventMode) {
+  const entries = value.split(",").map((entry) => entry.trim());
+  if (entries.some((entry) => entry === ""))
+    throw new Error(`repo-settings targets must be a comma-separated list of ${[...REPO_SETTINGS_TARGETS, "all"].join(", ")}: ${JSON.stringify(value)}`);
+  const selected = new Set;
+  for (const entry of entries) {
+    if (entry === "all")
+      REPO_SETTINGS_TARGETS.forEach((target) => selected.add(target));
+    else if (REPO_SETTINGS_TARGETS.includes(entry))
+      selected.add(entry);
+    else
+      throw new Error(`unknown repo-settings target ${entry}; use ${[...REPO_SETTINGS_TARGETS, "all"].join(", ")}`);
   }
-  if (operationMode === "managed-files-only" && (eventName === "schedule" || eventMode === "schedule")) {
-    throw new Error("a scheduled run cannot use managed-files-only mode");
-  }
-  if (operationMode === "managed-files-only" && eventName !== "workflow_dispatch") {
-    throw new Error("managed-files-only mode requires a workflow_dispatch event");
-  }
-  return operationMode;
+  const all = selected.size === REPO_SETTINGS_TARGETS.length;
+  if (!all && (eventName === "schedule" || eventMode === "schedule"))
+    throw new Error("a scheduled run must select all repo-settings targets");
+  if (!all && eventName !== "workflow_dispatch")
+    throw new Error("selecting repo-settings targets other than all requires a workflow_dispatch event");
+  return new Set(REPO_SETTINGS_TARGETS.filter((target) => selected.has(target)));
 }
-function validateRepoSettingsStage(stage, operationMode) {
-  if (operationMode === "managed-files-only" && ["inspect", "preflight", "apply"].includes(stage)) {
-    throw new Error(`repo-settings stage ${stage} is unavailable in managed-files-only mode`);
-  }
+function formatRepoSettingsSelection(selection) {
+  return REPO_SETTINGS_TARGETS.filter((target) => selection.has(target)).join(",");
+}
+function selectsAdministration(selection) {
+  return selection.has("settings") || selection.has("rulesets") || selection.has("releases");
+}
+function validateRepoSettingsStage(stage, selection) {
+  const allowed = ["inspect", "apply"].includes(stage) ? selectsAdministration(selection) : stage === "preflight" ? selection.has("rulesets") : ["managed-inspect", "managed-apply"].includes(stage) ? selection.has("managed-files") : true;
+  if (!allowed)
+    throw new Error(`repo-settings stage ${stage} is unavailable for targets ${formatRepoSettingsSelection(selection)}`);
 }
 
 // src/server-repo-settings/main.ts
@@ -38002,12 +38018,18 @@ function env(name) {
 function input(name, required = false) {
   return getInput(name, { required });
 }
+function adminTargets(selection) {
+  return { settings: selection.has("settings"), rulesets: selection.has("rulesets"), releases: selection.has("releases") };
+}
 async function main() {
   const mode = input("mode", true);
-  const operationMode = repoSettingsOperationMode(input("operation-mode"), env("GITHUB_EVENT_NAME"), input("event-mode") || undefined);
-  validateRepoSettingsStage(mode, operationMode);
-  setOutput("operation-mode", operationMode);
-  if (mode === "validate-mode") {
+  const selection = repoSettingsSelection(input("targets"), env("GITHUB_EVENT_NAME"), input("event-mode") || undefined);
+  validateRepoSettingsStage(mode, selection);
+  setOutput("targets", formatRepoSettingsSelection(selection));
+  setOutput("selects-administration", String(selectsAdministration(selection)));
+  setOutput("selects-rulesets", String(selection.has("rulesets")));
+  setOutput("selects-managed-files", String(selection.has("managed-files")));
+  if (mode === "validate-targets") {
     return;
   }
   const serverRepository = env("GITHUB_REPOSITORY");
@@ -38045,7 +38067,7 @@ async function main() {
     return;
   }
   if (mode === "inspect") {
-    const result = await inspectRepoSettings({ adminGH: github(input("admin-token", true)), config, target, mode: repoSettingsEventMode(input("event-mode", true), env("GITHUB_EVENT_NAME")) });
+    const result = await inspectRepoSettings({ adminGH: github(input("admin-token", true)), config, target, mode: repoSettingsEventMode(input("event-mode", true), env("GITHUB_EVENT_NAME")), targets: adminTargets(selection) });
     info(`drift for ${target.name}: ${JSON.stringify(result.changes)}; activation required: ${result.activation}`);
     setOutput("changes", JSON.stringify(result.changes));
     setOutput("activation-required", String(result.activation));
@@ -38074,6 +38096,7 @@ async function main() {
       mode: repoSettingsEventMode(input("event-mode", true), env("GITHUB_EVENT_NAME")),
       ...approverAppSlug ? { approverAppSlug } : {},
       actionsRepository,
+      targets: adminTargets(selection),
       onRulesetCreated: ({ id, name }) => info(`created-repo-settings-ruleset ${JSON.stringify({ repository: target.name, id, name })}`)
     });
     info(`applied to ${target.name}: ${JSON.stringify(result)}`);

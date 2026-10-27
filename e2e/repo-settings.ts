@@ -212,14 +212,13 @@ async function dispatchReconciliation(
   repository: string,
   eventMode: "schedule" | "dispatch",
   configPath?: string,
-  options: { operationMode?: "reconcile" | "managed-files-only"; createdRulesetIds?: Set<number>; expectedConclusion?: "success" | "failure" } = {},
+  options: { targets?: string; createdRulesetIds?: Set<number>; expectedConclusion?: "success" | "failure" } = {},
 ): Promise<{ id: number; url: string; stepConclusions: Map<string, string | null>; reconcileLog: string }> {
-  const operationMode = options.operationMode ?? "reconcile";
   const expectedConclusion = options.expectedConclusion ?? "success";
   const run = await dispatch(ctx, SERVER, "csm-ci-repo-settings.yml", {
     repository,
     "event-mode": eventMode,
-    mode: operationMode,
+    targets: options.targets ?? "all",
     ...(configPath ? { "config-path": configPath } : {}),
     // The schedule branch calls the target workflow directly, so it supplies what discovery would resolve.
     ...(eventMode === "schedule" ? { "workflow-release": JSON.stringify(await resolveWorkflowRelease(ctx.gh, [])) } : {}),
@@ -374,7 +373,7 @@ async function sponsorState(gh: GitHub) {
 }
 
 export const repoSettings: Scenario[] = [
-  ...([true, false, "managed-files-only"] as const).map((setting): Scenario => ({
+  ...([true, false, "managed-files"] as const).map((setting): Scenario => ({
     id: `repo-settings.funding-${setting}`,
     cases: {
       fixture: {
@@ -407,10 +406,10 @@ export const repoSettings: Scenario[] = [
       const snapshot = await snapshotRepository(ctx.gh, CLIENT);
       const sponsorship = await sponsorState(ctx.gh);
       const createdRulesetIds = new Set<number>();
-      const enabled = setting === "managed-files-only" ? !sponsorship.hasSponsorshipsEnabled : setting;
-      const operationMode = setting === "managed-files-only" ? setting : "reconcile";
+      const enabled = setting === "managed-files" ? !sponsorship.hasSponsorshipsEnabled : setting;
+      const targets = setting === "managed-files" ? setting : "all";
       await withCleanup(async () => {
-        if (operationMode === "reconcile") {
+        if (targets === "all") {
           await ctx.gh.graphql("mutation($id:ID!,$enabled:Boolean!){updateRepository(input:{repositoryId:$id,hasSponsorshipsEnabled:$enabled}){repository{id}}}", { id: sponsorship.id, enabled: !enabled });
         }
         await withServerConfig(ctx, (text) => {
@@ -418,8 +417,8 @@ export const repoSettings: Scenario[] = [
           assert(changed !== text, "could not add explicit sponsorship e2e configuration");
           return changed;
         }, async () => {
-          const first = await dispatchReconciliation(ctx, CLIENT, "dispatch", undefined, { createdRulesetIds, operationMode });
-          assert((await sponsorState(ctx.gh)).hasSponsorshipsEnabled === (operationMode === "reconcile" ? enabled : sponsorship.hasSponsorshipsEnabled), `incorrect Sponsor button setting (${first.url})`);
+          const first = await dispatchReconciliation(ctx, CLIENT, "dispatch", undefined, { createdRulesetIds, targets });
+          assert((await sponsorState(ctx.gh)).hasSponsorshipsEnabled === (targets === "all" ? enabled : sponsorship.hasSponsorshipsEnabled), `incorrect Sponsor button setting (${first.url})`);
           const head = await managedBranchHead(ctx.gh);
           const pulls = await openManagedPull(ctx.gh);
           assert(head && pulls.length === 1 && pulls[0]?.headSha === head, `missing funding PR (${first.url})`);
@@ -429,13 +428,13 @@ export const repoSettings: Scenario[] = [
           const funding = await ctx.gh.rest.repos.getContent({ ...splitRepository(CLIENT), path: ".github/FUNDING.yml", ref: head, mediaType: { format: "raw" } });
           const fundingContent: unknown = funding.data;
           assert(fundingContent === 'github: ["civitaspo"]\n', `incorrect generated funding content (${first.url})`);
-          const repeat = await dispatchReconciliation(ctx, CLIENT, "dispatch", undefined, { createdRulesetIds, operationMode });
+          const repeat = await dispatchReconciliation(ctx, CLIENT, "dispatch", undefined, { createdRulesetIds, targets });
           const repeated = await openManagedPull(ctx.gh);
           assert(await managedBranchHead(ctx.gh) === head && repeated.length === 1 && repeated[0]?.number === pulls[0]?.number, `funding replay changed its PR or head (${repeat.url})`);
           for (const step of ["Apply repository settings", "Apply managed files"]) assert(repeat.stepConclusions.get(step) === "skipped", `funding repeat did not skip ${step} (${repeat.url})`);
           await assertManagedMetadata(ctx.gh, CLIENT, ownedNumber);
           await annotatePr(ctx.gh, CLIENT, ownedNumber, ctx.run, prCase(ctx, "fixture"));
-          if (operationMode === "managed-files-only") {
+          if (targets === "managed-files") {
             assert(first.stepConclusions.get("Mint administration write token") === "skipped", `funding-only minted an administration token (${first.url})`);
           }
         });
@@ -637,33 +636,33 @@ export const repoSettings: Scenario[] = [
         assert(!bootstrapSnapshot.rulesets.some((ruleset) => ruleset.name === "controlled-merges"), "controlled-merges already exists in " + SERVER + "; bootstrap precondition changed");
 
         const first = await dispatchReconciliation(ctx, SERVER, "dispatch", undefined, {
-          operationMode: "managed-files-only",
+          targets: "managed-files",
           createdRulesetIds: bootstrapCreatedRulesetIds,
         });
-        assert(first.stepConclusions.get("Mint administration write token") === "skipped", "managed-files-only minted an administration token (" + first.url + ")");
-        assert(first.stepConclusions.get("Mint approver contents token") === "skipped", "managed-files-only minted an approver token (" + first.url + ")");
-        assert(first.stepConclusions.get("Apply repository settings") === "skipped", "managed-files-only applied repository settings (" + first.url + ")");
-        assert(first.stepConclusions.get("Apply managed files") === "success", "managed-files-only did not apply managed files (" + first.url + ")");
+        assert(first.stepConclusions.get("Mint administration write token") === "skipped", "targets managed-files minted an administration token (" + first.url + ")");
+        assert(first.stepConclusions.get("Mint approver contents token") === "skipped", "targets managed-files minted an approver token (" + first.url + ")");
+        assert(first.stepConclusions.get("Apply repository settings") === "skipped", "targets managed-files applied repository settings (" + first.url + ")");
+        assert(first.stepConclusions.get("Apply managed files") === "success", "targets managed-files did not apply managed files (" + first.url + ")");
         const bootstrapHead = await until("managed " + BRANCH + " branch in " + SERVER, async () => await managedBranchHead(ctx.gh, SERVER));
         const bootstrapPulls = await until("managed-files pull request in " + SERVER, async () => {
           const found = await openManagedPull(ctx.gh, SERVER);
           return found.length === 1 ? found : undefined;
         });
         const bootstrapPull = bootstrapPulls[0];
-        assert(bootstrapPull?.headSha === bootstrapHead, "managed-files-only pull request head does not match its branch (" + first.url + ")");
+        assert(bootstrapPull?.headSha === bootstrapHead, "targets managed-files pull request head does not match its branch (" + first.url + ")");
 
         const bootstrapOwned = await ownedManagedHead(ctx, SERVER);
         ownedAnnotationNumber(bootstrapOwned, bootstrapPull.number);
         await labelPr(ctx.gh, SERVER, bootstrapPull.number, ctx.run, prCase(ctx, "server-bootstrap"));
         const second = await dispatchReconciliation(ctx, SERVER, "dispatch", undefined, {
-          operationMode: "managed-files-only",
+          targets: "managed-files",
           createdRulesetIds: bootstrapCreatedRulesetIds,
         });
-        assert(await managedBranchHead(ctx.gh, SERVER) === bootstrapHead, "repeated managed-files-only changed the branch head (" + second.url + ")");
+        assert(await managedBranchHead(ctx.gh, SERVER) === bootstrapHead, "repeated targets managed-files changed the branch head (" + second.url + ")");
         const repeatedPulls = await openManagedPull(ctx.gh, SERVER);
-        assert(repeatedPulls.length === 1 && repeatedPulls[0]?.number === bootstrapPull.number && repeatedPulls[0]?.headSha === bootstrapHead, "repeated managed-files-only did not preserve its pull request (" + second.url + ")");
+        assert(repeatedPulls.length === 1 && repeatedPulls[0]?.number === bootstrapPull.number && repeatedPulls[0]?.headSha === bootstrapHead, "repeated targets managed-files did not preserve its pull request (" + second.url + ")");
         for (const name of ["Mint administration write token", "Mint approver contents token", "Apply repository settings", "Apply managed files"]) {
-          assert(second.stepConclusions.get(name) === "skipped", "repeated managed-files-only did not skip " + name + " (" + second.url + ")");
+          assert(second.stepConclusions.get(name) === "skipped", "repeated targets managed-files did not skip " + name + " (" + second.url + ")");
         }
 
         await assertManagedMetadata(ctx.gh, SERVER, bootstrapPull.number);
@@ -679,7 +678,7 @@ export const repoSettings: Scenario[] = [
         assert(JSON.stringify(after.settings) === JSON.stringify(bootstrapSnapshot.settings)
           && after.immutableReleases === bootstrapSnapshot.immutableReleases
           && JSON.stringify(normalizeRuleSets(after.rulesets)) === JSON.stringify(normalizeRuleSets(bootstrapSnapshot.rulesets)),
-        "managed-files-only or rejected normal dispatch changed server administration state (" + normal.url + ")");
+        "targets managed-files or rejected normal dispatch changed server administration state (" + normal.url + ")");
       }, [
         () => cleanupManagedState(ctx, undefined, undefined, SERVER),
         () => restoreRepository(ctx.gh, SERVER, bootstrapSnapshot, bootstrapCreatedRulesetIds),

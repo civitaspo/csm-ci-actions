@@ -419,6 +419,71 @@ describe("inspectRepoSettings", () => {
   });
 });
 
+describe("administrative target selection", () => {
+  const target: RepoSettingsTarget = { name: "owner/client", isServer: false };
+  const sponsorship = (enabled: boolean) => ({ data: { repository: { id: "R_1", hasSponsorshipsEnabled: enabled } } });
+  // Every administrative target has drift: a setting, the Sponsor button, three missing rulesets, and immutable releases.
+  function driftFetch() {
+    return fakeFetch([
+      { method: "GET", path: "/repos/owner/client", body: { default_branch: "main", delete_branch_on_merge: true, allow_auto_merge: false, allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false, squash_merge_commit_title: "PR_TITLE", squash_merge_commit_message: "PR_BODY" } },
+      { method: "PATCH", path: "/repos/owner/client", body: {} },
+      { method: "POST", path: "/graphql", body: sponsorship(false), then: [sponsorship(false), { data: { updateRepository: { repository: { id: "R_1", hasSponsorshipsEnabled: true } } } }] },
+      { method: "GET", path: "/repos/owner/client/rulesets", body: [] },
+      { method: "POST", path: "/repos/owner/client/rulesets", body: { id: 90 } },
+      { method: "GET", path: "/repos/owner/client/immutable-releases", body: { enabled: false } },
+      { method: "PUT", path: "/repos/owner/client/immutable-releases", body: {} },
+    ]);
+  }
+  const config = () => parseConfig(`${CONFIG_YAML}\nrepo_settings: { settings: { allow_auto_merge: true }, sponsorships: { enabled: true } }\n`);
+  const reads = {
+    settings: ["GET /repos/owner/client", "POST /graphql"],
+    rulesets: ["GET /repos/owner/client/rulesets"],
+    releases: ["GET /repos/owner/client/immutable-releases"],
+  } as const;
+  const writes = {
+    settings: ["PATCH /repos/owner/client", "POST /graphql"],
+    rulesets: ["POST /repos/owner/client/rulesets"],
+    releases: ["PUT /repos/owner/client/immutable-releases"],
+  } as const;
+
+  test.each([
+    ["settings", { settings: true, rulesets: false, releases: false }, { settingsUpdated: 1, sponsorshipsUpdated: 1, immutableReleasesEnabled: 0, rulesetsUpdated: 0, rulesetsCreated: 0 }],
+    ["rulesets", { settings: false, rulesets: true, releases: false }, { settingsUpdated: 0, sponsorshipsUpdated: 0, immutableReleasesEnabled: 0, rulesetsUpdated: 0, rulesetsCreated: 3 }],
+    ["releases", { settings: false, rulesets: false, releases: true }, { settingsUpdated: 0, sponsorshipsUpdated: 0, immutableReleasesEnabled: 1, rulesetsUpdated: 0, rulesetsCreated: 0 }],
+    ["settings and releases", { settings: true, rulesets: false, releases: true }, { settingsUpdated: 1, sponsorshipsUpdated: 1, immutableReleasesEnabled: 1, rulesetsUpdated: 0, rulesetsCreated: 0 }],
+    ["all", { settings: true, rulesets: true, releases: true }, { settingsUpdated: 1, sponsorshipsUpdated: 1, immutableReleasesEnabled: 1, rulesetsUpdated: 0, rulesetsCreated: 3 }],
+    ["omitted (all)", undefined, { settingsUpdated: 1, sponsorshipsUpdated: 1, immutableReleasesEnabled: 1, rulesetsUpdated: 0, rulesetsCreated: 3 }],
+  ] as const)("schedule apply with %s reads and writes only the selected targets", async (_name, targets, expected) => {
+    const fetch = driftFetch();
+    const result = await applyRepoSettings({ readGH: github("read", fetch), adminGH: github("admin", fetch), config: config(), target, mode: "schedule", ...(targets ? { targets } : {}) });
+    expect(result).toEqual(expected);
+    const selected = targets ?? { settings: true, rulesets: true, releases: true };
+    for (const name of ["settings", "rulesets", "releases"] as const) {
+      for (const call of [...reads[name], ...writes[name]]) {
+        if (selected[name]) expect(fetch.calls).toContain(call);
+        else expect(fetch.calls).not.toContain(call);
+      }
+    }
+  });
+
+  test("an unselected rulesets target skips controlled-merges activation and its preflight", async () => {
+    const fetch = dispatchFetch({ absent: true });
+    const plan = await inspectRepoSettings({ adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "dispatch", targets: { settings: true, rulesets: false, releases: true } });
+    expect(plan.activation).toBe(false);
+    expect(plan.changes.rulesets).toEqual([]);
+    // No approver slug is needed because activation is not attempted.
+    await applyRepoSettings({ readGH: github("read", fetch), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "dispatch", targets: { settings: true, rulesets: false, releases: true } });
+    expect(fetch.calls).not.toContain("GET /repos/owner/client/rulesets");
+    expect(fetch.calls).not.toContain("GET /users/approver%5Bbot%5D");
+  });
+
+  test("a selected rulesets target still requires the activation preflight on dispatch", async () => {
+    const fetch = dispatchFetch({ absent: true });
+    await expect(applyRepoSettings({ readGH: github("read", fetch), adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "dispatch", targets: { settings: false, rulesets: true, releases: false } }))
+      .rejects.toThrow("approver App slug is required for dispatch preflight");
+  });
+});
+
 describe("repoSettingsRuleSets", () => {
   test("review-and-checks does not require branches to be up to date, because /merge never updates them", () => {
     const review = repoSettingsRuleSets(config()).find((set) => set.name === "review-and-checks");

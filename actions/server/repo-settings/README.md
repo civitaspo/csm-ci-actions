@@ -2,31 +2,31 @@
 
 Validate configuration and reconcile settings, rulesets, and managed files in configured repositories. The action has several modes because the trusted server workflows separate discovery, validation, inspection, preflight, and writes. Use it through [server-repo-settings.yml](../../../.github/workflows/server-repo-settings.yml) and [server-repo-settings-target.yml](../../../.github/workflows/server-repo-settings-target.yml).
 
-See [repository settings](../../../docs/repo-settings.md) for operation modes, activation checks, managed files, and repository permissions. Do not expose write modes through an untrusted workflow or call `apply` without the preceding inspect and, when required, preflight stages.
+See [repository settings](../../../docs/repo-settings.md) for targets, activation checks, managed files, and repository permissions. Do not expose write modes through an untrusted workflow or call `apply` without the preceding inspect and, when required, preflight stages.
 
 ## Inputs
 
 | Input | Required | Default | Value |
 |---|---:|---|---|
-| `mode` | Yes | None | `validate-mode`, `validate-target`, `discover`, `preflight`, `inspect`, `apply`, `managed-inspect`, or `managed-apply`. |
+| `mode` | Yes | None | `validate-targets`, `validate-target`, `discover`, `preflight`, `inspect`, `apply`, `managed-inspect`, or `managed-apply`. |
 | `github-token` | No | `${{ github.token }}` | Server repository token with `contents:read` for the pinned config. |
 | `discovery-token` | No | None | Required for `discover`. Server App token used to list repositories in its installation. |
 | `read-token` | No | None | Required for `preflight`, `apply`, `managed-inspect`, and `managed-apply`. Target-scoped contents and pull requests read token. |
 | `admin-token` | No | None | Required for `inspect` and `apply`. Target-scoped administration write token; reading ruleset bypass actors also needs this permission. |
 | `contents-token` | No | None | Required for `managed-apply`. Target-scoped contents and pull requests write token; add workflows write when inspection requires it. |
 | `config-path` | No | `csm-ci.yaml` | Config path in the server repository. |
-| `repository` | No | None | Required except for `validate-mode` and `discover`. Target as `owner/repo`. |
+| `repository` | No | None | Required except for `validate-targets` and `discover`. Target as `owner/repo`. |
 | `requested-repository` | No | None | Optional repository selector for discovery. |
 | `event-mode` | No | None | `schedule` or `dispatch`, derived by the trusted caller. Required for `inspect` and `apply`. |
-| `operation-mode` | No | `reconcile` | `reconcile` or `managed-files-only`. Empty values normalize to `reconcile`. |
+| `targets` | No | `all` | Comma-separated `settings`, `rulesets`, `releases`, `managed-files`, or `all`. Empty, empty-entry, and unknown values fail. |
 | `actions-repository` | Yes | None | Repository distributing the reusable caller workflows, as `owner/repo`. |
 | `approver-app-slug` | No | None | Required when `apply` would activate controlled merges. Approver App slug returned by its capability-token step. |
 
-`actions-repository` is declared required by the action metadata. `validate-mode` returns before reading configuration or credentials. Every other stage reads the pinned configuration, verifies the server default ref, and validates the selected target when present.
+`actions-repository` is declared required by the action metadata. `validate-targets` returns before reading configuration or credentials. Every other stage reads the pinned configuration, verifies the server default ref, and validates the selected target when present.
 
 | Stage (`mode`) | Additional requirements | Outputs set |
 | --- | --- | --- |
-| `validate-mode` | Valid operation mode and allowed event. | `operation-mode` |
+| `validate-targets` | Valid targets and allowed event. | `targets`, `selects-administration`, `selects-rulesets`, `selects-managed-files` |
 | `discover` | `discovery-token`; optional `requested-repository`. | `clients`, `client-count`, `has-clients`, `server`, `has-server` |
 | `validate-target` | `repository`. | `target-owner`, `target-name`, `is-server` |
 | `inspect` | `repository`, `admin-token`, `event-mode`. | `changes`, `activation-required`, `has-changes` |
@@ -35,13 +35,16 @@ See [repository settings](../../../docs/repo-settings.md) for operation modes, a
 | `managed-inspect` | `repository`, `read-token`. | `result`, `has-changes`, `changed-paths`, `requires-workflows-write` |
 | `managed-apply` | `repository`, `read-token`, `contents-token`. | `result` |
 
-Every successful stage sets `operation-mode`. `managed-files-only` rejects `inspect`, `preflight`, and `apply`; the other stages preserve file-distribution checks. Outputs from stages that did not run are unset.
+Every successful stage sets `targets`, `selects-administration`, `selects-rulesets`, and `selects-managed-files`. `inspect` and `apply` require `settings`, `rulesets`, or `releases`; `preflight` requires `rulesets`; `managed-inspect` and `managed-apply` require `managed-files`. Outputs from stages that did not run are unset.
 
 ## Outputs
 
 | Output | Value |
 |---|---|
-| `operation-mode` | Validated operation mode. |
+| `targets` | Validated targets as a canonical comma-separated list in processing order. |
+| `selects-administration` | `true` when `settings`, `rulesets`, or `releases` is selected. |
+| `selects-rulesets` | `true` when `rulesets` is selected. |
+| `selects-managed-files` | `true` when `managed-files` is selected. |
 | `clients` | JSON array of `{name: "owner/repo", isServer: false}` targets. |
 | `client-count` | Number of selected client targets. |
 | `has-clients` | `true` when at least one client target was selected. |
@@ -95,7 +98,7 @@ Inside the trusted target workflow, `validate-target` checks that the selected r
   uses: civitaspo/csm-ci-actions/actions/server/repo-settings@<reviewed-commit-sha>
   with:
     mode: validate-target
-    operation-mode: reconcile
+    targets: all
     event-mode: ${{ github.event_name == 'schedule' && 'schedule' || 'dispatch' }}
     github-token: ${{ github.token }}
     config-path: csm-ci.yaml

@@ -5,7 +5,8 @@ import { loadAdditionalManagedFiles } from "../lib/additional-managed-files.ts";
 import { applyManagedFiles, inspectManagedFiles } from "../lib/managed-files.ts";
 import { applyRepoSettings, discoverRepoSettingsTargets, inspectRepoSettings, inspectRepoSettingsPreflight } from "../lib/repo-settings.ts";
 import { github, loadConfig, splitRepository } from "../lib/github.ts";
-import { repoSettingsEventMode, repoSettingsOperationMode, validateRepoSettingsContext, validateRepoSettingsStage } from "./context.ts";
+import { formatRepoSettingsSelection, repoSettingsEventMode, repoSettingsSelection, selectsAdministration, validateRepoSettingsContext, validateRepoSettingsStage, type RepoSettingsSelection } from "./context.ts";
+import type { RepoSettingsAdminTargets } from "../lib/repo-settings.ts";
 
 function env(name: string): string {
   const value = process.env[name];
@@ -17,12 +18,19 @@ function input(name: string, required = false): string {
   return core.getInput(name, { required });
 }
 
+function adminTargets(selection: RepoSettingsSelection): RepoSettingsAdminTargets {
+  return { settings: selection.has("settings"), rulesets: selection.has("rulesets"), releases: selection.has("releases") };
+}
+
 async function main(): Promise<void> {
   const mode = input("mode", true);
-  const operationMode = repoSettingsOperationMode(input("operation-mode"), env("GITHUB_EVENT_NAME"), input("event-mode") || undefined);
-  validateRepoSettingsStage(mode, operationMode);
-  core.setOutput("operation-mode", operationMode);
-  if (mode === "validate-mode") {
+  const selection = repoSettingsSelection(input("targets"), env("GITHUB_EVENT_NAME"), input("event-mode") || undefined);
+  validateRepoSettingsStage(mode, selection);
+  core.setOutput("targets", formatRepoSettingsSelection(selection));
+  core.setOutput("selects-administration", String(selectsAdministration(selection)));
+  core.setOutput("selects-rulesets", String(selection.has("rulesets")));
+  core.setOutput("selects-managed-files", String(selection.has("managed-files")));
+  if (mode === "validate-targets") {
     return;
   }
   const serverRepository = env("GITHUB_REPOSITORY");
@@ -59,7 +67,7 @@ async function main(): Promise<void> {
     return;
   }
   if (mode === "inspect") {
-    const result = await inspectRepoSettings({ adminGH: github(input("admin-token", true)), config, target, mode: repoSettingsEventMode(input("event-mode", true), env("GITHUB_EVENT_NAME")) });
+    const result = await inspectRepoSettings({ adminGH: github(input("admin-token", true)), config, target, mode: repoSettingsEventMode(input("event-mode", true), env("GITHUB_EVENT_NAME")), targets: adminTargets(selection) });
     core.info(`drift for ${target.name}: ${JSON.stringify(result.changes)}; activation required: ${result.activation}`);
     core.setOutput("changes", JSON.stringify(result.changes));
     core.setOutput("activation-required", String(result.activation));
@@ -86,6 +94,7 @@ async function main(): Promise<void> {
       mode: repoSettingsEventMode(input("event-mode", true), env("GITHUB_EVENT_NAME")),
       ...(approverAppSlug ? { approverAppSlug } : {}),
       actionsRepository,
+      targets: adminTargets(selection),
       onRulesetCreated: ({ id, name }) => core.info(`created-repo-settings-ruleset ${JSON.stringify({ repository: target.name, id, name })}`),
     });
     core.info(`applied to ${target.name}: ${JSON.stringify(result)}`);

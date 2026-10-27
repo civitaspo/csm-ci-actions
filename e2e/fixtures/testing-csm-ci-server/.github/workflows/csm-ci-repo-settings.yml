@@ -15,13 +15,11 @@ on:
         options:
           - schedule
           - dispatch
-      mode:
-        description: Reconcile settings, or distribute managed files only.
+      targets:
+        description: Comma-separated settings, rulesets, releases, managed-files, or all.
         required: false
-        type: choice
-        options:
-          - reconcile
-          - managed-files-only
+        type: string
+        default: all
       correlation:
         description: Unique e2e run identifier.
         required: false
@@ -44,7 +42,7 @@ jobs:
     uses: civitaspo/csm-ci-actions/.github/workflows/server-repo-settings.yml@e2e
     with:
       repository: ${{ inputs.repository }}
-      mode: ${{ inputs.mode || 'reconcile' }}
+      targets: ${{ inputs.targets }}
       config-path: ${{ inputs.config-path || 'csm-ci.yaml' }}
     secrets:
       CSM_CI_SERVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
@@ -59,7 +57,7 @@ jobs:
       workflow-release: ${{ inputs.workflow-release }}
       repository: ${{ inputs.repository }}
       event-mode: ${{ inputs.event-mode }}
-      mode: ${{ inputs.mode || 'reconcile' }}
+      targets: ${{ inputs.targets }}
       config-path: ${{ inputs.config-path || 'csm-ci.yaml' }}
     secrets:
       CSM_CI_SERVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}

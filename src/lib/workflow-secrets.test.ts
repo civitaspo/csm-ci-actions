@@ -71,7 +71,7 @@ describe("explicit reusable workflow secret contracts", () => {
     const reconcile = record(record(workflow(".github/workflows/server-repo-settings-target.yml").jobs).reconcile);
     if (!Array.isArray(reconcile.steps)) throw new Error("expected steps");
     const activation = reconcile.steps.map(record).find((step) => step.id === "approver-token");
-    expect(activation?.if).toContain("operation-mode == 'reconcile'");
+    expect(activation?.if).toContain("steps.target.outputs.selects-rulesets == 'true'");
     expect(activation?.if).toContain("inputs.event-mode == 'dispatch'");
     expect(activation?.if).toContain("activation-required == 'true'");
     expect(record(activation?.with)["private-key"]).toBe("${{ secrets.CSM_CI_APPROVER_APP_PRIVATE_KEY }}");

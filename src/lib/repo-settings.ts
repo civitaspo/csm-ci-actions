@@ -200,6 +200,10 @@ export type RepoSettingsInspection = {
   rulesetEnforcements: Record<string, RuleSet["enforcement"] | undefined>;
 };
 
+// Administrative targets selected for one run. Unselected targets are neither read nor written.
+export type RepoSettingsAdminTargets = { settings: boolean; rulesets: boolean; releases: boolean };
+const ALL_ADMIN_TARGETS: RepoSettingsAdminTargets = { settings: true, rulesets: true, releases: true };
+
 export type RepoSettingsApplyResult = { settingsUpdated: number; sponsorshipsUpdated: number; immutableReleasesEnabled: number; rulesetsUpdated: number; rulesetsCreated: number };
 const CreatedRuleSet = z.object({ id: z.number().int().positive(), name: z.string() });
 
@@ -210,17 +214,19 @@ export async function inspectRepoSettings(args: {
   config: Config;
   target: RepoSettingsTarget;
   mode: RepoSettingsMode;
+  targets?: RepoSettingsAdminTargets;
 }): Promise<RepoSettingsInspection> {
   const repoSettings = args.config.repo_settings;
   if (!repoSettings) throw new Rejection("repo_settings is not configured");
+  const targets = args.targets ?? ALL_ADMIN_TARGETS;
   const address = { ...splitRepository(args.target.name) };
   const [repositoryResponse, ruleSets, immutableEnabled, sponsorships] = await Promise.all([
-    args.adminGH.rest.repos.get(address),
-    args.adminGH.paginate("GET /repos/{owner}/{repo}/rulesets", { ...address, per_page: 100 }),
-    isImmutableReleasesEnabled(args.adminGH, address),
-    repoSettings.sponsorships ? readSponsorships(args.adminGH, args.target.name) : undefined,
+    targets.settings ? args.adminGH.rest.repos.get(address) : undefined,
+    targets.rulesets ? args.adminGH.paginate("GET /repos/{owner}/{repo}/rulesets", { ...address, per_page: 100 }) : [],
+    targets.releases ? isImmutableReleasesEnabled(args.adminGH, address) : true,
+    targets.settings && repoSettings.sponsorships ? readSponsorships(args.adminGH, args.target.name) : undefined,
   ]);
-  const definitions = repoSettingsRuleSets(args.config);
+  const definitions = targets.rulesets ? repoSettingsRuleSets(args.config) : [];
   const summaries = z.array(z.object({ id: z.number().int().positive(), name: z.string(), source_type: z.string().optional() })).parse(ruleSets);
   const managed = await Promise.all(summaries.filter((set) => set.source_type === "Repository" && definitions.some((definition) => definition.name === set.name)).map(async (set) => {
     const response = await args.adminGH.request("GET /repos/{owner}/{repo}/rulesets/{ruleset_id}", { ...address, ruleset_id: set.id });
@@ -250,7 +256,7 @@ export async function inspectRepoSettings(args: {
   }
   return {
     target: args.target,
-    changes: { settings: changedSettings(repositoryResponse.data, repoSettings.settings ?? {}), immutableReleases: !immutableEnabled, sponsorships: sponsorships !== undefined && sponsorships.hasSponsorshipsEnabled !== repoSettings.sponsorships?.enabled, rulesets: rulesetsToChange },
+    changes: { settings: repositoryResponse ? changedSettings(repositoryResponse.data, repoSettings.settings ?? {}) : [], immutableReleases: !immutableEnabled, sponsorships: sponsorships !== undefined && sponsorships.hasSponsorshipsEnabled !== repoSettings.sponsorships?.enabled, rulesets: rulesetsToChange },
     activation,
     rulesetIds: ids,
     rulesetEnforcements: enforcements,
@@ -265,9 +271,10 @@ export async function applyRepoSettings(args: {
   mode: RepoSettingsMode;
   approverAppSlug?: string;
   actionsRepository?: string;
+  targets?: RepoSettingsAdminTargets;
   onRulesetCreated?: (ruleset: { id: number; name: string }) => void;
 }): Promise<RepoSettingsApplyResult> {
-  const inspection = await inspectRepoSettings({ adminGH: args.adminGH, config: args.config, target: args.target, mode: args.mode });
+  const inspection = await inspectRepoSettings({ adminGH: args.adminGH, config: args.config, target: args.target, mode: args.mode, ...(args.targets ? { targets: args.targets } : {}) });
   if (inspection.activation) {
     if (!args.approverAppSlug) throw new Rejection("approver App slug is required for dispatch preflight");
     const basic = await inspectRepoSettingsPreflight({ readGH: args.readGH, target: args.target, ...(args.actionsRepository ? { actionsRepository: args.actionsRepository } : {}) });

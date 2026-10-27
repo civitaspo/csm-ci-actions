@@ -1,8 +1,9 @@
 name: csm-ci repository settings
 
 # Called by the server repository's schedule or workflow_dispatch caller. The
-# event mode comes from the caller's event. The target workflow takes the mode
-# as an input and trusts its caller, a workflow on the server's default branch.
+# event mode comes from the caller's event, and a schedule always selects all
+# targets. The target workflow takes the validated targets as an input and
+# trusts its caller, a workflow on the server's default branch.
 on:
   workflow_call:
     secrets:
@@ -19,10 +20,10 @@ on:
         description: Optional configured repository to reconcile.
         type: string
         default: ''
-      mode:
-        description: Reconcile repository settings, or distribute managed files only.
+      targets:
+        description: Comma-separated settings, rulesets, releases, managed-files, or all. Scheduled runs always use all.
         type: string
-        default: reconcile
+        default: all
 
 permissions: {}
 
@@ -36,7 +37,7 @@ jobs:
       contents: read
     outputs:
       workflow-release: ${{ steps.discover.outputs.workflow-release }}
-      operation-mode: ${{ steps.validate-mode.outputs.operation-mode }}
+      targets: ${{ steps.validate-targets.outputs.targets }}
       clients: ${{ steps.discover.outputs.clients }}
       has-clients: ${{ steps.discover.outputs.has-clients }}
       server: ${{ steps.discover.outputs.server }}
@@ -48,11 +49,11 @@ jobs:
           ref: ${{ job.workflow_sha }}
           path: .csm-ci-actions
           persist-credentials: false
-      - id: validate-mode
+      - id: validate-targets
         uses: ./.csm-ci-actions/actions/server/repo-settings
         with:
-          mode: validate-mode
-          operation-mode: ${{ inputs.mode }}
+          mode: validate-targets
+          targets: ${{ github.event_name == 'schedule' && 'all' || inputs.targets }}
           event-mode: ${{ github.event_name == 'schedule' && 'schedule' || 'dispatch' }}
           github-token: ${{ github.token }}
           config-path: ${{ inputs.config-path }}
@@ -70,7 +71,7 @@ jobs:
         uses: ./.csm-ci-actions/actions/server/repo-settings
         with:
           mode: discover
-          operation-mode: ${{ steps.validate-mode.outputs.operation-mode }}
+          targets: ${{ steps.validate-targets.outputs.targets }}
           event-mode: ${{ github.event_name == 'schedule' && 'schedule' || 'dispatch' }}
           github-token: ${{ github.token }}
           config-path: ${{ inputs.config-path }}
@@ -92,7 +93,7 @@ jobs:
     with:
       repository: ${{ matrix.target.name }}
       event-mode: ${{ github.event_name == 'schedule' && 'schedule' || 'dispatch' }}
-      mode: ${{ needs.discover.outputs.operation-mode }}
+      targets: ${{ needs.discover.outputs.targets }}
       config-path: ${{ inputs.config-path }}
       workflow-release: ${{ needs.discover.outputs.workflow-release }}
     secrets:
@@ -111,7 +112,7 @@ jobs:
     with:
       repository: ${{ fromJSON(needs.discover.outputs.server).name }}
       event-mode: ${{ github.event_name == 'schedule' && 'schedule' || 'dispatch' }}
-      mode: ${{ needs.discover.outputs.operation-mode }}
+      targets: ${{ needs.discover.outputs.targets }}
       config-path: ${{ inputs.config-path }}
       workflow-release: ${{ needs.discover.outputs.workflow-release }}
     secrets:

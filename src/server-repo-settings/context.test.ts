@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "bun:test";
 import { parseConfig } from "../lib/config.ts";
-import { repoSettingsEventMode, repoSettingsOperationMode, validateRepoSettingsContext, validateRepoSettingsStage } from "./context.ts";
+import { formatRepoSettingsSelection, repoSettingsEventMode, repoSettingsSelection, selectsAdministration, validateRepoSettingsContext, validateRepoSettingsStage } from "./context.ts";
 
 const config = parseConfig(readFileSync("e2e/fixtures/testing-csm-ci-server/csm-ci.yaml", "utf8"));
 const base = {
@@ -55,33 +55,72 @@ describe("repo-settings event mode", () => {
   });
 });
 
-describe("repo-settings operation mode", () => {
+const ALL = "settings,rulesets,releases,managed-files";
+const UNKNOWN = "use settings, rulesets, releases, managed-files, all";
+const EMPTY = "repo-settings targets must be a comma-separated list of settings, rulesets, releases, managed-files, all";
+
+describe("repo-settings targets", () => {
   test.each([
-    ["omitted mode defaults to reconciliation", undefined, "workflow_dispatch", undefined, "reconcile"],
-    ["empty mode defaults to reconciliation", "", "workflow_dispatch", "dispatch", "reconcile"],
-    ["reconciliation mode", "reconcile", "schedule", "schedule", "reconcile"],
-    ["managed-files-only dispatch", "managed-files-only", "workflow_dispatch", "dispatch", "managed-files-only"],
-  ] as const)("accepts %s", (_name, value, eventName, eventMode, expected) => {
-    expect(repoSettingsOperationMode(value, eventName, eventMode)).toBe(expected);
+    ["settings alone", "settings", "settings"],
+    ["rulesets alone", "rulesets", "rulesets"],
+    ["releases alone", "releases", "releases"],
+    ["managed-files alone", "managed-files", "managed-files"],
+    ["a combination in canonical order", "managed-files,settings", "settings,managed-files"],
+    ["administrative targets with spaces", "releases, rulesets ,settings", "settings,rulesets,releases"],
+    ["duplicates", "rulesets,rulesets", "rulesets"],
+    ["all", "all", ALL],
+    ["all with another target", "all,settings", ALL],
+    ["every target listed", "managed-files,releases,rulesets,settings", ALL],
+  ] as const)("accepts %s on dispatch", (_name, value, expected) => {
+    expect(formatRepoSettingsSelection(repoSettingsSelection(value, "workflow_dispatch", "dispatch"))).toBe(expected);
+  });
+
+  test("accepts all on a schedule", () => {
+    expect(formatRepoSettingsSelection(repoSettingsSelection("all", "schedule", "schedule"))).toBe(ALL);
+    expect(formatRepoSettingsSelection(repoSettingsSelection(ALL, "workflow_dispatch", "schedule"))).toBe(ALL);
   });
 
   test.each([
-    ["unknown mode", "apply", "workflow_dispatch", "dispatch", "unknown repo-settings operation mode apply"],
-    ["scheduled event", "managed-files-only", "schedule", undefined, "a scheduled run cannot use managed-files-only mode"],
-    ["scheduled operation mode", "managed-files-only", "workflow_dispatch", "schedule", "a scheduled run cannot use managed-files-only mode"],
-    ["non-dispatch event", "managed-files-only", "push", undefined, "managed-files-only mode requires a workflow_dispatch event"],
+    ["an empty value", "", "workflow_dispatch", "dispatch", `${EMPTY}: ""`],
+    ["a blank value", " ", "workflow_dispatch", "dispatch", `${EMPTY}: " "`],
+    ["an empty entry", "settings,,rulesets", "workflow_dispatch", "dispatch", `${EMPTY}: "settings,,rulesets"`],
+    ["a trailing comma", "settings,", "workflow_dispatch", "dispatch", `${EMPTY}: "settings,"`],
+    ["an unknown target", "apply", "workflow_dispatch", "dispatch", `unknown repo-settings target apply; ${UNKNOWN}`],
+    ["an unknown target after a known one", "settings,ruleset", "workflow_dispatch", "dispatch", `unknown repo-settings target ruleset; ${UNKNOWN}`],
+    ["a case variant", "Settings", "workflow_dispatch", "dispatch", `unknown repo-settings target Settings; ${UNKNOWN}`],
+    ["the removed reconcile mode", "reconcile", "workflow_dispatch", "dispatch", `unknown repo-settings target reconcile; ${UNKNOWN}`],
+    ["the removed managed-files-only mode", "managed-files-only", "workflow_dispatch", "dispatch", `unknown repo-settings target managed-files-only; ${UNKNOWN}`],
+    ["a partial selection on a scheduled event", "managed-files", "schedule", undefined, "a scheduled run must select all repo-settings targets"],
+    ["a partial selection in schedule event mode", "settings", "workflow_dispatch", "schedule", "a scheduled run must select all repo-settings targets"],
+    ["a partial selection on a non-dispatch event", "managed-files", "push", undefined, "selecting repo-settings targets other than all requires a workflow_dispatch event"],
   ] as const)("rejects %s with the exact reason", (_name, value, eventName, eventMode, message) => {
-    expect(() => repoSettingsOperationMode(value, eventName, eventMode)).toThrow(message);
+    expect(() => repoSettingsSelection(value, eventName, eventMode)).toThrow(message);
   });
 });
 
-describe("repo-settings operation stages", () => {
-  test.each(["inspect", "preflight", "apply"])("rejects %s in managed-files-only mode", (stage) => {
-    expect(() => validateRepoSettingsStage(stage, "managed-files-only"))
-      .toThrow(`repo-settings stage ${stage} is unavailable in managed-files-only mode`);
+describe("repo-settings stages per target selection", () => {
+  const stages = ["validate-targets", "validate-target", "discover", "inspect", "preflight", "apply", "managed-inspect", "managed-apply"];
+  const always = ["validate-targets", "validate-target", "discover"];
+  test.each([
+    ["settings", [...always, "inspect", "apply"]],
+    ["rulesets", [...always, "inspect", "preflight", "apply"]],
+    ["releases", [...always, "inspect", "apply"]],
+    ["managed-files", [...always, "managed-inspect", "managed-apply"]],
+    ["settings,managed-files", [...always, "inspect", "apply", "managed-inspect", "managed-apply"]],
+    ["rulesets,releases", [...always, "inspect", "preflight", "apply"]],
+    ["all", stages],
+  ] as const)("targets %s allow exactly their stages", (value, allowed) => {
+    const selection = repoSettingsSelection(value, "workflow_dispatch", "dispatch");
+    const formatted = formatRepoSettingsSelection(selection);
+    for (const stage of stages) {
+      if ((allowed as readonly string[]).includes(stage)) expect(() => validateRepoSettingsStage(stage, selection)).not.toThrow();
+      else expect(() => validateRepoSettingsStage(stage, selection)).toThrow(`repo-settings stage ${stage} is unavailable for targets ${formatted}`);
+    }
   });
 
-  test.each(["validate-target", "discover", "managed-inspect", "managed-apply"])("allows %s in managed-files-only mode", (stage) => {
-    expect(() => validateRepoSettingsStage(stage, "managed-files-only")).not.toThrow();
+  test.each([
+    ["settings", true], ["rulesets", true], ["releases", true], ["managed-files", false], ["all", true],
+  ] as const)("targets %s select administration: %p", (value, expected) => {
+    expect(selectsAdministration(repoSettingsSelection(value, "workflow_dispatch", "dispatch"))).toBe(expected);
   });
 });
