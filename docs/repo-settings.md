@@ -37,7 +37,7 @@ Configuration comes from the triggering server commit, `GITHUB_SHA`. Discovery i
 
 ## Standard client workflows, planned
 
-This runtime implements the contract for [issue #77](https://github.com/civitaspo/csm-ci-actions/issues/77). Deployment and an intended compatible stable release are still required. Do not add its new fields to configurations using older strict parser pins. It depends on the [explicit Secret contract](first-release-plan.md#explicit-secret-contract-and-staged-migration), not the separate additional-files implementation.
+This runtime implements the contract for [issue #77](https://github.com/civitaspo/csm-ci-actions/issues/77). Deployment and an intended compatible stable release are still required. Do not add its new fields to configurations using older strict parser pins. It depends on the [explicit Secret contract](setup.md#explicit-secret-contract-migration), not the separate additional-files implementation.
 
 ### Caller selection
 
@@ -202,7 +202,7 @@ Implementation must verify setting changes with the existing Server App and reco
 
 ## Rulesets and emergency stop
 
-The rulesets have fixed meanings from the [security specification](first-release-plan.md#s6-placement-of-secrets-and-permissions):
+The rulesets have fixed meanings from the [security design](design.md#s6-placement-of-secrets-and-permissions):
 
 | Name | Target | Rules |
 |---|---|---|
@@ -215,7 +215,7 @@ The server matches rulesets by name and `source_type: Repository`. Duplicate nam
 
 A scheduled run does not create `controlled-merges` or activate a disabled ruleset. Every repair that does not activate it, scheduled or dispatched, omits its enforcement, so a stop set during the run is kept. Set its enforcement to `disabled` for an emergency stop. Manual dispatch activates it, creating it when absent, only after these checks pass:
 
-- The default branch contains a merge caller for newly created issue comments, with an explicit same-name `CSM_CI_CLIENT_APP_PRIVATE_KEY` mapping and no job-level `if:`. The server also needs its label caller with a same-name `CSM_CI_SERVER_APP_PRIVATE_KEY` mapping. Any present approval or provider signing names must also map to their identical secret expressions. Optional feature presence is checked when that feature runs. Preflight rejects inheritance, missing required names, renamed names, literals, wrong secret references, and undeclared extra names. Whitespace inside the expression is allowed. See the [explicit secret contract](first-release-plan.md#explicit-secret-contract-and-staged-migration) and [setup examples](setup.md#explicit-secret-contract-migration). Caller triggers, unconditional jobs, referenced repository checks, and activation rejection messages are unchanged. Upgrade old caller pins and mappings together before selecting this preflight revision.
+- The default branch contains a merge caller for newly created issue comments, with an explicit same-name `CSM_CI_CLIENT_APP_PRIVATE_KEY` mapping and no job-level `if:`. The server also needs its label caller with a same-name `CSM_CI_SERVER_APP_PRIVATE_KEY` mapping. Any present approval or provider signing names must also map to their identical secret expressions. Optional feature presence is checked when that feature runs. Preflight rejects inheritance, missing required names, renamed names, literals, wrong secret references, and undeclared extra names. Whitespace inside the expression is allowed. See the [explicit secret contract](setup.md#explicit-secret-contract-migration). Caller triggers, unconditional jobs, referenced repository checks, and activation rejection messages are unchanged, including `caller workflow has not been distributed` and `caller workflow is not distributed on <repository>`. Upgrade old caller pins and mappings together before selecting this preflight revision.
 - The configured approver App can obtain a repository-scoped contents-write token, and its bot identity matches configuration.
 - No open pull request has auto-merge queued.
 - An existing `controlled-merges` ruleset has only the Server App's `pull_request` bypass.
@@ -238,7 +238,7 @@ Unselected targets are neither read nor written, and their tokens are not minted
 
 Use `targets: managed-files` to distribute the configured files before a target has the merge caller, policy checks, or the approver App needed for activation. This selection skips settings and ruleset inspection, activation preflight, approver capability, and administrative apply. It still validates the server and target context, inspects the managed branch, and opens or updates the managed-file pull request. Use the same selection to distribute generated callers without touching rulesets.
 
-After Apps and credentials are provisioned, dispatch `targets: managed-files`, review and merge the generated pull request through the repository's current process, verify the caller workflows and required checks on the default branch, then dispatch `targets: all`. The [first-release plan](first-release-plan.md#phase-6-repo-settings) defines the complete bootstrap order.
+After Apps and credentials are provisioned, dispatch `targets: managed-files`, review and merge the generated pull request through the repository's current process, verify the caller workflows and required checks on the default branch, then dispatch `targets: all`.
 
 ## Managed-file pull requests
 

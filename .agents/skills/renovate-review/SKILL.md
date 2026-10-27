@@ -15,9 +15,9 @@ Use the existing agent and approved tools. This skill adds no Server operation, 
 
 ## Load the effective contract
 
-Read [approve](../../../docs/approve.md), [merge](../../../docs/merge.md), and the [security design](../../../docs/first-release-plan.md#security-design). Discover the target's actual caller pins, called workflow revision, deployed Server runtime, and Server configuration revision. Read the effective policies, immutable trust IDs, required check names and producer App IDs, and applicable repository overrides.
+Read [approve](../../../docs/approve.md), [merge](../../../docs/merge.md), and the [security design](../../../docs/design.md#security-design). Discover the target's actual caller pins, called workflow revision, deployed Server runtime, and Server configuration revision. Read the effective policies, immutable trust IDs, required check names and producer App IDs, and applicable repository overrides.
 
-Check deployed code as well as configuration. The [repository policy migration](../../../docs/first-release-plan.md#repository-policy-overrides-and-staged-migration) can describe support that is not yet deployed. Apply the deployed restrictions until its migration is verified. Do not turn historical repository-name restrictions into permanent skill policy. An assessment cannot grant an exemption.
+Check deployed code as well as configuration. Do not turn historical repository-name restrictions into permanent skill policy. An assessment cannot grant an exemption.
 
 ## Collect and assess each revision
 
@@ -33,7 +33,7 @@ Each assessment records the following facts and links. A title such as "patch up
 | Trust boundary | Changes to workflows, reusable callers, token permissions, environment access, checkout refs, credential persistence, scripts, dependency install hooks, caches, release signing, or publication. Explain where changed code executes and which credentials it can reach. |
 | Decision | Findings with source links, uncertainty, remaining tests, proposed disposition, and the account that would submit each command. Record operator authorization separately from the agent's assessment. |
 
-A dependency's valid signature establishes provenance, not that its code is safe. Passing CI does not establish privileged workflow safety. The [security design](../../../docs/first-release-plan.md#security-design) specifically notes that a writer can modify a required GitHub Actions workflow. Approval and server policy remain security gates.
+A dependency's valid signature establishes provenance, not that its code is safe. Passing CI does not establish privileged workflow safety. The [security design](../../../docs/design.md#security-design) specifically notes that a writer can modify a required GitHub Actions workflow. Approval and server policy remain security gates.
 
 Use explained dispositions rather than a numerical score. Use no numerical score unless a separately validated scoring method is available.
 

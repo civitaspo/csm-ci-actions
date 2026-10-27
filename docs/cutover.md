@@ -1,8 +1,8 @@
 # Production cutover runbook
 
-This runbook describes the production migration from `civitaspo/securefix-server` to `csm-ci-server` running csm-ci-actions. All ten selected repositories have completed their protected-merge and applicable release verification. [handoff.md](handoff.md#34-production-provider-verification) and the server's [production verification](https://github.com/civitaspo/csm-ci-server/blob/main/verification.md) record the executed steps. The additional Renovate caller rollout and legacy archival are tracked separately. This is Phase 7 of [first-release-plan.md](first-release-plan.md#phase-7-production-migration).
+This runbook describes the production migration from `civitaspo/securefix-server` to `csm-ci-server` running csm-ci-actions. All ten selected repositories have completed their protected-merge and applicable release verification. [handoff.md](handoff.md#34-production-provider-verification) and the server's [production verification](https://github.com/civitaspo/csm-ci-server/blob/main/verification.md) record the executed steps. The additional Renovate caller rollout and legacy archival are tracked separately.
 
-Names come from the plan's "Naming list". Replace `<owner>` with the account that owns the repositories and `<sha>` with the reviewed csm-ci-actions commit on `main` that you pin. The wizard registers the Apps under a personal account, so `<owner>` is that user.
+Names come from the [Naming list](design.md#naming-list). Replace `<owner>` with the account that owns the repositories and `<sha>` with the reviewed csm-ci-actions commit on `main` that you pin. The wizard registers the Apps under a personal account, so `<owner>` is that user.
 
 ## 0. Before you start
 
@@ -101,7 +101,7 @@ Use `{enforcement: "disabled"}` or `{enforcement: "active"}` in place of the nam
 6. **Reconcile.** Dispatch `csm-ci-repo-settings` with `repository: <owner>/<repo>` and `targets: all`. The run fails before any administrative write if the merge caller is missing, the approver cannot mint a token, auto-merge is queued, or a non-active `controlled-merges` has a bypass other than the Server App's `pull_request`. Fix the cause and dispatch again. Then `gh api repos/<owner>/<repo>/rulesets --jq '.[] | [.name, .enforcement]'` shows the four csm-ci rulesets active.
 7. **Remove the old protection.** Delete the `legacy-*` rulesets and any other ruleset or classic protection that requires securefix-server's checks or grants its bypasses. Leave unrelated rulesets alone. This ends the no-merge window.
 8. **Resume waiting pull requests.** Comment `/recheck` on each open pull request so it gets `csm-ci/policy` and an approval decision.
-9. **Verify.** Use a real, intended change: the `csm-ci/policy` check appears, the approver approves trusted commits (or a trusted approver uses `/approve` for sensitive paths such as `.github/**`), and `/merge` merges. Then do a release round trip with a real version: release-pr, merge of `release/next`, tag, and an immutable release with attestation. The tag and release are permanent. This is the plan's production verification.
+9. **Verify.** Use a real, intended change: the `csm-ci/policy` check appears, the approver approves trusted commits (or a trusted approver uses `/approve` for sensitive paths such as `.github/**`), and `/merge` merges. Then do a release round trip with a real version: release-pr, merge of `release/next`, tag, and an immutable release with attestation. The tag and release are permanent.
 10. **Detach the old system.** Remove the repository from securefix-server's configuration. Keep the old Apps installed and their secrets in place until step 7, so a rollback does not need new keys.
 
 ### Rollback for one repository
