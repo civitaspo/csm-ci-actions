@@ -1,0 +1,24 @@
+name: English only
+
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  english:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: English only
+        run: |
+          # The repository is public, so every tracked file is English (see AGENTS.md).
+          if git ls-files -z | xargs -0 grep -nP '[\x{3040}-\x{30ff}\x{3400}-\x{4dbf}\x{4e00}-\x{9fff}\x{ff00}-\x{ffef}]'; then
+            echo "Tracked files must be English. Translate the lines above." >&2
+            exit 1
+          fi
