@@ -31,7 +31,7 @@ for (let mask = 0; mask < 32; mask++) {
       if (caller === "release-pr") {
         expect(workflow.on.push.branches).toEqual(["trunk"]);
         expect(workflow.on.workflow_dispatch.inputs.version).toEqual({ description: "Optional semantic version without a v prefix.", type: "string", required: false, default: "" });
-        expect(workflow.jobs[caller].with).toEqual({ version: "${{ inputs.version || '' }}", "update-root-version": true });
+        expect(workflow.jobs[caller].with).toEqual({ version: "${{ inputs.version || '' }}" });
         expect(workflow.jobs[caller].permissions).toEqual({ contents: "read" });
         expect(workflow.jobs[caller].if).toContain("!startsWith(github.event.head_commit.message, 'chore(release): v')");
         expect(workflow.jobs[caller].if).toContain("!startsWith(github.event.head_commit.message, 'release-pr: chore(release): v')");
@@ -44,19 +44,32 @@ for (let mask = 0; mask < 32; mask++) {
   });
 }
 
-test.each([true, false, undefined])("preserves root-version setting %s", (value) => {
-  const c = candidate(["securefix"], { release_prepare: { ...(value === undefined ? {} : { update_root_version: value }) } });
-  expect(parse(generateWorkflows(c, "owner/client", "release/default", revision)[callerPath("release-pr")]!).jobs["release-pr"].with["update-root-version"]).toBe(value ?? true);
+const versionRoute = { paths: { ".release-version": "semver", "CHANGELOG.md": "any", "Cargo.*": "version-only", "herdr-plugin.toml": "version-only" } };
+test.each([
+  [undefined, undefined],
+  [[], "[]"],
+  [["Cargo.toml", "Cargo.lock", "herdr-plugin.toml"], '["Cargo.toml","Cargo.lock","herdr-plugin.toml"]'],
+] satisfies [string[] | undefined, string | undefined][])("passes version files %j as the JSON input", (files, input) => {
+  const c = candidate(["securefix"], { release_prepare: { ...(files === undefined ? {} : { version_files: files }) } }, versionRoute);
+  const text = generateWorkflows(c, "owner/client", "release/default", revision)[callerPath("release-pr")]!;
+  expect(parse(text).jobs["release-pr"].with).toEqual({ version: "${{ inputs.version || '' }}", ...(input === undefined ? {} : { "version-files": input }) });
 });
 
 test.each([
   ["unselected preparation", [], { release_prepare: {} }, {}, "release_prepare requires selected release preparation"],
   ["unknown preparation key", ["securefix"], { release_prepare: { version: "1" } }, {}, "Unrecognized key"],
-  ["nonboolean input", ["securefix"], { release_prepare: { update_root_version: "false" } }, {}, "expected boolean"],
+  ["non-list version files", ["securefix"], { release_prepare: { version_files: "Cargo.toml" } }, versionRoute, "expected array"],
+  ["unsupported version file", ["securefix"], { release_prepare: { version_files: ["README.md"] } }, versionRoute, 'version file "README.md" is not supported'],
+  ["duplicate version file", ["securefix"], { release_prepare: { version_files: ["Cargo.toml", "Cargo.toml"] } }, versionRoute, 'version file "Cargo.toml" is listed more than once'],
+  ["Cargo.lock without Cargo.toml", ["securefix"], { release_prepare: { version_files: ["Cargo.lock"] } }, versionRoute, 'version file "Cargo.lock" requires "Cargo.toml"'],
+  ["unrouted version file", ["securefix"], { release_prepare: { version_files: ["package.json"] } }, versionRoute, 'version file "package.json" must be version-only in the release-pr route'],
+  ["version file routed as any", ["securefix"], { release_prepare: { version_files: ["herdr-plugin.toml"] } }, { paths: { "herdr-plugin.toml": "any", "*.toml": "version-only" } }, 'version file "herdr-plugin.toml" must be version-only in the release-pr route'],
+  ["unrouted Cargo.lock", ["securefix"], { release_prepare: { version_files: ["Cargo.toml", "Cargo.lock"] } }, { paths: { "Cargo.toml": "version-only" } }, 'version file "Cargo.lock" must be version-only in the release-pr route'],
   ["conflicting branch", ["securefix"], {}, { to: "release/custom" }, "release-pr route must use release/next"],
   ["conflicting workflow", ["securefix"], {}, { workflow: ".github/workflows/custom.yml" }, "release-pr route must use release/next"],
 ] satisfies [string, Op[], object, object, string][]) ("rejects %s", (_name, ops, extra, routeExtra, message) => {
-  expect(() => candidate(ops, extra, routeExtra)).toThrow(message);
+  // Zod reports issues as JSON, so quoted paths appear escaped.
+  expect(() => candidate(ops, extra, routeExtra)).toThrow(JSON.stringify(message).slice(1, -1));
 });
 
 test("first matching entry and absent canonical route remain effective", () => {

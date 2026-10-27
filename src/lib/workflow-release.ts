@@ -63,7 +63,7 @@ export async function validateWorkflowContract(value: unknown, caller: Caller, l
     if (name !== "CSM_CI_CLIENT_APP_PRIVATE_KEY" && object(declaration).required === true) throw new Error("additional required credentials are unsupported");
   }
   const inputs = call.inputs === undefined ? {} : object(call.inputs);
-  const expected: Record<string, { type: string; default: string | boolean }> = caller === "release-pr" ? { version: { type: "string", default: "" }, "update-root-version": { type: "boolean", default: true } } : {};
+  const expected: Record<string, { type: string; default: string | boolean }> = caller === "release-pr" ? { version: { type: "string", default: "" }, "version-files": { type: "string", default: "" } } : {};
   for (const [name, required] of Object.entries(expected)) {
     const declaration = object(inputs[name]);
     if (declaration.type !== required.type || declaration.default !== required.default || declaration.required === true) throw new Error(`input ${name} has an incompatible type, default, or requirement`);

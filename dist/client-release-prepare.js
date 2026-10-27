@@ -24918,17 +24918,6 @@ function getInput(name, options) {
   }
   return val.trim();
 }
-function getBooleanInput(name, options) {
-  const trueValue = ["true", "True", "TRUE"];
-  const falseValue = ["false", "False", "FALSE"];
-  const val = getInput(name, options);
-  if (trueValue.includes(val))
-    return true;
-  if (falseValue.includes(val))
-    return false;
-  throw new TypeError(`Input does not meet YAML 1.2 "Core Schema" specification: ${name}
-` + `Support boolean input list: \`true | True | TRUE | false | False | FALSE\``);
-}
 function setOutput(name, value) {
   const filePath = process.env["GITHUB_OUTPUT"] || "";
   if (filePath) {
@@ -25118,6 +25107,22 @@ function parseSemVer(value) {
   return { major: match[1] ?? "", minor: match[2] ?? "", patch: match[3] ?? "", prerelease: match[4]?.split(".") ?? [] };
 }
 
+// src/release/version-files.ts
+var VERSION_FILES = ["package.json", "Cargo.toml", "Cargo.lock", "pyproject.toml", "dbt_project.yml", "herdr-plugin.toml"];
+var DEFAULT_VERSION_FILES = ["package.json", "Cargo.toml", "Cargo.lock", "pyproject.toml", "dbt_project.yml"];
+var isVersionFile = (path) => VERSION_FILES.includes(path);
+function versionFilesError(files) {
+  for (const [index, path] of files.entries()) {
+    if (!isVersionFile(path))
+      return `version file ${JSON.stringify(path)} is not supported`;
+    if (files.indexOf(path) !== index)
+      return `version file ${JSON.stringify(path)} is listed more than once`;
+  }
+  if (files.includes("Cargo.lock") && !files.includes("Cargo.toml"))
+    return 'version file "Cargo.lock" requires "Cargo.toml"';
+  return;
+}
+
 // src/client-release-prepare/prepare.ts
 var execFile2 = promisify2(callbackExecFile2);
 var VERSION_LINE = /^\s*"?version"?\s*[=:]/u;
@@ -25140,12 +25145,17 @@ async function prepareRelease(input) {
     throw new Error(`version ${JSON.stringify(version)} is not valid SemVer`);
   for (const path of [".release-version", "CHANGELOG.md"])
     await assertWritableFile(input.workspace, path);
-  const paths = input.updateRootVersion === false ? [] : ["package.json", "Cargo.toml", "Cargo.lock", "pyproject.toml", "dbt_project.yml"];
+  const explicit = input.versionFiles !== undefined;
+  const invalid = explicit ? versionFilesError(input.versionFiles ?? []) : undefined;
+  if (invalid)
+    throw new Error(invalid);
   const originals = new Map;
-  for (const path of paths) {
+  for (const path of input.versionFiles ?? DEFAULT_VERSION_FILES) {
     const content = await readOptional(input.workspace, path);
     if (content !== undefined)
       originals.set(path, content);
+    else if (explicit)
+      throw new Error(`version file ${JSON.stringify(path)} does not exist`);
   }
   const changes = new Map;
   const packageJson = originals.get("package.json");
@@ -25167,6 +25177,9 @@ async function prepareRelease(input) {
   const dbt = originals.get("dbt_project.yml");
   if (dbt !== undefined)
     changes.set("dbt_project.yml", replaceDbtVersion(dbt, version));
+  const herdr = originals.get("herdr-plugin.toml");
+  if (herdr !== undefined)
+    changes.set("herdr-plugin.toml", replaceHerdrPluginVersion(herdr, version));
   for (const [path, text] of changes)
     await writeFile3(join2(input.workspace, path), text);
   await writeFile3(join2(input.workspace, ".release-version"), `${version}
@@ -25297,7 +25310,8 @@ function replaceTomlVersion(text, section, version, path) {
   if (text.includes('"""') || text.includes("'''"))
     throw new Error(`${path} multiline TOML strings are not supported`);
   const lines = text.split(/(?<=\n)/u);
-  let active = false;
+  const table = section === "" ? "the root table" : `[${section}]`;
+  let active = section === "";
   let found = 0;
   let currentVersion = "";
   const output = lines.map((line) => {
@@ -25309,15 +25323,69 @@ function replaceTomlVersion(text, section, version, path) {
     found++;
     const match = /^(\s*"?version"?\s*=\s*)(['"])([^'"\r\n]*)(['"])(\s*(?:#.*)?(?:\r?\n)?)$/u.exec(line);
     if (!match || match[2] !== match[4])
-      throw new Error(`${path} has an unsupported version value in [${section}]`);
+      throw new Error(`${path} has an unsupported version value in ${table}`);
     if (!parseSemVer(match[3] ?? ""))
-      throw new Error(`${path} has an invalid version in [${section}]`);
+      throw new Error(`${path} has an invalid version in ${table}`);
     currentVersion = match[3] ?? "";
     return `${match[1]}${match[2]}${version}${match[4]}${match[5]}`;
   }).join("");
   if (found !== 1)
-    throw new Error(`${path} must have exactly one version in [${section}]`);
+    throw new Error(`${path} must have exactly one version in ${table}`);
   return { text: output, currentVersion };
+}
+function replaceHerdrPluginVersion(text, version) {
+  const prepared = replaceTomlVersion(text, "", version, "herdr-plugin.toml").text;
+  assertTomlStatements(text, "herdr-plugin.toml");
+  return prepared;
+}
+function assertTomlStatements(text, path) {
+  const malformed = () => new Error(`${path} is not valid TOML`);
+  const statements = [];
+  const closers = [];
+  let current = "";
+  for (let index = 0;index < text.length; index++) {
+    const char = text[index];
+    if (char === '"' || char === "'") {
+      let end = index + 1;
+      for (;end < text.length && text[end] !== char; end++) {
+        if (text[end] === `
+`)
+          throw malformed();
+        if (char === '"' && text[end] === "\\")
+          end++;
+      }
+      if (end >= text.length)
+        throw malformed();
+      current += "S";
+      index = end;
+      continue;
+    }
+    if (char === "#") {
+      while (index + 1 < text.length && text[index + 1] !== `
+`)
+        index++;
+      continue;
+    }
+    if (char === "[" || char === "{")
+      closers.push(char === "[" ? "]" : "}");
+    else if ((char === "]" || char === "}") && closers.pop() !== char)
+      throw malformed();
+    if (char === `
+` && closers.length === 0) {
+      statements.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  if (closers.length > 0)
+    throw malformed();
+  statements.push(current.trim());
+  const key = String.raw`(?:[A-Za-z0-9_-]+|S)(?:\s*\.\s*(?:[A-Za-z0-9_-]+|S))*`;
+  const statement = new RegExp(String.raw`^(?:\[\s*${key}\s*\]|\[\[\s*${key}\s*\]\]|${key}\s*=\s*\S.*)$`, "su");
+  for (const line of statements)
+    if (line !== "" && !statement.test(line))
+      throw malformed();
 }
 function readCargoPackageName(text) {
   let active = false;
@@ -25376,13 +25444,24 @@ async function runReleasePrepare(install = installGitCliff) {
     const version = await prepareRelease({
       workspace: getInput("workspace", { required: true }),
       gitCliff,
-      updateRootVersion: getInput("update-root-version") === "" ? true : getBooleanInput("update-root-version"),
+      ...getInput("version-files") ? { versionFiles: parseVersionFiles(getInput("version-files")) } : {},
       ...getInput("version") ? { version: getInput("version") } : {}
     });
     setOutput("version", version);
   } catch (error) {
     setFailed(error instanceof Error ? error.message : String(error));
   }
+}
+function parseVersionFiles(input) {
+  let parsed;
+  try {
+    parsed = JSON.parse(input);
+  } catch {
+    parsed = undefined;
+  }
+  if (!Array.isArray(parsed) || !parsed.every((path) => typeof path === "string"))
+    throw new Error("version-files must be a JSON array of strings");
+  return parsed;
 }
 
 // src/client-release-prepare/main.ts

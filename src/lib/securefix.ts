@@ -3,9 +3,8 @@ import { lstat, mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/pro
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import picomatch from "picomatch";
 import { z } from "zod";
-import type { SecurefixRoute } from "./config.ts";
+import { securefixPathRule, type SecurefixRoute } from "./config.ts";
 import { Rejection } from "./request.ts";
 import { splitRepository } from "./github.ts";
 
@@ -295,7 +294,7 @@ export function validateSecurefixRouteHead(run: SecurefixRun, route: SecurefixRo
 export function validateRouteChanges(route: SecurefixRoute, changes: readonly SecurefixChange[], original: ReadonlyMap<string, Buffer | null>): void {
   for (const change of changes) {
     validateSecurefixPath(change.path);
-    const rule = Object.entries(route.paths).find(([pattern]) => picomatch.isMatch(change.path, pattern, { dot: true }))?.[1];
+    const rule = securefixPathRule(route, change.path);
     if (!rule) throw new Rejection(`securefix route does not allow path ${JSON.stringify(change.path)}`);
     if (rule === "semver") {
       if (change.kind !== "write" || change.path !== ".release-version" || !isSemver(change.content.toString("utf8").trim())) {

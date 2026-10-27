@@ -34,13 +34,14 @@ test.each([
 });
 
 test.each([
-  ["missing version", { "update-root-version": { type: "boolean", default: true } }, "expected record"],
-  ["wrong version type", { version: { type: "number", default: "" }, "update-root-version": { type: "boolean", default: true } }, "input version has an incompatible"],
-  ["wrong version default", { version: { type: "string", default: "1.0.0" }, "update-root-version": { type: "boolean", default: true } }, "input version has an incompatible"],
-  ["required version", { version: { type: "string", default: "", required: true }, "update-root-version": { type: "boolean", default: true } }, "input version has an incompatible"],
-  ["wrong root type", { version: { type: "string", default: "" }, "update-root-version": { type: "string", default: true } }, "input update-root-version has an incompatible"],
-  ["wrong root default", { version: { type: "string", default: "" }, "update-root-version": { type: "boolean", default: false } }, "input update-root-version has an incompatible"],
-  ["required root", { version: { type: "string", default: "" }, "update-root-version": { type: "boolean", default: true, required: true } }, "input update-root-version has an incompatible"],
+  ["missing version", { "version-files": { type: "string", default: "" } }, "expected record"],
+  ["wrong version type", { version: { type: "number", default: "" }, "version-files": { type: "string", default: "" } }, "input version has an incompatible"],
+  ["wrong version default", { version: { type: "string", default: "1.0.0" }, "version-files": { type: "string", default: "" } }, "input version has an incompatible"],
+  ["required version", { version: { type: "string", default: "", required: true }, "version-files": { type: "string", default: "" } }, "input version has an incompatible"],
+  ["missing version files", { version: { type: "string", default: "" } }, "expected record"],
+  ["wrong version files type", { version: { type: "string", default: "" }, "version-files": { type: "boolean", default: "" } }, "input version-files has an incompatible"],
+  ["wrong version files default", { version: { type: "string", default: "" }, "version-files": { type: "string", default: "[]" } }, "input version-files has an incompatible"],
+  ["required version files", { version: { type: "string", default: "" }, "version-files": { type: "string", default: "", required: true } }, "input version-files has an incompatible"],
 ] satisfies [string, object, string][]) ("rejects preparation %s", async (_name, inputs, message) => {
   await expect(validateWorkflowContract({ ...fixture(), on: { workflow_call: { ...fixture().on.workflow_call, inputs } } }, "release-pr", lock, read)).rejects.toThrow(message);
 });

@@ -4,11 +4,12 @@ import { promisify } from "node:util";
 import { join } from "node:path";
 import { isMap, isScalar, parseDocument } from "yaml";
 import { parseSemVer } from "../release/semver.ts";
+import { DEFAULT_VERSION_FILES, versionFilesError } from "../release/version-files.ts";
 
 const execFile = promisify(callbackExecFile);
 const VERSION_LINE = /^\s*"?version"?\s*[=:]/u;
 
-export async function prepareRelease(input: { workspace: string; version?: string; gitCliff: string; updateRootVersion?: boolean }): Promise<string> {
+export async function prepareRelease(input: { workspace: string; version?: string; gitCliff: string; versionFiles?: readonly string[] }): Promise<string> {
   const workspaceInfo = await lstat(input.workspace).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return undefined;
     throw error;
@@ -25,11 +26,15 @@ export async function prepareRelease(input: { workspace: string; version?: strin
 
   for (const path of [".release-version", "CHANGELOG.md"]) await assertWritableFile(input.workspace, path);
 
-  const paths = input.updateRootVersion === false ? [] : ["package.json", "Cargo.toml", "Cargo.lock", "pyproject.toml", "dbt_project.yml"];
+  // An omitted list updates the default files that exist; an explicit list must name existing supported files.
+  const explicit = input.versionFiles !== undefined;
+  const invalid = explicit ? versionFilesError(input.versionFiles ?? []) : undefined;
+  if (invalid) throw new Error(invalid);
   const originals = new Map<string, string>();
-  for (const path of paths) {
+  for (const path of input.versionFiles ?? DEFAULT_VERSION_FILES) {
     const content = await readOptional(input.workspace, path);
     if (content !== undefined) originals.set(path, content);
+    else if (explicit) throw new Error(`version file ${JSON.stringify(path)} does not exist`);
   }
 
   const changes = new Map<string, string>();
@@ -48,6 +53,8 @@ export async function prepareRelease(input: { workspace: string; version?: strin
   if (pyproject !== undefined) changes.set("pyproject.toml", replaceTomlVersion(pyproject, "project", version, "pyproject.toml").text);
   const dbt = originals.get("dbt_project.yml");
   if (dbt !== undefined) changes.set("dbt_project.yml", replaceDbtVersion(dbt, version));
+  const herdr = originals.get("herdr-plugin.toml");
+  if (herdr !== undefined) changes.set("herdr-plugin.toml", replaceHerdrPluginVersion(herdr, version));
 
   for (const [path, text] of changes) await writeFile(join(input.workspace, path), text);
   await writeFile(join(input.workspace, ".release-version"), `${version}\n`);
@@ -153,10 +160,12 @@ function jsonStringEnd(text: string, start: number): number {
   throw new Error("package.json is not valid JSON");
 }
 
+// An empty section selects the root table, before the first table header.
 function replaceTomlVersion(text: string, section: string, version: string, path: string): { text: string; currentVersion: string } {
   if (text.includes('"""') || text.includes("'''")) throw new Error(`${path} multiline TOML strings are not supported`);
   const lines = text.split(/(?<=\n)/u);
-  let active = false;
+  const table = section === "" ? "the root table" : `[${section}]`;
+  let active = section === "";
   let found = 0;
   let currentVersion = "";
   const output = lines.map((line) => {
@@ -165,13 +174,58 @@ function replaceTomlVersion(text: string, section: string, version: string, path
     if (!active || !VERSION_LINE.test(line)) return line;
     found++;
     const match = /^(\s*"?version"?\s*=\s*)(['"])([^'"\r\n]*)(['"])(\s*(?:#.*)?(?:\r?\n)?)$/u.exec(line);
-    if (!match || match[2] !== match[4]) throw new Error(`${path} has an unsupported version value in [${section}]`);
-    if (!parseSemVer(match[3] ?? "")) throw new Error(`${path} has an invalid version in [${section}]`);
+    if (!match || match[2] !== match[4]) throw new Error(`${path} has an unsupported version value in ${table}`);
+    if (!parseSemVer(match[3] ?? "")) throw new Error(`${path} has an invalid version in ${table}`);
     currentVersion = match[3] ?? "";
     return `${match[1]}${match[2]}${version}${match[4]}${match[5]}`;
   }).join("");
-  if (found !== 1) throw new Error(`${path} must have exactly one version in [${section}]`);
+  if (found !== 1) throw new Error(`${path} must have exactly one version in ${table}`);
   return { text: output, currentVersion };
+}
+
+function replaceHerdrPluginVersion(text: string, version: string): string {
+  const prepared = replaceTomlVersion(text, "", version, "herdr-plugin.toml").text;
+  assertTomlStatements(text, "herdr-plugin.toml");
+  return prepared;
+}
+
+// Conservative TOML shape check: every top-level statement is a table header or a key/value pair.
+function assertTomlStatements(text: string, path: string): void {
+  const malformed = () => new Error(`${path} is not valid TOML`);
+  const statements: string[] = [];
+  const closers: string[] = [];
+  let current = "";
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index];
+    if (char === '"' || char === "'") {
+      let end = index + 1;
+      for (; end < text.length && text[end] !== char; end++) {
+        if (text[end] === "\n") throw malformed();
+        if (char === '"' && text[end] === "\\") end++;
+      }
+      if (end >= text.length) throw malformed();
+      current += "S";
+      index = end;
+      continue;
+    }
+    if (char === "#") {
+      while (index + 1 < text.length && text[index + 1] !== "\n") index++;
+      continue;
+    }
+    if (char === "[" || char === "{") closers.push(char === "[" ? "]" : "}");
+    else if ((char === "]" || char === "}") && closers.pop() !== char) throw malformed();
+    if (char === "\n" && closers.length === 0) {
+      statements.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  if (closers.length > 0) throw malformed();
+  statements.push(current.trim());
+  const key = String.raw`(?:[A-Za-z0-9_-]+|S)(?:\s*\.\s*(?:[A-Za-z0-9_-]+|S))*`;
+  const statement = new RegExp(String.raw`^(?:\[\s*${key}\s*\]|\[\[\s*${key}\s*\]\]|${key}\s*=\s*\S.*)$`, "su");
+  for (const line of statements) if (line !== "" && !statement.test(line)) throw malformed();
 }
 
 function readCargoPackageName(text: string): string {

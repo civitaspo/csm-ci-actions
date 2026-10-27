@@ -1,6 +1,7 @@
 import picomatch from "picomatch";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
+import { versionFilesError } from "../release/version-files.ts";
 
 const Id = z.number().int().positive();
 const Login = z.string().min(1);
@@ -68,6 +69,10 @@ const SecurefixRoute = z.strictObject({
   paths: z.record(z.string(), SecurefixPathRule).refine((paths) => Object.keys(paths).length > 0, "must include at least one path"),
 });
 export type SecurefixRoute = z.infer<typeof SecurefixRoute>;
+// The first matching pattern decides a path's rule, exactly as securefix applies it.
+export function securefixPathRule(route: SecurefixRoute, path: string): SecurefixRoute["paths"][string] | undefined {
+  return Object.entries(route.paths).find(([pattern]) => picomatch.isMatch(path, pattern, { dot: true }))?.[1];
+}
 const SecurefixSchema = z.strictObject({
   allow_workflow_changes: z.boolean(),
   routes: z.array(SecurefixRoute).refine((routes) => new Set(routes.map((route) => route.name)).size === routes.length, "duplicate route name"),
@@ -135,7 +140,12 @@ const RepositoryEntry = z.strictObject({
   name: z.string().min(1).transform((s) => s.toLowerCase()),
   ops: z.array(z.enum(OPS)).refine((ops) => new Set(ops).size === ops.length, "duplicate op"),
   release: ReleaseSchema.optional(),
-  release_prepare: z.strictObject({ update_root_version: z.boolean().optional() }).optional(),
+  release_prepare: z.strictObject({
+    version_files: z.array(z.string()).superRefine((files, ctx) => {
+      const error = versionFilesError(files);
+      if (error) ctx.addIssue({ code: "custom", message: error });
+    }).optional(),
+  }).optional(),
   // Removed key: reject it explicitly so older configurations fail with an actionable message.
   sensitive_paths: z.strictObject({ paths: z.array(z.string().min(1)).optional(), exempt: z.array(Principal).optional() }).optional(),
   merge: z.strictObject({ allow_bot_requests: z.boolean().optional() }).optional(),
@@ -181,6 +191,11 @@ export const ConfigSchema = z
         ctx.addIssue({ code: "custom", path: ["repositories", index], message: "release-pr route must use release/next and .github/workflows/csm-ci-release-pr.yml" });
       }
       if (entry.release_prepare !== undefined && !preparation) ctx.addIssue({ code: "custom", path: ["repositories", index, "release_prepare"], message: "release_prepare requires selected release preparation" });
+      if (preparation) for (const path of entry.release_prepare?.version_files ?? []) {
+        if (securefixPathRule(route, path) !== "version-only") {
+          ctx.addIssue({ code: "custom", path: ["repositories", index, "release_prepare", "version_files"], message: `version file ${JSON.stringify(path)} must be version-only in the release-pr route` });
+        }
+      }
     }
     for (const [index, route] of (c.securefix?.routes ?? []).entries()) {
       if (!isSafeSecurefixPath(route.workflow) || !route.workflow.startsWith(".github/workflows/")) {

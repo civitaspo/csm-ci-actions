@@ -32631,6 +32631,23 @@ function preprocess(fn, schema) {
 }
 // src/lib/config.ts
 var import_picomatch = __toESM(require_picomatch2(), 1);
+
+// src/release/version-files.ts
+var VERSION_FILES = ["package.json", "Cargo.toml", "Cargo.lock", "pyproject.toml", "dbt_project.yml", "herdr-plugin.toml"];
+var isVersionFile = (path) => VERSION_FILES.includes(path);
+function versionFilesError(files) {
+  for (const [index, path] of files.entries()) {
+    if (!isVersionFile(path))
+      return `version file ${JSON.stringify(path)} is not supported`;
+    if (files.indexOf(path) !== index)
+      return `version file ${JSON.stringify(path)} is listed more than once`;
+  }
+  if (files.includes("Cargo.lock") && !files.includes("Cargo.toml"))
+    return 'version file "Cargo.lock" requires "Cargo.toml"';
+  return;
+}
+
+// src/lib/config.ts
 var Id = number2().int().positive();
 var Login = string2().min(1);
 var Principal = strictObject({ id: Id, login: Login });
@@ -32681,6 +32698,9 @@ var SecurefixRoute = strictObject({
   workflow: string2().min(1),
   paths: record(string2(), SecurefixPathRule).refine((paths) => Object.keys(paths).length > 0, "must include at least one path")
 });
+function securefixPathRule(route, path) {
+  return Object.entries(route.paths).find(([pattern]) => import_picomatch.default.isMatch(path, pattern, { dot: true }))?.[1];
+}
 var SecurefixSchema = strictObject({
   allow_workflow_changes: boolean2(),
   routes: array(SecurefixRoute).refine((routes) => new Set(routes.map((route) => route.name)).size === routes.length, "duplicate route name")
@@ -32742,7 +32762,13 @@ var RepositoryEntry = strictObject({
   name: string2().min(1).transform((s) => s.toLowerCase()),
   ops: array(_enum(OPS)).refine((ops) => new Set(ops).size === ops.length, "duplicate op"),
   release: ReleaseSchema.optional(),
-  release_prepare: strictObject({ update_root_version: boolean2().optional() }).optional(),
+  release_prepare: strictObject({
+    version_files: array(string2()).superRefine((files, ctx) => {
+      const error = versionFilesError(files);
+      if (error)
+        ctx.addIssue({ code: "custom", message: error });
+    }).optional()
+  }).optional(),
   sensitive_paths: strictObject({ paths: array(string2().min(1)).optional(), exempt: array(Principal).optional() }).optional(),
   merge: strictObject({ allow_bot_requests: boolean2().optional() }).optional()
 }).superRefine((entry, ctx) => {
@@ -32785,6 +32811,12 @@ var ConfigSchema = strictObject({
     }
     if (entry.release_prepare !== undefined && !preparation)
       ctx.addIssue({ code: "custom", path: ["repositories", index, "release_prepare"], message: "release_prepare requires selected release preparation" });
+    if (preparation)
+      for (const path of entry.release_prepare?.version_files ?? []) {
+        if (securefixPathRule(route, path) !== "version-only") {
+          ctx.addIssue({ code: "custom", path: ["repositories", index, "release_prepare", "version_files"], message: `version file ${JSON.stringify(path)} must be version-only in the release-pr route` });
+        }
+      }
   }
   for (const [index, route] of (c.securefix?.routes ?? []).entries()) {
     if (!isSafeSecurefixPath(route.workflow) || !route.workflow.startsWith(".github/workflows/")) {
@@ -32847,12 +32879,13 @@ function generateWorkflows(config, repository, defaultBranch, release) {
   const entry = repositoryEntry(config, repository);
   return Object.fromEntries(selectedCallers(config, repository).map((caller) => {
     const prepare = caller === "release-pr";
+    const files = entry?.release_prepare?.version_files;
     const events = caller === "approve" ? { pull_request_target: { types: ["opened", "synchronize", "reopened", "ready_for_review"] }, issue_comment: { types: ["created"] } } : caller === "policy-check" ? { pull_request_target: { types: ["opened", "synchronize", "reopened", "ready_for_review", "edited"] } } : caller === "merge" ? { issue_comment: { types: ["created"] } } : caller === "release" ? { pull_request: { types: ["closed"] } } : { push: { branches: [defaultBranch] }, workflow_dispatch: { inputs: { version: { description: "Optional semantic version without a v prefix.", type: "string", required: false, default: "" } } } };
     const job = {
       ...prepare ? { if: "github.event_name == 'workflow_dispatch' || (!startsWith(github.event.head_commit.message, 'chore(release): v') && !startsWith(github.event.head_commit.message, 'release-pr: chore(release): v'))" } : {},
       uses: `civitaspo/csm-ci-actions/.github/workflows/${STANDARD_CALLERS[caller]}@${release.sha}`,
       permissions: prepare ? { contents: "read" } : {},
-      ...prepare ? { with: { version: "${{ inputs.version || '' }}", "update-root-version": entry?.release_prepare?.update_root_version ?? true } } : {},
+      ...prepare ? { with: { version: "${{ inputs.version || '' }}", ...files ? { "version-files": JSON.stringify(files) } : {} } } : {},
       secrets: { CSM_CI_CLIENT_APP_PRIVATE_KEY: "${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}" }
     };
     const body = $stringify({ name: `csm-ci-${caller}`, on: events, permissions: {}, jobs: { [caller]: job } }, { lineWidth: 0 });
@@ -32965,7 +32998,7 @@ async function validateWorkflowContract(value, caller, lockValue, read) {
       throw new Error("additional required credentials are unsupported");
   }
   const inputs = call.inputs === undefined ? {} : object2(call.inputs);
-  const expected = caller === "release-pr" ? { version: { type: "string", default: "" }, "update-root-version": { type: "boolean", default: true } } : {};
+  const expected = caller === "release-pr" ? { version: { type: "string", default: "" }, "version-files": { type: "string", default: "" } } : {};
   for (const [name, required] of Object.entries(expected)) {
     const declaration = object2(inputs[name]);
     if (declaration.type !== required.type || declaration.default !== required.default || declaration.required === true)
