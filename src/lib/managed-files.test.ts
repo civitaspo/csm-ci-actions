@@ -74,7 +74,7 @@ function githubFixture(options: {
   };
   const listPulls = async () => ({ data: options.pulls ?? (options.targetMissing ? [] : [{
     number: 73,
-    title: "Sync managed files",
+    title: "chore(repo-settings): sync managed files",
     body: "Update files managed by csm-ci.\n\n<!-- csm-ci:repo-settings:managed-files -->",
     base: { ref: "main" },
     head: { sha: targetSha },
@@ -354,7 +354,7 @@ describe("inspectManagedFiles", () => {
   test("rejects an open managed branch PR with a different base before apply", async () => {
     const gh = githubFixture({ pulls: [{
       number: 73,
-      title: "Sync managed files",
+      title: "chore(repo-settings): sync managed files",
       body: "Update files managed by csm-ci.\n\n<!-- csm-ci:repo-settings:managed-files -->",
       base: { ref: "release" },
       head: { sha: targetSha },
@@ -365,7 +365,7 @@ describe("inspectManagedFiles", () => {
   test("rejects multiple open PRs for the managed branch", async () => {
     const pulls = Array.from({ length: 2 }, (_, index) => ({
       number: 73 + index,
-      title: "Sync managed files",
+      title: "chore(repo-settings): sync managed files",
       body: "Update files managed by csm-ci.\n\n<!-- csm-ci:repo-settings:managed-files -->",
       base: { ref: "main" },
       head: { sha: targetSha },
@@ -377,7 +377,7 @@ describe("inspectManagedFiles", () => {
   test("rejects a managed branch PR whose head differs from the branch ref", async () => {
     const pulls = [{
       number: 73,
-      title: "Sync managed files",
+      title: "chore(repo-settings): sync managed files",
       body: "Update files managed by csm-ci.\n\n<!-- csm-ci:repo-settings:managed-files -->",
       base: { ref: "main" },
       head: { sha: "f".repeat(40) },
@@ -441,8 +441,9 @@ describe("inspectManagedFiles", () => {
   const pullBody = "Update files managed by csm-ci.\n\n<!-- csm-ci:repo-settings:managed-files -->";
   const outdatedPulls: [string, { title: string; body: string | null }][] = [
     ["title", { title: "Old title", body: pullBody }],
-    ["body", { title: "Sync managed files", body: "Old body" }],
-    ["missing body", { title: "Sync managed files", body: null }],
+    ["legacy title", { title: "Sync managed files", body: pullBody }],
+    ["body", { title: "chore(repo-settings): sync managed files", body: "Old body" }],
+    ["missing body", { title: "chore(repo-settings): sync managed files", body: null }],
   ];
 
   test.each(outdatedPulls)("requests a pull request update when the existing pull request has an outdated %s", async (_name, drift) => {
@@ -466,7 +467,7 @@ describe("inspectManagedFiles", () => {
     } as unknown as GitHub;
     const result = await applyManagedFiles(githubFixture({ pulls }), { ...input, writeToken: "unused", writeClient });
     expect(result).toEqual({ status: "applied", commit: targetSha, pullRequest: 73 });
-    expect(updates).toEqual([{ owner: "owner", repo: "repo", pull_number: 73, title: "Sync managed files", body: pullBody }]);
+    expect(updates).toEqual([{ owner: "owner", repo: "repo", pull_number: 73, title: "chore(repo-settings): sync managed files", body: pullBody }]);
   });
 
   const commitCases: [string, { targetMissing: true } | { targetContent: string }][] = [
@@ -476,6 +477,7 @@ describe("inspectManagedFiles", () => {
   test.each(commitCases)("the managed branch commit is pinned to the observed default SHA on the %s", async (_name, options) => {
     const read = githubFixture(options);
     const mutations: { query: string; variables: { input: Record<string, unknown> } }[] = [];
+    const created: unknown[] = [];
     let branchSha = defaultSha;
     const writeClient = {
       rest: {
@@ -483,7 +485,7 @@ describe("inspectManagedFiles", () => {
           getRef: async ({ ref }: { ref: string }) => ({ data: { object: { sha: ref === "heads/main" ? defaultSha : branchSha } } }),
           createRef: async () => ({ data: {} }),
         },
-        pulls: { list: async () => ({ data: [] }), create: async () => ({ data: { number: 75 } }) },
+        pulls: { list: async () => ({ data: [] }), create: async (args: unknown) => { created.push(args); return { data: { number: 75 } }; } },
       },
       paginate: async () => [],
       graphql: async (query: string, variables: { input: Record<string, unknown> }) => {
@@ -502,7 +504,9 @@ describe("inspectManagedFiles", () => {
     expect(mutations[0]?.variables.input).toMatchObject({
       branch: { repositoryNameWithOwner: "owner/repo", branchName: "csm-ci/repo-settings" },
       expectedHeadOid: defaultSha,
+      message: { headline: "chore(repo-settings): sync managed files" },
     });
     expect(mutations[0]?.variables.input.expectedHeadOid).not.toBe(targetSha);
+    expect(created).toEqual([{ owner: "owner", repo: "repo", title: "chore(repo-settings): sync managed files", body: pullBody, head: "csm-ci/repo-settings", base: "main" }]);
   });
 });

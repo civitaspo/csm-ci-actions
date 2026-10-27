@@ -37031,7 +37031,7 @@ async function loadServerOwnedHistory(gh, input) {
 
 // src/lib/managed-files.ts
 var BRANCH = "csm-ci/repo-settings";
-var PULL_TITLE = "Sync managed files";
+var MANAGED_FILES_TITLE = "chore(repo-settings): sync managed files";
 var PULL_BODY = `Update files managed by csm-ci.
 
 <!-- csm-ci:repo-settings:managed-files -->`;
@@ -37151,7 +37151,7 @@ async function inspectManagedFiles(gh, input) {
   const targetIsAncestorOfDefault = targetSha !== null && targetSha !== defaultSha && targetHistoryLength === 0;
   const branchNeedsWrite = !targetMatches || targetIsAncestorOfDefault;
   const pullRequest = await findPullRequest(gh, input.repository, input.defaultBranch, targetSha);
-  const requiresPullRequestUpdate = !pullRequest || pullRequest.title !== PULL_TITLE || pullRequest.body !== PULL_BODY;
+  const requiresPullRequestUpdate = !pullRequest || pullRequest.title !== MANAGED_FILES_TITLE || pullRequest.body !== PULL_BODY;
   const status = branchNeedsWrite || requiresPullRequestUpdate ? "ready" : "already-applied";
   return {
     status,
@@ -37278,7 +37278,7 @@ async function createCommit(gh, inspection) {
   const result = await gh.graphql("mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }", { input: {
     branch: { repositoryNameWithOwner: inspection.repository, branchName: BRANCH },
     expectedHeadOid: inspection.defaultSha,
-    message: { headline: "Sync managed files" },
+    message: { headline: MANAGED_FILES_TITLE },
     fileChanges: { additions, deletions: [] }
   } });
   return result.createCommitOnBranch.commit.oid;
@@ -37293,14 +37293,14 @@ async function ensurePullRequest(gh, inspection, headSha) {
     throw new Rejection("managed files branch moved before pull request update");
   const current = await findPullRequest(gh, inspection.repository, inspection.defaultBranch, headSha);
   if (current) {
-    if (current.title === PULL_TITLE && current.body === PULL_BODY)
+    if (current.title === MANAGED_FILES_TITLE && current.body === PULL_BODY)
       return current.number;
-    const { data } = await gh.rest.pulls.update({ owner, repo, pull_number: current.number, title: PULL_TITLE, body: PULL_BODY });
+    const { data } = await gh.rest.pulls.update({ owner, repo, pull_number: current.number, title: MANAGED_FILES_TITLE, body: PULL_BODY });
     return data.number;
   }
   if (headSha === inspection.defaultSha)
     return;
-  const { data } = await gh.rest.pulls.create({ owner, repo, title: PULL_TITLE, body: PULL_BODY, head: BRANCH, base: inspection.defaultBranch });
+  const { data } = await gh.rest.pulls.create({ owner, repo, title: MANAGED_FILES_TITLE, body: PULL_BODY, head: BRANCH, base: inspection.defaultBranch });
   return data.number;
 }
 
