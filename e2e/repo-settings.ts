@@ -463,6 +463,7 @@ export const repoSettings: Scenario[] = [
           await ctx.gh.rest.repos.update({ ...splitRepository(CLIENT), ...UNMANAGED_SQUASH_SETTINGS });
           const omitted = await dispatchReconciliation(ctx, CLIENT, "dispatch", undefined, { createdRulesetIds });
           assert(omitted.stepConclusions.get("Apply repository settings") === "skipped", `omitted squash setting caused a settings write (${omitted.url})`);
+          assert(omitted.stepConclusions.get("Apply managed files") === "skipped", `the run after the title refresh updated managed files (${omitted.url})`);
           const { data } = await ctx.gh.rest.repos.get(splitRepository(CLIENT));
           assert(data.allow_squash_merge === true && data.squash_merge_commit_title === UNMANAGED_SQUASH_SETTINGS.squash_merge_commit_title && data.squash_merge_commit_message === UNMANAGED_SQUASH_SETTINGS.squash_merge_commit_message, "omitted squash setting changed the squash commit format");
         });
