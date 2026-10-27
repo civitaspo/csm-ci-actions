@@ -36882,9 +36882,11 @@ function validateIntake(event, env, config) {
     throw new Rejection(`repository ${request.repository} does not enable ${request.kind}`);
   return request;
 }
+var PUBLISHING_KINDS = new Set(["approve", "policy-check"]);
 function concurrencyKey(request) {
   const n = "pull_number" in request.args ? request.args.pull_number : request.args.run_id;
-  return `${request.kind}-${request.repository}#${n}`;
+  const group = PUBLISHING_KINDS.has(request.kind) ? "pull-request" : request.kind;
+  return `${group}-${request.repository}#${n}`;
 }
 
 // src/lib/github.ts

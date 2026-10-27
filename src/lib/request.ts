@@ -85,10 +85,13 @@ export function validateIntake(event: LabelEvent, env: { repositoryId: number; r
   return request;
 }
 
-// Keyed by kind as well, so a waiting /merge never blocks /approve or policy-check on the same pull request.
+// Requests that publish policy checks and reports share one key per pull request, so their publication is serialized.
+// Other kinds stay keyed by kind, so a waiting /merge never blocks /approve or policy-check on the same pull request.
+const PUBLISHING_KINDS: ReadonlySet<string> = new Set(["approve", "policy-check"]);
 export function concurrencyKey(request: Request): string {
   const n = "pull_number" in request.args ? request.args.pull_number : request.args.run_id;
-  return `${request.kind}-${request.repository}#${n}`;
+  const group = PUBLISHING_KINDS.has(request.kind) ? "pull-request" : request.kind;
+  return `${group}-${request.repository}#${n}`;
 }
 
 // Validated by round-tripping through parseLabel, so client and server share one rule set.

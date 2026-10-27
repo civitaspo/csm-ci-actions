@@ -36858,6 +36858,7 @@ var LabelEventSchema = object({
   label: object({ name: string2(), description: string2().nullable() }),
   sender: object({ id: number2(), type: string2() })
 });
+var PUBLISHING_KINDS = new Set(["approve", "policy-check"]);
 function buildLabel(kind, repository, numbers, suffix = randomBytes(8).toString("hex")) {
   const name = `${LABEL_PREFIX}${kind}-${suffix}`;
   const description = [repository.toLowerCase(), ...numbers].join("/");

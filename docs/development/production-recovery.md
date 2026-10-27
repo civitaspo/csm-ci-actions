@@ -18,7 +18,7 @@ Each row links the incident to the rule in [AGENTS.md](../../AGENTS.md) that pre
 | Incident | Cause | Rule |
 |---|---|---|
 | Every label request failed at startup for about 45 minutes (csm-ci-server#24, recovered by #25) | The pin bump brought required named secrets while the server callers still used `secrets: inherit` | Diff `on.workflow_call` before moving pins |
-| `/merge` and `/approve` deadlocked until the merge deadline (csm-ci-actions#157) | One per-PR concurrency group was shared by every operation kind | Concurrency is per kind; new waiting operations must not block others |
+| `/merge` and `/approve` deadlocked until the merge deadline (csm-ci-actions#157) | One per-PR concurrency group was shared by every operation kind | Concurrency is per kind, except that `approve` and `policy-check` share one per-PR group to serialize policy publication; new waiting operations must not block others |
 | Release and managed-file PRs closed or were marked merged with no content (csm-ci-actions#163) | The branch was reset to its base before the new commit | Rebuild through `src/lib/branch-rebuild.ts` |
 | Generated callers became "customized" or failed lint (csm-ci-actions#142, #144) | Client autofix added pin comments; self-linting repositories rejected the triggers | Generate files that client tooling leaves unchanged |
 | Ten repo-settings dispatches failed with a rate limit | Parallel per-repository dispatches exhausted the Server App's hourly API quota | Reconcile many repositories in one serial run |

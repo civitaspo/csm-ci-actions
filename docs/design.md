@@ -82,7 +82,7 @@ docs/, e2e/
 4. The description is lowercased and validated with a per-operation regex. Numbers have no leading zeros.
 5. The repository is in `repositories[]`, the operation is enabled for it, and its owner is in `owners`.
 6. The live label is re-fetched and must match, and `GITHUB_RUN_ATTEMPT == 1`.
-7. The normalized `{kind, repo, number}` is emitted as a job output and used as the operation job's `concurrency` key, so spelling variants cannot run in parallel.
+7. The normalized `{kind, repo, number}` is emitted as a job output and used as the operation job's `concurrency` key, so spelling variants cannot run in parallel. `approve` and `policy-check` share one key per pull request because both publish the policy check and failure reports.
 8. The label is always deleted.
 
 ### S3. Trust rules (`src/lib/trust.ts`)
