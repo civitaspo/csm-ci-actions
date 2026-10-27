@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { z } from "zod";
 import { github } from "./github.ts";
 import { marker } from "./notify.ts";
 import { Rejection } from "./request.ts";
@@ -10,6 +11,20 @@ const HEAD = "a".repeat(40);
 const NEXT = "b".repeat(40);
 const P = "/repos/owner/repo";
 const alice = { id: 10, login: "alice", type: "User" };
+
+function receiptBody(fetch: ReturnType<typeof fakeFetch>): string {
+  const request = fetch.requests.find((request) => request.method === "POST" && request.path === `${P}/issues/12/comments`);
+  return z.object({ body: z.string() }).parse(JSON.parse(request?.body ?? "{}")).body;
+}
+function expectReceipt(body: string, operation: string): void {
+  expect(body.startsWith(`${marker(operation, 9)}\ncsm-ci: /${operation}`)).toBe(true);
+  expect(body.split("<sub>")).toHaveLength(2);
+  expect(body.endsWith("</sub>")).toBe(true);
+  expect(body).toContain(`<a href="https://github.com/owner/repo/pull/12#issuecomment-9">Request</a>`);
+  expect(body).toContain(`<a href="https://github.com/owner/repo/commit/${HEAD}">Head aaaaaaa</a>`);
+  expect(body).toContain(`<a href="https://github.com/owner/server/actions/runs/345/attempts/2">Server run 345, attempt 2</a>`);
+  expect(body.slice(0, body.indexOf("<sub>"))).not.toContain('<a href=');
+}
 
 function pull(over: Record<string, unknown> = {}, repository = "owner/repo") {
   return { number: 12, state: "open", draft: false, user: alice, title: "Example title", body: "Description\nCo-authored-by: Alice <alice@example.com>\nCo-authored-by: alice <ALICE@example.com>\nCo-authored-by: Bob <bob@example.com>", head: { sha: HEAD, repo: { full_name: repository } }, base: { ref: "main", repo: { full_name: repository, default_branch: "main" } }, ...over };
@@ -43,11 +58,50 @@ function context(s: Setup = {}) {
     { method: "GET", path: `${path}/issues/12/comments`, body: [] },
     { method: "POST", path: `${path}/issues/12/comments`, status: s.receiptStatus ?? 201, body: { id: 4 } },
   ]);
-  const ctx: MergeContext = { server: github("s", server), notify: github("n", notify), config: cfg, repository, now: () => new Date(time), sleep: async (ms) => { time += ms; } };
+  const ctx: MergeContext = { server: github("s", server), notify: github("n", notify), config: cfg, repository, serverRun: { serverUrl: "https://github.com", repository: "owner/server", id: "345", attempt: "2" }, now: () => new Date(time), sleep: async (ms) => { time += ms; } };
   return { ctx, server, notify };
 }
 
 describe("waitForMerge", () => {
+  test("exports the pinned head at acceptance even if readiness later fails", async () => {
+    const { ctx, notify } = context({ pullAfter: pull({ head: { sha: NEXT, repo: { full_name: "owner/repo" } } }) });
+    const accepted: string[] = [];
+    ctx.onAccepted = (head) => { accepted.push(head); };
+    await expect(waitForMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow(/head changed/);
+    expect(accepted).toEqual([HEAD]);
+    const body = receiptBody(notify);
+    expectReceipt(body, "merge");
+    expect(body.split("<sub>")[0]).toContain(`the head changed from ${HEAD} to ${NEXT} while waiting`);
+  });
+
+  test("a readiness deadline keeps its reason and corrective command at normal size", async () => {
+    const { ctx, notify } = context({ reviews: [] });
+    await expect(waitForMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow(/readiness deadline/);
+    const body = receiptBody(notify);
+    expectReceipt(body, "merge");
+    expect(body.split("<sub>")[0]).toContain(`merge readiness deadline passed: the approver has not approved head ${HEAD}`);
+    expect(body.split("<sub>")[0]).toContain("Resolve the failure, confirm approval and checks for the current head, and post a new exact `/merge` comment.");
+    expect(body).not.toContain("rebase");
+  });
+
+  test("fresh-token failure receipt escapes the reason and preserves the supplied original head without reading client state", async () => {
+    const { ctx, server, notify } = context({ commentStatus: 404, pullAfter: pull({ head: { sha: NEXT } }) });
+    await postMergeFailureReceipt(ctx, { pull_number: 12, comment_id: 9 }, 'failed <sub>small</sub> & "unsafe"', HEAD);
+    const body = receiptBody(notify);
+    expectReceipt(body, "merge");
+    expect(body.split("<sub>")[0]).toContain('failed &lt;sub&gt;small&lt;/sub&gt; &amp; &quot;unsafe&quot;');
+    expect(server.calls).toEqual([]);
+  });
+
+  test("fresh-token failure receipt is silent when the server already recorded a result", async () => {
+    const { ctx, notify } = context();
+    const duplicate = fakeFetch([{ method: "GET", path: `${P}/issues/12/comments`, body: [{ user: { id: SERVER_BOT_ID }, body: marker("merge", 9) }] }]);
+    ctx.notify = github("n", duplicate);
+    await postMergeFailureReceipt(ctx, { pull_number: 12, comment_id: 9 }, "timeout", HEAD);
+    expect(duplicate.calls).toEqual([`GET ${P}/issues/12/comments`]);
+    expect(notify.calls).toEqual([]);
+  });
+
   test("pins an authorized /merge to a ready head", async () => {
     const { ctx } = context();
     expect(await waitForMerge(ctx, { pull_number: 12, comment_id: 9 })).toEqual({ head: HEAD });
@@ -101,8 +155,11 @@ describe("waitForMerge", () => {
   test("posts an accepted-command failure receipt even after current config disables merge", async () => {
     const { ctx, notify } = context();
     ctx.reloadConfig = async () => ({ ...ctx.config, repositories: ctx.config.repositories.map((entry) => ({ ...entry, ops: ["approve", "policy-check"] })) });
-    await postMergeFailureReceipt(ctx, { pull_number: 12, comment_id: 9 }, "merge retry window expired");
+    await postMergeFailureReceipt(ctx, { pull_number: 12, comment_id: 9 }, "merge retry window expired", HEAD);
     expect(notify.calls).toContain(`POST ${P}/issues/12/comments`);
+    const body = receiptBody(notify);
+    expectReceipt(body, "merge");
+    expect(body.split("<sub>")[0]).toContain("merge retry window expired");
   });
 
   test("preserves the readiness error when posting its failure receipt also fails", async () => {
@@ -161,7 +218,15 @@ describe("waitForMerge", () => {
     await expect(waitForMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow(message);
     const accepted = !["a commenter outside the merger allowlist", "a non-command comment", "a draft pull request", "a replayed command", "a deleted comment author", "a deleted command", "a wrong command routed to merge", "a head newer than the command", "a force-push after the command", "an edited command", "a command edited in the same second", "a bot merging another author's pull request", "a bot merger with another committer's commit", "a bot merger targeting the server repository", "a bot merger targeting csm-ci-actions", "an unsupported account type"].includes(_);
     expect(notify.calls.includes(`POST ${P}/issues/comments/9/reactions`)).toBe(accepted);
-    if (accepted) expect(notify.calls).toContain(`POST ${P}/issues/12/comments`);
+    if (accepted) {
+      expect(notify.calls).toContain(`POST ${P}/issues/12/comments`);
+      const body = receiptBody(notify);
+      expectReceipt(body, "merge");
+      expect(body.split("<sub>")[0]?.replaceAll("&#39;", "'")).toMatch(message);
+      expect(body.split("<sub>")[0]).toContain("post a new exact `/merge` comment.");
+    } else {
+      expect(notify.calls).not.toContain(`POST ${P}/issues/12/comments`);
+    }
   });
 });
 
@@ -178,10 +243,39 @@ describe("runMerge", () => {
   test("squash merges the pinned head and posts one receipt", async () => {
     const { ctx, write, notify } = writableContext(200);
     expect(await runMerge(ctx, { pull_number: 12, comment_id: 9 }, { head: HEAD })).toEqual({ result: "merged", head: HEAD, mergeCommit: "c".repeat(40) });
+    expectReceipt(receiptBody(notify), "merge");
+    expect(receiptBody(notify)).toContain(`<a href="https://github.com/owner/repo/commit/${"c".repeat(40)}">Squash commit ccccccc</a>`);
     expect(write.calls.filter((call) => call === "PUT /repos/owner/repo/pulls/12/merge")).toHaveLength(1);
     expect(notify.calls.filter((call) => call === "POST /repos/owner/repo/issues/12/comments")).toHaveLength(1);
+    const body = receiptBody(notify);
+    expectReceipt(body, "merge");
+    expect(body.split("<sub>")[0]).toBe(`${marker("merge", 9)}\ncsm-ci: /merge succeeded. Squash-merged this pull request.\n\n`);
+    expect(body).toContain(`<a href="https://github.com/owner/repo/commit/${"c".repeat(40)}">Squash commit ccccccc</a>`);
   });
 
+
+  test.each([
+    [409, { message: "Conflict" }, /base changed/],
+    [500, { message: "upstream failure" }, /upstream failure/],
+    [200, { merged: false, sha: null }, /GitHub did not merge/],
+  ] satisfies [number, unknown, RegExp][])("merge write failure %s keeps its reason and original pinned head", async (status, response, reason) => {
+    const { ctx, notify } = writableContext(status, response);
+    await expect(runMerge(ctx, { pull_number: 12, comment_id: 9 }, { head: HEAD })).rejects.toThrow(reason);
+    const body = receiptBody(notify);
+    expectReceipt(body, "merge");
+    expect(body.split("<sub>")[0]).toMatch(reason);
+    expect(body.split("<sub>")[0]).toContain("post a new exact `/merge` comment.");
+  });
+
+  test("configuration failure before the merge write preserves request metadata", async () => {
+    const { ctx, notify, write } = writableContext(200);
+    ctx.reloadConfig = async () => ({ ...ctx.config, repositories: [] });
+    await expect(runMerge(ctx, { pull_number: 12, comment_id: 9 }, { head: HEAD })).rejects.toThrow(/no longer managed/);
+    const body = receiptBody(notify);
+    expectReceipt(body, "merge");
+    expect(body.split("<sub>")[0]).toContain("repository owner/repo is no longer managed by this server");
+    expect(write.calls).toEqual([]);
+  });
   test("passes the pull request title and body with duplicate coauthor lines removed", async () => {
     const { ctx, write } = writableContext(200);
     await runMerge(ctx, { pull_number: 12, comment_id: 9 }, { head: HEAD });
@@ -223,6 +317,8 @@ describe("runMerge", () => {
     const merged = pull({ state: "closed", merged: true, merged_by: { id: SERVER_BOT_ID }, merge_commit_sha: "c".repeat(40) });
     const { ctx, write, notify } = writableContext(status, { message: "upstream error" }, { pullThen: [pull(), pull(), merged, merged] });
     expect(await runMerge(ctx, { pull_number: 12, comment_id: 9 }, { head: HEAD })).toEqual({ result: "merged", head: HEAD, mergeCommit: "c".repeat(40) });
+    expectReceipt(receiptBody(notify), "merge");
+    expect(receiptBody(notify)).toContain(`<a href="https://github.com/owner/repo/commit/${"c".repeat(40)}">Squash commit ccccccc</a>`);
     expect(write.calls.filter((call) => call === "PUT /repos/owner/repo/pulls/12/merge")).toHaveLength(1);
     expect(notify.calls.filter((call) => call === "POST /repos/owner/repo/issues/12/comments")).toHaveLength(1);
   });
@@ -233,6 +329,8 @@ describe("runMerge", () => {
     const timedOutFetch = (async () => { throw new DOMException("GitHub request timed out", "TimeoutError"); }) as unknown as typeof globalThis.fetch;
     ctx.write = github("w", timedOutFetch);
     expect(await runMerge(ctx, { pull_number: 12, comment_id: 9 }, { head: HEAD })).toEqual({ result: "merged", head: HEAD, mergeCommit: "c".repeat(40) });
+    expectReceipt(receiptBody(notify), "merge");
+    expect(receiptBody(notify)).toContain(`<a href="https://github.com/owner/repo/commit/${"c".repeat(40)}">Squash commit ccccccc</a>`);
     expect(notify.calls.filter((call) => call === "POST /repos/owner/repo/issues/12/comments")).toHaveLength(1);
   });
 
@@ -250,6 +348,8 @@ describe("runMerge", () => {
     }) as unknown as typeof globalThis.fetch;
     ctx.write = github("w", failAfterAccept);
     expect(await runMerge(ctx, { pull_number: 12, comment_id: 9 }, { head: HEAD })).toEqual({ result: "merged", head: HEAD, mergeCommit: "c".repeat(40) });
+    expectReceipt(receiptBody(notify), "merge");
+    expect(receiptBody(notify)).toContain(`<a href="https://github.com/owner/repo/commit/${"c".repeat(40)}">Squash commit ccccccc</a>`);
     expect(mergeRequests).toBe(1);
     expect(notify.calls.filter((call) => call === "POST /repos/owner/repo/issues/12/comments")).toHaveLength(1);
   });

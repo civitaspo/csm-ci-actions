@@ -23,12 +23,16 @@ async function main(): Promise<void> {
     config,
     reloadConfig: () => loadCurrentServerConfig(configReader, workflowRepository, configPath),
     repository: core.getInput("repository", { required: true }),
+    serverRun: { serverUrl: env("GITHUB_SERVER_URL"), repository: env("GITHUB_REPOSITORY"), id: env("GITHUB_RUN_ID"), attempt: env("GITHUB_RUN_ATTEMPT") },
     now: () => new Date(),
     sleep: async (milliseconds: number) => { await sleep(milliseconds); },
   };
   const mode = core.getInput("mode", { required: true });
   if (mode === "wait") {
-    ctx.onAccepted = () => core.setOutput("accepted", "true");
+    ctx.onAccepted = (head) => {
+      core.setOutput("accepted", "true");
+      core.setOutput("head", head);
+    };
     try {
       const ready = await waitForMerge(ctx, args);
       core.setOutput("ready", "true");
@@ -41,7 +45,7 @@ async function main(): Promise<void> {
     return;
   }
   if (mode === "failure-receipt") {
-    await postMergeFailureReceipt(ctx, args, core.getInput("failure-message", { required: true }));
+    await postMergeFailureReceipt(ctx, args, core.getInput("failure-message", { required: true }), core.getInput("head", { required: true }));
     return;
   }
   if (mode !== "merge") throw new Error(`unknown merge action mode: ${mode}`);

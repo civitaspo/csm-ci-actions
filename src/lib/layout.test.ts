@@ -102,3 +102,11 @@ describe("merge token boundary", () => {
     expect(token?.with?.["permission-contents"]).not.toBe("write");
   });
 });
+
+test("fresh-token merge failure receipts receive the head pinned at acceptance", () => {
+  const workflow = z.object({ jobs: z.object({ op: z.object({ steps: z.array(stepSchema) }) }) }).parse(readYaml(".github/workflows/server.yml"));
+  const receipt = workflow.jobs.op.steps.find((step) => step.with?.mode === "failure-receipt");
+  expect(receipt?.with?.head).toBe("${{ steps.merge-ready.outputs.head }}");
+  expect(receipt?.with?.["failure-message"]).toBe("${{ steps.merge-ready.outputs.error }}");
+  expect(receipt?.if).toContain("steps.merge-ready.outputs.accepted == 'true'");
+});

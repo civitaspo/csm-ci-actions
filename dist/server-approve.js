@@ -36926,6 +36926,21 @@ async function postResult(gh, repository, issueNumber, markerText, body) {
   await gh.rest.issues.createComment({ ...splitRepository(repository), issue_number: issueNumber, body: `${markerText}
 ${body}` });
 }
+function escapeHtml(text) {
+  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
+}
+function receiptFooter(input) {
+  const { repository, pullNumber, commentId, head, serverRun, mergeCommit } = input;
+  const link = (url, label) => `<a href="${escapeHtml(url)}">${escapeHtml(label)}</a>`;
+  const repoUrl = `${serverRun.serverUrl}/${repository}`;
+  const links = [
+    link(`${repoUrl}/pull/${pullNumber}#issuecomment-${commentId}`, "Request"),
+    link(`${repoUrl}/commit/${head}`, `Head ${head.slice(0, 7)}`),
+    ...mergeCommit ? [link(`${repoUrl}/commit/${mergeCommit}`, `Squash commit ${mergeCommit.slice(0, 7)}`)] : [],
+    link(`${serverRun.serverUrl}/${serverRun.repository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, `Server run ${serverRun.id}, attempt ${serverRun.attempt}`)
+  ];
+  return `<sub>${links.join(" · ")}</sub>`;
+}
 
 // src/lib/policies/signed-commits.ts
 function signedCommits(_, { trust }) {
@@ -37265,10 +37280,17 @@ async function runApprove(ctx, args) {
   await react(ctx, comment.id);
   try {
     const outcome = await commandApprove(ctx, pull, comment);
-    await postResult(ctx.server, ctx.repository, pull.number, receipt, `csm-ci: /approve of \`${outcome.head}\`: ${outcome.result}.`);
+    const message = outcome.result === "dismissed" ? `csm-ci: /approve was dismissed because ${escapeHtml(outcome.problems.join("; "))}. Review the current head and post a new exact \`/approve\` comment.` : "csm-ci: /approve succeeded. Approved the requested head.";
+    await postResult(ctx.server, ctx.repository, pull.number, receipt, `${message}
+
+${receiptFooter({ repository: ctx.repository, pullNumber: pull.number, commentId: comment.id, head: outcome.head, serverRun: ctx.serverRun })}`);
     return outcome;
   } catch (e) {
-    await postResult(ctx.server, ctx.repository, pull.number, receipt, `csm-ci: /approve failed: ${e instanceof Error ? e.message : String(e)}`);
+    await postResult(ctx.server, ctx.repository, pull.number, receipt, `csm-ci: /approve ${e instanceof Rejection ? "was declined" : "failed"}: ${escapeHtml(e instanceof Error ? e.message : String(e))}
+
+Resolve the failure, review the current head, and post a new exact \`/approve\` comment.
+
+${receiptFooter({ repository: ctx.repository, pullNumber: pull.number, commentId: comment.id, head: pull.headSha, serverRun: ctx.serverRun })}`);
     throw e;
   }
 }
@@ -37287,6 +37309,7 @@ async function main() {
     approver: github(getInput("approver-token", { required: true })),
     config,
     repository: getInput("repository", { required: true }),
+    serverRun: { serverUrl: env("GITHUB_SERVER_URL"), repository: env("GITHUB_REPOSITORY"), id: env("GITHUB_RUN_ID"), attempt: env("GITHUB_RUN_ATTEMPT") },
     now: () => new Date
   }, JSON.parse(getInput("args", { required: true })));
   setOutput("result", outcome.result);

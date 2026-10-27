@@ -35,6 +35,12 @@ The client workflow sends a comment request only when the commenter's associatio
 
 `/recheck` takes the automatic path. It skips the edited and 60-minute checks, because it only re-evaluates the current state.
 
+## Result comments
+
+An accepted `/approve` command receives a terminal receipt. The normal-size message distinguishes a completed approval, an approval dismissed because the head moved, a declined request, and an operational failure. Dismissals and failures include the available reason and ask the approver to resolve it, review the current head, and post a new exact `/approve` comment. Acceptance remains the rocket reaction, not a separate authorization acknowledgment.
+
+A separate `<sub>` footer contains HTML links to the original request, the pinned head with a short SHA, and the actual server workflow run and attempt. The hidden receipt marker stays independent of this presentation. Automatic approval and `/recheck` remain silent. Replayed commands and requests rejected before acceptance receive no new receipt.
+
 ## Rejections
 
 | Rule | Where | Rocket and receipt |

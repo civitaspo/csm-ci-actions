@@ -26,7 +26,7 @@ inputs:
     description: JSON request numbers from intake, pull_number and comment_id.
     required: true
   head:
-    description: Head SHA produced by wait mode, required only in merge mode.
+    description: Pinned head SHA from wait mode, required in merge and failure-receipt modes.
     required: false
   failure-message:
     description: Original wait failure to include in the failure receipt.
@@ -39,7 +39,7 @@ outputs:
   error:
     description: Wait failure message for a fresh-token failure receipt step.
   head:
-    description: Pinned pull request head SHA.
+    description: Pinned pull request head SHA, available after acceptance even if readiness fails.
   result:
     description: merged when the pull request was merged.
   merge-commit:

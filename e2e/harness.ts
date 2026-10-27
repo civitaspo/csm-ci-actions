@@ -364,7 +364,17 @@ export async function closeReleasePrIfOwned(ctx: Ctx, pr: Pr): Promise<void> {
 
 export async function closePr(ctx: Ctx, pr: Pr): Promise<void> {
   const repo = splitRepository(CLIENT);
-  await ctx.gh.rest.pulls.update({ ...repo, pull_number: pr.number, state: "closed" });
+  const { data } = await ctx.gh.rest.pulls.get({ ...repo, pull_number: pr.number });
+  if (data.state === "open") await ctx.gh.rest.pulls.update({ ...repo, pull_number: pr.number, state: "closed" });
+  // With delete_branch_on_merge, GitHub may already have removed a merged head branch.
+  if (data.merged) {
+    try {
+      await ctx.gh.rest.git.getRef({ ...repo, ref: `heads/${pr.branch}` });
+    } catch (e) {
+      if (hasStatus(e, 404)) return;
+      throw e;
+    }
+  }
   await ctx.gh.rest.git.deleteRef({ ...repo, ref: `heads/${pr.branch}` });
 }
 

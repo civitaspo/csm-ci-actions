@@ -219,6 +219,7 @@ jobs:
           repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
           args: ${{ needs.intake.outputs.args }}
           failure-message: ${{ steps.merge-ready.outputs.error }}
+          head: ${{ steps.merge-ready.outputs.head }}
       - if: always() && needs.intake.outputs.kind == 'merge' && steps.merge-ready.outcome == 'failure'
         env:
           FAILURE_MESSAGE: ${{ steps.merge-ready.outputs.error }}

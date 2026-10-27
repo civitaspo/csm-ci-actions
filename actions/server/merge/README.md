@@ -16,7 +16,7 @@ See [merge behavior](../../../docs/merge.md) for the trust, policy, approval, re
 | `write-token` | No | None | Client-scoped token with `contents:write` and `pull_requests:write`; required in `merge` mode. |
 | `repository` | Yes | None | Client repository as `owner/repo`. |
 | `args` | Yes | None | JSON intake request numbers, such as `{"pull_number":123,"comment_id":456}`. Both are required. |
-| `head` | No | None | Head SHA returned by `wait`; required in `merge` mode. |
+| `head` | No | None | Pinned head SHA returned by `wait`; required in `merge` and `failure-receipt` modes. |
 | `failure-message` | No | None | Required in `failure-receipt` mode. Original wait failure text from `error`. |
 
 ## Outputs
@@ -26,15 +26,15 @@ See [merge behavior](../../../docs/merge.md) for the trust, policy, approval, re
 | `ready` | `true` when the request is ready to merge. |
 | `accepted` | `true` when the Server App accepted the command and reacted with a rocket. |
 | `error` | Wait failure message for use in the fresh-token failure receipt stage. |
-| `head` | Pull request head SHA pinned by the readiness stage. |
+| `head` | Pull request head SHA pinned at acceptance, including when readiness later fails. |
 | `result` | `merged` when the pull request was merged. |
 | `merge-commit` | Squash merge commit SHA. |
 
-The `wait` mode sets `accepted` when the command is accepted, then `ready` and `head` on success or `error` on failure. The `merge` mode sets `result` and `merge-commit`. The `failure-receipt` mode has no outputs. Unset flags are empty strings, not the string `false`.
+The `wait` mode sets `accepted` and `head` when the command is accepted, then `ready` on success or `error` on failure. The `merge` mode sets `result` and `merge-commit`. The `failure-receipt` mode has no outputs. Unset flags are empty strings, not the string `false`.
 
 ## Use in the server workflow
 
-The server calls `wait`, then conditionally calls `merge` with the pinned `head`. If an accepted wait fails after its notification token expires, it calls `failure-receipt` with the saved error and a fresh notification token. Use the matching jobs and `if` conditions in [server.yml](../../../.github/workflows/server.yml); this partial shape does not provide the required trust boundary by itself:
+The server calls `wait`, then conditionally calls `merge` with the pinned `head`. If an accepted wait fails after its notification token expires, it calls `failure-receipt` with the saved error, pinned head, and a fresh notification token. Use the matching jobs and `if` conditions in [server.yml](../../../.github/workflows/server.yml); this partial shape does not provide the required trust boundary by itself:
 
 ```yaml
 - id: merge-ready
@@ -72,6 +72,7 @@ Between these calls, the workflow mints `merge-final-read-token`, `merge-final-n
     repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
     args: ${{ needs.intake.outputs.args }}
     failure-message: ${{ steps.merge-ready.outputs.error }}
+    head: ${{ steps.merge-ready.outputs.head }}
 ```
 
 Keep the workflow's explicit failure step after this receipt so a failed wait still fails the job. The examples assume intake selected the `merge` operation.

@@ -1,3 +1,4 @@
+import { verifyReceipt } from "./notifications.ts";
 import { marker } from "../src/lib/notify.ts";
 import { parseConfig } from "../src/lib/config.ts";
 import { splitRepository } from "../src/lib/github.ts";
@@ -73,13 +74,6 @@ async function postBotMergeRequest(ctx: Parameters<Scenario["run"]>[0], pr: Pr):
   assert(ctx.untrusted, "the untrusted test token is not configured");
   const comment = await postComment(ctx, pr, "/merge", ctx.untrusted);
   return { comment, requestInfo: fromComment(pr, comment) };
-}
-
-async function closeIfOpen(ctx: Parameters<Scenario["run"]>[0], pr: Pr): Promise<void> {
-  const repo = splitRepository(CLIENT);
-  const { data } = await ctx.gh.rest.pulls.get({ ...repo, pull_number: pr.number });
-  if (data.state === "open") await ctx.gh.rest.pulls.update({ ...repo, pull_number: pr.number, state: "closed" });
-  await ctx.gh.rest.git.deleteRef({ ...repo, ref: `heads/${pr.branch}` });
 }
 
 async function withSignedPr(ctx: Parameters<Scenario["run"]>[0], fn: (pr: Pr) => Promise<void>): Promise<void> {
@@ -164,7 +158,8 @@ export const merge: Scenario[] = [
       const { data: merged } = await ctx.gh.rest.pulls.get({ owner: "civitaspo", repo: "testing-csm-ci-client", pull_number: pr.number });
       assert(merged.merged && merged.merge_commit_sha, `pull request #${pr.number} was not merged`);
       const receipts = (await serverComments(ctx, pr)).filter((body) => body.includes(marker("merge", comment.id)));
-      assert(receipts.length === 1 && receipts[0]?.includes("merged as"), `expected one merge receipt, found ${receipts.length}`);
+      assert(receipts.length === 1 && receipts[0]?.includes("Squash-merged"), `expected one merge receipt, found ${receipts.length}`);
+      await verifyReceipt(ctx, pr, comment, "merge", /Squash-merged/u, merged.merge_commit_sha);
     }),
   },
   {
@@ -193,7 +188,8 @@ export const merge: Scenario[] = [
         const { data: file } = await ctx.gh.rest.repos.getContent({ ...splitRepository(CLIENT), path, ref: merged.merge_commit_sha });
         assert(!Array.isArray(file) && file.type === "file" && Buffer.from(file.content, "base64").toString("utf8") === content, "merged workflow content differs from the approved change");
         const receipts = (await serverComments(ctx, pr)).filter((body) => body.includes(marker("merge", comment.id)));
-        assert(receipts.length === 1 && receipts[0]?.includes("merged as"), `expected one workflow merge receipt, found ${receipts.length}`);
+        assert(receipts.length === 1 && receipts[0]?.includes("Squash-merged"), `expected one workflow merge receipt, found ${receipts.length}`);
+        await verifyReceipt(ctx, pr, comment, "merge", /Squash-merged/u, merged.merge_commit_sha);
       } finally {
         await closePr(ctx, pr);
       }
@@ -289,6 +285,7 @@ export const merge: Scenario[] = [
       await noMerge(ctx, pr);
       const receipts = (await serverComments(ctx, pr)).filter((body) => body.includes(marker("merge", comment.id)));
       assert(receipts.length === 1, `expected one deadline receipt, found ${receipts.length}`);
+      await verifyReceipt(ctx, pr, comment, "merge", /readiness deadline passed[\s\S]*post a new exact `\/merge` comment/u);
       const replay = await request(ctx, pr, comment.id);
       await expectOp(ctx, replay.match, replay.since, "failure", /already handled/);
       const replayReceipts = (await serverComments(ctx, pr)).filter((body) => body.includes(marker("merge", comment.id)));
@@ -324,7 +321,7 @@ export const merge: Scenario[] = [
           await noMerge(ctx, mixedPr);
           assert(!(await serverComments(ctx, mixedPr)).some((body) => body.includes(marker("merge", comment.id))), "rejected mixed-identity bot request unexpectedly posted a receipt");
         } finally {
-          if (mixedPr) await closeIfOpen(ctx, mixedPr);
+          if (mixedPr) await closePr(ctx, mixedPr);
         }
 
         let botPr: Pr | undefined;
@@ -336,9 +333,9 @@ export const merge: Scenario[] = [
           await expectOp(ctx, requestInfo.match, requestInfo.since, "success");
           const { data } = await ctx.gh.rest.pulls.get({ owner: "civitaspo", repo: "testing-csm-ci-client", pull_number: botPr.number });
           assert(data.merged && data.merge_commit_sha, `test bot's pull request #${botPr.number} was not merged`);
-          assert((await serverComments(ctx, botPr)).some((body) => body.includes(marker("merge", comment.id)) && body.includes("merged as")), "test bot merge has no success receipt");
+          assert((await serverComments(ctx, botPr)).some((body) => body.includes(marker("merge", comment.id)) && body.includes("Squash-merged")), "test bot merge has no success receipt");
         } finally {
-          if (botPr) await closeIfOpen(ctx, botPr);
+          if (botPr) await closePr(ctx, botPr);
         }
       });
     },
