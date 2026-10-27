@@ -421,9 +421,10 @@ export async function serverComments(ctx: Ctx, pr: Pr): Promise<string[]> {
   return comments.filter((c) => Number(c.user?.id) === SERVER_BOT_ID).map((c) => c.body ?? "");
 }
 
-// Waits for the one server run started since `since` and checks its op job.
+// Waits for the first server run started since `since` and checks its op job. A command can
+// produce several requests, which the server handles in order; runs are listed newest first.
 export async function expectOp(ctx: Ctx, match: RequestMatch, since: Date, op: Conclusion, logPattern?: RegExp): Promise<void> {
-  const run = (await until("the server run for the request", async () => (await serverRuns(ctx, match, since))[0]))!;
+  const run = (await until("the server run for the request", async () => (await serverRuns(ctx, match, since)).at(-1)))!;
   await waitRun(ctx, SERVER, run.id);
   const byName = await jobs(ctx, SERVER, run.id);
   const opJob = byName.get("op");
