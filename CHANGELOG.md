@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.3.1] - 2026-10-27
+
+### 🐛 Bug Fixes
+
+- *(server)* Let /approve run while /merge waits on the same pull request
+- *(securefix)* Keep route and managed-file pull requests open when their branch is rebuilt
+- *(merge)* End the squash commit title with the pull request number
+
+### 📚 Documentation
+
+- *(handoff)* Record stacked verification, v0.2.0 and the caller rollout
+
+### ⚙️ Miscellaneous Tasks
+
+- *(repo-settings)* Sync managed files
+- *(changelog)* Define the CHANGELOG format with cliff.toml
+
 ## [0.3.0] - 2026-10-27
 
 ### 🚀 Features
