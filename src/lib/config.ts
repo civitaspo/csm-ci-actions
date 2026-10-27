@@ -135,6 +135,8 @@ const RepositoryEntry = z.strictObject({
   name: z.string().min(1).transform((s) => s.toLowerCase()),
   ops: z.array(z.enum(OPS)).refine((ops) => new Set(ops).size === ops.length, "duplicate op"),
   release: ReleaseSchema.optional(),
+  sensitive_paths: z.strictObject({ paths: z.array(z.string().min(1)).optional(), exempt: z.array(Principal).optional() }).optional(),
+  merge: z.strictObject({ allow_bot_requests: z.boolean().optional() }).optional(),
 }).superRefine((entry, ctx) => {
   if (entry.ops.includes("release") !== (entry.release !== undefined)) {
     ctx.addIssue({ code: "custom", path: ["release"], message: "release settings must be present exactly when release is enabled" });

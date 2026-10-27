@@ -1,3 +1,4 @@
+import { withRepositoryPolicy } from "./repository-policy.ts";
 import { verifyReceipt } from "./notifications.ts";
 import { splitRepository } from "../src/lib/github.ts";
 import { marker } from "../src/lib/notify.ts";
@@ -133,6 +134,23 @@ async function receipts(ctx: Ctx, pr: Pr, commentId: number): Promise<string[]> 
 }
 
 export const approve: Scenario[] = [
+  {
+    name: "repository paths replace global sensitivity for automatic approval and recheck",
+    serial: true,
+    run: async (ctx) => withRepositoryPolicy(ctx, { sensitive_paths: { paths: [], exempt: [] } }, async () => {
+      const since = new Date(Date.now() - 2_000);
+      const pr = await openPr(ctx, "signed", ctx.gh, undefined, ctx.gh, `.github/e2e-policy-${Date.now()}.txt`);
+      try {
+        await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number } }, since, "success");
+        assert((await approvedAt(ctx, pr)).length > 0, "empty repository paths did not allow automatic approval");
+        await dismissApprovals(ctx, pr);
+        const command = await postComment(ctx, pr, "/recheck");
+        await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: command.id } }, command.since, "success");
+        assert((await approvedAt(ctx, pr)).length > 0, "recheck did not use empty repository paths");
+      } finally { await closePr(ctx, pr); }
+    }),
+  },
+
   {
     name: "a pull request of signed commits by a trusted committer is approved automatically",
     run: (ctx) =>

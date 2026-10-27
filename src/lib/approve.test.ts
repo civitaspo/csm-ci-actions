@@ -317,3 +317,43 @@ describe("what approve sends", () => {
     expect(approver.calls).toEqual([]);
   });
 });
+
+
+describe("approval repository policy overrides", () => {
+  test.each(["automatic", "/recheck", "/approve"])("%s uses the same effective sensitive paths", async (mode) => {
+    const cfg = config();
+    cfg.policies = [{ type: "sensitive-paths", paths: ["global/**"], exempt: [] }];
+    cfg.repositories = [{ name: "owner/repo", ops: ["approve"], sensitive_paths: { paths: ["local/**"] } }];
+    const { ctx, approver } = context({ config: cfg, files: [{ filename: "global/file" }], ...(mode === "/recheck" ? { comment: comment({ body: "/recheck" }) } : {}) });
+    expect((await runApprove(ctx, { pull_number: 12, ...(mode === "automatic" ? {} : { comment_id: 9 }) })).result).toBe("approved");
+    expect(approver.calls).toContain(`POST ${P}/pulls/12/reviews`);
+  });
+
+  test.each(["automatic", "/recheck"])("%s reports an overridden sensitive path rejection", async (mode) => {
+    const cfg = config();
+    cfg.repositories = [{ name: "owner/repo", ops: ["approve"], sensitive_paths: { paths: ["local/**"] } }];
+    const { ctx, approver } = context({ config: cfg, files: [{ filename: "local/file" }], ...(mode === "/recheck" ? { comment: comment({ body: "/recheck" }) } : {}) });
+    expect(await runApprove(ctx, { pull_number: 12, ...(mode === "automatic" ? {} : { comment_id: 9 }) })).toEqual({ result: "declined", head: HEAD, problems: ["sensitive-paths: sensitive paths need a trusted approver's /approve: local/file"] });
+    expect(approver.calls).toEqual([]);
+  });
+
+  test("/approve can supply current trusted command evidence for repository sensitivity", async () => {
+    const cfg = config();
+    cfg.repositories = [{ name: "owner/repo", ops: ["approve"], sensitive_paths: { paths: ["local/**"], exempt: [] } }];
+    const { ctx } = context({ config: cfg, files: [{ filename: "local/file" }] });
+    expect((await runApprove(ctx, { pull_number: 12, comment_id: 9 })).result).toBe("approved");
+  });
+
+  test.each([
+    ["unsigned commit", { commit: { verification: { verified: false } } }, /signed-commits: .*not signed and verified/],
+    ["untrusted identity", { committer: mallory, author: mallory }, /trusted-committers: .*mallory/],
+  ] satisfies [string, Record<string, unknown>, RegExp][])("repository exemption cannot authorize %s", async (_name, changes, message) => {
+    const cfg = config();
+    cfg.repositories = [{ name: "owner/repo", ops: ["approve"], sensitive_paths: { paths: ["**"], exempt: [alice, mallory] } }];
+    const { ctx, approver } = context({ config: cfg, files: [{ filename: "local/file" }], commits: [commit(HEAD, changes)] });
+    const outcome = await runApprove(ctx, { pull_number: 12 });
+    expect(outcome.result).toBe("declined");
+    expect(outcome.problems.join("; ")).toMatch(message);
+    expect(approver.calls).toEqual([]);
+  });
+});

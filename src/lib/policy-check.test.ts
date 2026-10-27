@@ -3,7 +3,7 @@ import type { PullFacts } from "./command.ts";
 import type { Config } from "./config.ts";
 import { config, fakeFetch } from "./testing.ts";
 import { github } from "./github.ts";
-import { evaluatePullPolicies, policySummary, updatePolicyCheck } from "./policy-check.ts";
+import { effectivePolicies, evaluatePullPolicies, policySummary, updatePolicyCheck } from "./policy-check.ts";
 
 const head = "a".repeat(40);
 const pull: PullFacts = { number: 12, state: "open", draft: false, headSha: head, headRepository: "owner/repo", baseRepository: "owner/repo", baseRef: "main", defaultBranch: "main", authorId: 10 };
@@ -33,11 +33,13 @@ function setup(checkRuns: unknown[], current = { state: "open", head: { sha: hea
 describe("updatePolicyCheck", () => {
   const protectedCases: Array<[string, Config["policies"]]> = [
     ["omitted policy", []],
+    ["no override", []],
     ["exemption", [{ type: "sensitive-paths", paths: [], exempt: [{ id: 10, login: "alice" }] }]],
   ];
   test.each(protectedCases)("forces every path in the protected server repository despite %s", async (_case, policies) => {
     const protectedConfig = config();
     protectedConfig.policies = policies;
+    if (_case !== "no override") protectedConfig.repositories = [{ name: "owner/server", ops: ["approve"], sensitive_paths: { paths: [], exempt: [{ id: 10, login: "alice" }] } }];
     const fetch = fakeFetch([
       { method: "GET", path: "/repos/owner/server/pulls/12/commits", body: [{ sha: head, commit: { verification: { verified: true } }, author: { id: 10, login: "alice" }, committer: { id: 10, login: "alice" } }] },
       { method: "GET", path: "/repos/owner/server/pulls/12/files", body: [{ filename: "ordinary.txt" }] },
@@ -45,6 +47,19 @@ describe("updatePolicyCheck", () => {
     ]);
     const results = await evaluatePullPolicies({ server: github("token", fetch), config: protectedConfig, repository: "owner/server", pull });
     expect(results.find((result) => result.type === "sensitive-paths")).toEqual({ type: "sensitive-paths", ok: false, problems: ["sensitive paths need a trusted approver's /approve: ordinary.txt"] });
+  });
+
+  test("legacy actions protection also rejects explicit empty paths and exemptions", async () => {
+    const cfg = config();
+    cfg.owners.push("civitaspo");
+    cfg.repositories = [{ name: "civitaspo/csm-ci-actions", ops: ["policy-check"], sensitive_paths: { paths: [], exempt: [{ id: 10, login: "alice" }] } }];
+    const path = "/repos/civitaspo/csm-ci-actions/pulls/12";
+    const fetch = fakeFetch([
+      { method: "GET", path: `${path}/commits`, body: [{ sha: head, commit: { verification: { verified: true } }, author: { id: 10 }, committer: { id: 10 } }] },
+      { method: "GET", path: `${path}/files`, body: [{ filename: "ordinary.txt" }] },
+      { method: "GET", path: `${path}/reviews`, body: [] },
+    ]);
+    expect((await evaluatePullPolicies({ server: github("token", fetch), config: cfg, repository: "civitaspo/csm-ci-actions", pull })).at(-1)).toEqual({ type: "sensitive-paths", ok: false, problems: ["sensitive paths need a trusted approver's /approve: ordinary.txt"] });
   });
 
   test.each([[[]], [[{ id: 7, name: "csm-ci/policy", external_id: head, app: { id: 1 } }]]])("skips a closed PR without evaluating or publishing, checks %j", async (checks) => {
@@ -115,4 +130,59 @@ test("policy summary keeps hostile details inside their table cell", () => {
   expect(summary.split("\n")).toHaveLength(3);
   expect(summary).not.toContain("| trusted-committers | pass |");
   expect(summary).toContain("bad &#124; trusted-committers &#124; pass &#124; &lt;img src=x onerror=alert(1)&gt; &#96;code&#96; &#42;bold&#42; &#91;link&#93;(https://example.test)&#92;tail");
+});
+
+
+describe("effective repository policies", () => {
+  const alice = { id: 10, login: "alice" };
+  const bot = { id: 20, login: "renovate[bot]" };
+  const global = { type: "sensitive-paths", paths: ["global/**"], exempt: [alice] } satisfies Config["policies"][number];
+  const cases: Array<[string, Config["repositories"][number]["sensitive_paths"], Config["policies"], Config["policies"]]> = [
+    ["omission inherits", undefined, [global], [global]],
+    ["empty object inherits", {}, [global], [global]],
+    ["paths replace independently", { paths: ["local/**"] }, [global], [{ ...global, paths: ["local/**"] }]],
+    ["exemptions replace independently", { exempt: [bot] }, [global], [{ ...global, exempt: [bot] }]],
+    ["empty paths replace", { paths: [] }, [global], [{ ...global, paths: [] }]],
+    ["empty exemptions replace", { exempt: [] }, [global], [{ ...global, exempt: [] }]],
+    ["omission keeps absent policy disabled", undefined, [], []],
+    ["empty object enables absent policy", {}, [], [{ type: "sensitive-paths", paths: [], exempt: [] }]],
+    ["absent global components default empty", { paths: ["local/**"] }, [], [{ type: "sensitive-paths", paths: ["local/**"], exempt: [] }]],
+    ["every duplicate policy receives replacements", { paths: [], exempt: [bot] }, [global, { ...global, paths: ["other/**"], exempt: [] }], [{ ...global, paths: [], exempt: [bot] }, { ...global, paths: [], exempt: [bot] }]],
+  ];
+  test.each(cases)("%s", (_name, override, policies, expected) => {
+    const cfg = config();
+    cfg.policies = policies;
+    cfg.repositories = [{ name: "owner/repo", ops: ["approve"], ...(override === undefined ? {} : { sensitive_paths: override }) }];
+    expect(effectivePolicies(cfg, "owner/repo")).toEqual([{ type: "signed-commits" }, { type: "trusted-committers" }, ...expected]);
+  });
+
+  test("the first entry supplies the complete override and repositories remain independent", () => {
+    const cfg = config();
+    cfg.policies = [global];
+    cfg.repositories = [
+      { name: "owner/repo", ops: ["approve"], sensitive_paths: { paths: ["local/**"] } },
+      { name: "owner/*", ops: ["approve"], sensitive_paths: { exempt: [bot] } },
+    ];
+    expect(effectivePolicies(cfg, "OWNER/REPO").at(-1)).toEqual({ ...global, paths: ["local/**"] });
+    expect(effectivePolicies(cfg, "owner/other").at(-1)).toEqual({ ...global, exempt: [bot] });
+  });
+
+  test.each([
+    ["inherited sensitivity", undefined, false],
+    ["replacement paths", { paths: ["other/**"] }, true],
+    ["explicit empty paths", { paths: [] }, true],
+    ["replacement exemption", { exempt: [alice] }, true],
+    ["empty exemptions revoke inherited exemption", { exempt: [] }, false],
+  ] satisfies [string, Config["repositories"][number]["sensitive_paths"], boolean][])("evaluation uses %s", async (name, override, ok) => {
+    const cfg = config();
+    cfg.policies = [{ ...global, exempt: name.includes("revoke") ? [alice] : [] }];
+    cfg.repositories = [{ name: "owner/repo", ops: ["policy-check"], ...(override === undefined ? {} : { sensitive_paths: override }) }];
+    const fetch = fakeFetch([
+      { method: "GET", path: `${base}/pulls/12/commits`, body: [{ sha: head, commit: { verification: { verified: true } }, author: alice, committer: alice }] },
+      { method: "GET", path: `${base}/pulls/12/files`, body: [{ filename: "global/file" }] },
+      { method: "GET", path: `${base}/pulls/12/reviews`, body: [] },
+    ]);
+    const results = await evaluatePullPolicies({ server: github("token", fetch), config: cfg, repository: "owner/repo", pull });
+    expect(results.at(-1)).toEqual({ type: "sensitive-paths", ok, problems: ok ? [] : ["sensitive paths need a trusted approver's /approve: global/file"] });
+  });
 });

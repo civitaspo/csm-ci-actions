@@ -32746,7 +32746,9 @@ function isSafeManagedFilePath(path) {
 var RepositoryEntry = strictObject({
   name: string2().min(1).transform((s) => s.toLowerCase()),
   ops: array(_enum(OPS)).refine((ops) => new Set(ops).size === ops.length, "duplicate op"),
-  release: ReleaseSchema.optional()
+  release: ReleaseSchema.optional(),
+  sensitive_paths: strictObject({ paths: array(string2().min(1)).optional(), exempt: array(Principal).optional() }).optional(),
+  merge: strictObject({ allow_bot_requests: boolean2().optional() }).optional()
 }).superRefine((entry, ctx) => {
   if (entry.ops.includes("release") !== (entry.release !== undefined)) {
     ctx.addIssue({ code: "custom", path: ["release"], message: "release settings must be present exactly when release is enabled" });
@@ -37140,14 +37142,22 @@ async function fetchCommitFacts(gh, repository, pullNumber) {
 
 // src/lib/policy-check.ts
 var ALWAYS = [{ type: "signed-commits" }, { type: "trusted-committers" }];
+function effectivePolicies(config, repository) {
+  const override = repositoryEntry(config, repository)?.sensitive_paths;
+  const protectedRepository = repository.toLowerCase() === config.server_repository || repository.toLowerCase() === "civitaspo/csm-ci-actions";
+  const configured = config.policies.filter((policy) => !ALWAYS.some((always) => always.type === policy.type)).map((policy) => {
+    if (policy.type !== "sensitive-paths")
+      return policy;
+    return { type: "sensitive-paths", paths: override?.paths ?? policy.paths, exempt: override?.exempt ?? policy.exempt };
+  });
+  if (!configured.some((policy) => policy.type === "sensitive-paths") && (override !== undefined || protectedRepository)) {
+    configured.push({ type: "sensitive-paths", paths: override?.paths ?? [], exempt: override?.exempt ?? [] });
+  }
+  return [...ALWAYS, ...configured];
+}
 async function evaluatePullPolicies(ctx, commandApproval) {
   const trust = evaluateTrust(await fetchCommitFacts(ctx.server, ctx.repository, ctx.pull.number), ctx.pull.headSha, ctx.config);
-  const protectedRepository = ctx.repository.toLowerCase() === ctx.config.server_repository || ctx.repository.toLowerCase() === "civitaspo/csm-ci-actions";
-  const hasSensitivePaths = ctx.config.policies.some((p) => p.type === "sensitive-paths");
-  const configured = [...ctx.config.policies.filter((p) => !ALWAYS.some((a) => a.type === p.type))];
-  if (protectedRepository && !hasSensitivePaths)
-    configured.push({ type: "sensitive-paths", paths: ["**"], exempt: [] });
-  const policies = [...ALWAYS, ...configured];
+  const policies = effectivePolicies(ctx.config, ctx.repository);
   return evaluatePolicies(policies, {
     trust,
     gh: ctx.server,
@@ -37218,6 +37228,9 @@ async function verifyMerger(ctx, pull, comment) {
     const target = ctx.repository.toLowerCase();
     if (target === ctx.config.server_repository.toLowerCase() || target === "civitaspo/csm-ci-actions") {
       throw new Rejection(`bot mergers cannot merge pull requests in protected repository ${ctx.repository}`);
+    }
+    if (repositoryEntry(ctx.config, ctx.repository)?.merge?.allow_bot_requests === false) {
+      throw new Rejection(`bot merge requests are disabled for repository ${ctx.repository}`);
     }
     await checkBotMerger(ctx, pull, bot);
   } else if (author.type === "User") {

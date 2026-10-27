@@ -1,3 +1,4 @@
+import { withRepositoryPolicy } from "./repository-policy.ts";
 import { type GitHub, splitRepository } from "../src/lib/github.ts";
 import { marker } from "../src/lib/notify.ts";
 import {
@@ -17,6 +18,7 @@ import {
   smokeRequest,
   until,
   type Ctx,
+  closePr,
 } from "./harness.ts";
 
 const SERVER_APP_ID = 5455185;
@@ -71,8 +73,8 @@ async function openPolicyPr(ctx: Ctx, kind: "signed" | "unsigned", sensitive = f
 
 async function closePolicyPr(ctx: Ctx, pr: Pr): Promise<void> {
   const { data } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
-  await ctx.gh.rest.pulls.update({ ...splitRepository(CLIENT), pull_number: pr.number, state: "closed" });
-  await ctx.gh.rest.git.deleteRef({ ...splitRepository(CLIENT), ref: `heads/${data.head.ref}` });
+  // A PR reset to main counts as merged, so GitHub may already have deleted its branch.
+  await closePr(ctx, { ...pr, branch: data.head.ref });
 }
 
 async function withPolicyPr(ctx: Ctx, kind: "signed" | "unsigned", sensitive: boolean, fn: (pr: Pr, check: PolicyCheck) => Promise<void>, prAs?: Ctx["untrusted"]): Promise<void> {
@@ -91,6 +93,21 @@ function untrusted(ctx: Ctx) {
 }
 
 export const policyCheck: Scenario[] = [
+  {
+    name: "repository sensitivity with empty exemptions requires command approval and recovers",
+    serial: true,
+    run: async (ctx) => withRepositoryPolicy(ctx, { sensitive_paths: { paths: ["**"], exempt: [] }, merge: { allow_bot_requests: false } }, async () => {
+      const { pr, since } = await openPolicyPr(ctx, "signed");
+      try {
+        await expectPolicy(ctx, pr, since, "failure", "sensitive-paths");
+        const command = await postComment(ctx, pr, "/approve");
+        await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: command.id } }, command.since, "success");
+        const refreshed = await checkForHead(ctx, pr);
+        assert(refreshed.conclusion === "success", `command approval left policy ${refreshed.conclusion}`);
+      } finally { await closePolicyPr(ctx, pr); }
+    }),
+  },
+
   {
     name: "signed, trusted commits and ordinary paths pass every policy",
     run: (ctx) => withPolicyPr(ctx, "signed", false, async (_pr, check) => {
