@@ -158,7 +158,10 @@ const herdrRejections = [
   { name: "unsupported herdr version value", text: "version = 1\n", error: "herdr-plugin.toml has an unsupported version value in the root table" },
   { name: "herdr multiline string", text: 'version = "1.0.0"\ndescription = """\nx\n"""\n', error: "herdr-plugin.toml multiline TOML strings are not supported" },
   { name: "unterminated herdr string", text: 'version = "1.0.0"\nid = "x\n', error: "herdr-plugin.toml is not valid TOML" },
-  { name: "unbalanced herdr array", text: 'version = "1.0.0"\nplatforms = ["macos"\n', error: "herdr-plugin.toml is not valid TOML" },
+  { name: "herdr string unterminated at end of file", text: 'version = "1.0.0"\nid = "x', error: "herdr-plugin.toml is not valid TOML" },
+  { name: "herdr single-line string spanning lines", text: 'version = "1.0.0"\nid = "a\nb"\n', error: "herdr-plugin.toml is not valid TOML" },
+  { name: "mismatched herdr brackets", text: 'version = "1.0.0"\nplatforms = ["macos"}\n', error: "herdr-plugin.toml is not valid TOML" },
+  { name: "unbalanced herdr array",text: 'version = "1.0.0"\nplatforms = ["macos"\n', error: "herdr-plugin.toml is not valid TOML" },
   { name: "unterminated herdr table header", text: 'version = "1.0.0"\n[[actions]\nid = "x"\n', error: "herdr-plugin.toml is not valid TOML" },
   { name: "herdr statement without a value", text: 'version = "1.0.0"\nid\n', error: "herdr-plugin.toml is not valid TOML" },
 ];
