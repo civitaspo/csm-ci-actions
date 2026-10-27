@@ -91,7 +91,7 @@ Cover every lifecycle row above, multiple pages of comments, and recovery of alr
 
 Test forged markers, wrong PRs, wrong author IDs or types, missing or inconsistent node identity, moved heads, changed PR state, out-of-order evaluations, and REST or GraphQL failures. Assert the rejection messages and mutation results. Mutation-check every new or changed rejection rule individually in bounded isolated copies.
 
-Run the affected policy-check and approve suites, then smoke, at the signed pushed implementation SHA. In the testing repositories, inspect a real first failure, identical retry, changed failure, and passing recovery. Verify rendered `<sub>` metadata, escaped content, minimization classifiers, and recovery of outdated reports with the existing Server App permissions. Record exact run URLs and any skipped or unverified cases in `docs/handoff.md`. Complete CI-only identity cases after an authorized merge, using the runner checkout on `main`.
+Run the affected policy-check and approve suites, then smoke, at the signed pushed implementation SHA. In the testing repositories, inspect a real first failure, identical retry, changed failure, and passing recovery. Verify rendered `<sub>` metadata, escaped content, minimization classifiers, and recovery of outdated reports with the existing Server App permissions. Record exact run URLs and any skipped or unverified cases in the PR. Complete CI-only identity cases after an authorized merge, using the runner checkout on `main`.
 
 ## Effective repository policy resolution
 
