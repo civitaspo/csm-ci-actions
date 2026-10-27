@@ -18,6 +18,7 @@ import { ACTIONS, CLIENT, SERVER, assert, type Ctx, hasStatus, moveE2eBranch, ty
 const LOCK = "e2e-lock";
 const LOCK_TTL_MS = 60 * 60_000;
 const LOCK_POLL_MS = 15_000;
+const LOCK_HEARTBEAT_MS = 5 * 60_000;
 
 // The label name is unique in a repository, so creating it is an atomic test-and-set.
 async function acquireLock(gh: GitHub, holder: string): Promise<void> {
@@ -51,6 +52,13 @@ async function acquireLock(gh: GitHub, holder: string): Promise<void> {
   }
 }
 
+// Keeps a long multi-feature invocation from looking stale to a waiting invocation.
+async function refreshLock(gh: GitHub, holder: string): Promise<void> {
+  const repo = splitRepository(ACTIONS);
+  const { data } = await gh.rest.issues.getLabel({ ...repo, name: LOCK });
+  if (data.description?.endsWith(` ${holder}`)) await gh.rest.issues.updateLabel({ ...repo, name: LOCK, description: `${new Date().toISOString()} ${holder}` });
+}
+
 async function releaseLock(gh: GitHub, holder: string): Promise<void> {
   const repo = splitRepository(ACTIONS);
   const { data } = await gh.rest.issues.getLabel({ ...repo, name: LOCK });
@@ -62,7 +70,7 @@ async function main(): Promise<void> {
   const token = process.env.GH_TOKEN;
   assert(token, "GH_TOKEN is not set");
   assert(values.ref && /^[0-9a-f]{40}$/.test(values.ref), "--ref must be a full commit sha");
-  const features = [...new Set(values.feature.split(","))].map((name) => {
+  const features = [...new Set(values.feature.split(",").map((name) => name.trim()))].map((name) => {
     const feature = Object.keys(SCENARIOS).find((key): key is Feature => key === name);
     assert(feature, `unknown feature ${name}; known: ${Object.keys(SCENARIOS).join(", ")}`);
     return feature;
@@ -84,6 +92,7 @@ async function main(): Promise<void> {
     : { kind: "local" as const };
   const started = Date.now();
   await acquireLock(actions, holder);
+  const heartbeat = setInterval(() => refreshLock(actions, holder).catch((e: unknown) => console.log(`could not refresh the e2e lock: ${String(e)}`)), LOCK_HEARTBEAT_MS);
   let failed = 0;
   let skipped = 0;
   try {
@@ -125,6 +134,7 @@ async function main(): Promise<void> {
     failed = results.filter((r) => r.failed).length;
     skipped = results.filter((r) => r.skipped).length;
   } finally {
+    clearInterval(heartbeat);
     await releaseLock(actions, holder);
   }
   console.log(`${scenarios.length - failed - skipped}/${scenarios.length} scenarios passed, ${skipped} skipped, in ${Math.round((Date.now() - started) / 1000)}s at ${values.ref}`);

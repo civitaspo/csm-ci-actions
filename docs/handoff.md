@@ -425,7 +425,7 @@ Every phase appends to the following files. Only append. Do not change existing 
      - Use `marker("merge", comment_id)` for the replay check.
   2. Check the PR state, pass trust (`ALWAYS` and the config policies), and pin the head.
   3. Check that the head was not created after the comment (the same check as `checkHeadPredatesComment`).
-  4. Poll for readiness. Poll every 30 seconds until `merge.deadline_minutes` (add it to the config, default 60). On every poll, revalidate the PR state, the head and the comment (kill switch). The ready condition has three parts.
+  4. Poll for readiness. Poll every 30 seconds, or every twelfth of the deadline when that is shorter, until `merge.deadline_minutes` (add it to the config, default 60). On every poll, revalidate the PR state, the head and the comment (kill switch). The ready condition has three parts.
      - The approver's latest review is an APPROVE for that head.
      - The policies pass when you re-evaluate them inside the server.
      - `merge.required_checks` (`[{name, app_id}]`) is success or skipped from the specified app.
@@ -542,7 +542,7 @@ Several features in one invocation share the lock and the fixture sync. Serial s
 ### 7.2 The lock
 
 - Take it with the label `e2e-lock` in csm-ci-actions. The description is `<ISO time> <features>@<sha7>#<rand>`, with the comma-separated features cut to 40 characters.
-- If it cannot take the lock, it waits and retries every 15 seconds. It steals a lock older than 60 minutes.
+- If it cannot take the lock, it waits and retries every 15 seconds. It steals a lock older than 60 minutes. The holder refreshes the timestamp every 5 minutes, so only a lock whose holder stopped goes stale.
 - We confirmed that two runs started at the same time run in series (smoke printed "waiting for the e2e lock" 38 times and started after approve finished).
 - **If you kill the harness process, the lock stays.** After you confirm that it is yours, delete it with `gh label delete e2e-lock --repo civitaspo/csm-ci-actions --yes`.
 
