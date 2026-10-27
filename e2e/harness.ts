@@ -146,18 +146,40 @@ export async function recentWorkflowRuns(ctx: Ctx, repository: string, workflow:
   return recentItems(pages(), since);
 }
 
+// A completed run's jobs and logs do not change. Concurrent scenarios poll the same server runs,
+// so they share these instead of downloading them again on every poll.
+const completedRunJobs = new Map<number, Map<string, { id: number; conclusion: string | null }>>();
+const completedJobLogs = new Map<number, string>();
+
+async function completedJobs(ctx: Ctx, runId: number): Promise<Map<string, { id: number; conclusion: string | null }>> {
+  const cached = completedRunJobs.get(runId);
+  if (cached) return cached;
+  const byName = await jobs(ctx, SERVER, runId);
+  // Right after a run completes, its job list can still be empty or unfinished.
+  if (byName.size > 0 && [...byName.values()].every((job) => job.conclusion !== null)) completedRunJobs.set(runId, byName);
+  return byName;
+}
+
+async function completedJobLog(ctx: Ctx, jobId: number): Promise<string> {
+  const cached = completedJobLogs.get(jobId);
+  if (cached !== undefined) return cached;
+  const log = await jobLog(ctx, SERVER, jobId);
+  if (log.length > 0) completedJobLogs.set(jobId, log);
+  return log;
+}
+
 export async function serverRuns(ctx: Ctx, match: RequestMatch, since: Date): Promise<Run[]> {
   const candidates = await recentWorkflowRuns(ctx, SERVER, "csm-ci.yml", "label", since);
   const found: Run[] = [];
   for (const run of candidates) {
     if (run.status !== "completed") continue;
-    const byName = await jobs(ctx, SERVER, run.id);
+    const byName = await completedJobs(ctx, run.id);
     const intake = byName.get("intake");
     if (!intake) continue;
     if (match.label) {
       const cleanup = byName.get("cleanup");
-      if (cleanup && matchesCleanupLabel(await jobLog(ctx, SERVER, cleanup.id), match.label)) found.push(run);
-    } else if (intake.conclusion !== "skipped" && matchesAcceptedRequest(await jobLog(ctx, SERVER, intake.id), match)) {
+      if (cleanup && matchesCleanupLabel(await completedJobLog(ctx, cleanup.id), match.label)) found.push(run);
+    } else if (intake.conclusion !== "skipped" && matchesAcceptedRequest(await completedJobLog(ctx, intake.id), match)) {
       found.push(run);
     }
   }
