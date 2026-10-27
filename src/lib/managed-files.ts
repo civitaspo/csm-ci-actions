@@ -1,4 +1,4 @@
-import { inspectGeneratedWorkflows, ownershipBody, parseOwnership, type GeneratedWorkflows, type GeneratedRecord } from "./workflow-ownership.ts";
+import { hasGeneratedHeader, isWorkflowFileName, type GeneratedWorkflows } from "./generated-workflows.ts";
 import { Rejection } from "./request.ts";
 import { MAX_SECUREFIX_FILES, MAX_SECUREFIX_FILE_SIZE, MAX_SECUREFIX_TOTAL_SIZE } from "./securefix.ts";
 import { github, splitRepository, type GitHub } from "./github.ts";
@@ -36,7 +36,6 @@ export type ManagedFilesInspection = {
   changedPaths: string[];
   pullRequest: number | null;
   deletions?: string[];
-  generatedRecord?: GeneratedRecord;
   pullBody?: string;
 };
 export type ManagedFilesResult = { status: "applied" | "already-applied"; commit: string; pullRequest?: number };
@@ -88,12 +87,12 @@ export async function inspectManagedFiles(gh: GitHub, input: ManagedFilesInput):
   const { owner, repo } = splitRepository(input.repository);
   const { data: defaultRef } = await gh.rest.git.getRef({ owner, repo, ref: `heads/${input.defaultBranch}` });
   const defaultSha = defaultRef.object.sha;
-  const generated = input.generated ? await inspectGeneratedWorkflows(gh, { ...input, generated: input.generated, additional: input.files, defaultSha }) : undefined;
-  const deletions = generated?.deletions ?? [];
-  validateManagedFiles({ ...input.files, ...input.generated?.files, ...Object.fromEntries(deletions.map((path) => [path, ""])) });
-  const pullBody = generated ? `${PULL_BODY}\n\nStandard client workflows: ${generated.record.release.version} (${generated.record.release.sha}).` : PULL_BODY;
-  const metadata = generated ? { generatedRecord: generated.record, deletions, pullBody } : {};
-  if (files.length === 0 && deletions.length === 0 && !generated?.ownershipNeeded) return {
+  const generated = input.generated;
+  const deletions = generated ? await generatedDeletions(gh, { owner, repo, defaultSha, generated, additional: input.files }) : [];
+  validateManagedFiles({ ...input.files, ...generated?.files, ...Object.fromEntries(deletions.map((path) => [path, ""])) });
+  const pullBody = generated ? `${PULL_BODY}\n\nStandard client workflows: ${generated.release.version} (${generated.release.sha}).` : PULL_BODY;
+  const metadata = generated ? { deletions, pullBody } : {};
+  if (files.length === 0 && deletions.length === 0) return {
     status: "already-applied",
     requiresWorkflowsWrite: false,
     requiresPullRequestUpdate: false,
@@ -108,7 +107,7 @@ export async function inspectManagedFiles(gh: GitHub, input: ManagedFilesInput):
   };
   const sourceValues = await readFiles(gh, owner, repo, defaultSha, files);
   const changedPaths = [...files.filter(({ path, content }) => sourceValues.get(path)?.content !== content).map(({ path }) => path), ...deletions];
-  if (changedPaths.length === 0 && !generated?.ownershipNeeded) return {
+  if (changedPaths.length === 0) return {
     status: "already-applied",
     requiresWorkflowsWrite: false,
     requiresPullRequestUpdate: false,
@@ -145,12 +144,7 @@ export async function inspectManagedFiles(gh: GitHub, input: ManagedFilesInput):
   }
   const inspectedFiles = [...files, ...deletions.map((path) => ({ path, content: "" }))];
   const targetValues = targetSha ? await readFiles(gh, owner, repo, targetSha, inspectedFiles) : new Map<string, FileValue>();
-  let targetMatches = targetSha !== null && files.every(({ path, content }) => targetValues.get(path)?.content === content) && deletions.every((path) => targetValues.get(path)?.content === null);
-  if (targetMatches && targetSha && generated) {
-    const { data: commit } = await gh.rest.repos.getCommit({ owner, repo, ref: targetSha });
-    const pendingRecord = parseOwnership(commit.commit.message, generated.record.repositoryId);
-    targetMatches = pendingRecord !== null && ownershipBody(pendingRecord) === ownershipBody(generated.record);
-  }
+  const targetMatches = targetSha !== null && files.every(({ path, content }) => targetValues.get(path)?.content === content) && deletions.every((path) => targetValues.get(path)?.content === null);
   const targetIsAncestorOfDefault = targetSha !== null && targetSha !== defaultSha && targetHistoryLength === 0;
   const branchNeedsWrite = !targetMatches || targetIsAncestorOfDefault;
   const pullRequest = await findPullRequest(gh, input.repository, input.defaultBranch, targetSha);
@@ -173,6 +167,39 @@ export async function inspectManagedFiles(gh: GitHub, input: ManagedFilesInput):
   };
 }
 
+// Every regular .yml/.yaml file directly under .github/workflows/ whose first line is the generated header
+// is deleted unless a selected caller rewrites it. Files without the header are never touched.
+async function generatedDeletions(gh: GitHub, input: { owner: string; repo: string; defaultSha: string; generated: GeneratedWorkflows; additional: Readonly<Record<string, string>> }): Promise<string[]> {
+  const { owner, repo } = input;
+  const deletions: string[] = [];
+  for (const entry of await listWorkflowFiles(gh, owner, repo, input.defaultSha)) {
+    const path = `.github/workflows/${entry.path}`;
+    if (Object.hasOwn(input.generated.files, path)) continue;
+    // latin1 keeps the ASCII header comparison byte-exact without rejecting non-UTF-8 operator files.
+    if (hasGeneratedHeader((await readBlob(gh, owner, repo, path, entry.sha)).toString("latin1"))) deletions.push(path);
+  }
+  for (const path of [...Object.keys(input.generated.files), ...deletions]) {
+    if (Object.hasOwn(input.additional, path)) throw new Rejection(`managed files contain duplicate producer destination ${JSON.stringify(path)}`);
+  }
+  return deletions.sort();
+}
+
+async function listWorkflowFiles(gh: GitHub, owner: string, repo: string, ref: string): Promise<{ path: string; sha: string }[]> {
+  const { data: commit } = await gh.rest.repos.getCommit({ owner, repo, ref });
+  let treeSha = commit.commit.tree.sha;
+  if (!treeSha) throw new Rejection("managed files commit has no Git tree SHA");
+  for (const segment of [".github", "workflows"]) {
+    const { data: tree } = await gh.rest.git.getTree({ owner, repo, tree_sha: treeSha });
+    if (tree.truncated) throw new Rejection("managed files could not safely inspect a Git tree");
+    const entry = tree.tree.find((candidate) => candidate.path === segment);
+    if (!entry || entry.type !== "tree" || entry.mode !== "040000" || !entry.sha) return [];
+    treeSha = entry.sha;
+  }
+  const { data: tree } = await gh.rest.git.getTree({ owner, repo, tree_sha: treeSha });
+  if (tree.truncated) throw new Rejection("managed files could not safely inspect a Git tree");
+  return tree.tree.flatMap((entry) => entry.type === "blob" && (entry.mode === "100644" || entry.mode === "100755") && entry.sha && entry.path && isWorkflowFileName(entry.path) ? [{ path: entry.path, sha: entry.sha }] : []);
+}
+
 async function readFiles(gh: GitHub, owner: string, repo: string, ref: string, files: readonly ManagedFile[]): Promise<Map<string, FileValue>> {
   const results = await Promise.all(files.map(async ({ path }) => [path, await readFileAtRef(gh, owner, repo, path, ref)] as const));
   return new Map(results);
@@ -181,13 +208,18 @@ async function readFiles(gh: GitHub, owner: string, repo: string, ref: string, f
 export async function readFileAtRef(gh: GitHub, owner: string, repo: string, path: string, ref: string): Promise<FileValue> {
   const entry = await findTreeEntry(gh, owner, repo, path, ref);
   if (!entry) return { content: null };
-  const { data } = await gh.rest.git.getBlob({ owner, repo, file_sha: entry.sha! });
+  const bytes = await readBlob(gh, owner, repo, path, entry.sha!);
+  try { return { content: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes) }; }
+  catch { throw new Rejection(`managed file ${JSON.stringify(path)} is not UTF-8`); }
+}
+
+async function readBlob(gh: GitHub, owner: string, repo: string, path: string, sha: string): Promise<Buffer> {
+  const { data } = await gh.rest.git.getBlob({ owner, repo, file_sha: sha });
   if (data.encoding !== "base64") throw new Rejection(`managed file ${JSON.stringify(path)} has an unsupported Git blob encoding`);
   const encoded = data.content.replaceAll("\n", "");
   const bytes = Buffer.from(encoded, "base64");
   if (bytes.toString("base64") !== encoded) throw new Rejection(`managed file ${JSON.stringify(path)} has malformed base64`);
-  try { return { content: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes) }; }
-  catch { throw new Rejection(`managed file ${JSON.stringify(path)} is not UTF-8`); }
+  return bytes;
 }
 
 export async function findTreeEntry(gh: GitHub, owner: string, repo: string, path: string, ref: string): Promise<GitTreeEntry | null> {
@@ -249,7 +281,7 @@ export async function applyManagedFiles(gh: GitHub, input: ManagedFilesInput & {
   const writeGh = input.writeClient ?? github(input.writeToken);
   if (input.generated) {
     const current = await inspectManagedFiles(gh, input);
-    if (current.defaultSha !== inspection.defaultSha || current.targetSha !== inspection.targetSha || current.pullRequest !== inspection.pullRequest || JSON.stringify(current.generatedRecord) !== JSON.stringify(inspection.generatedRecord) || JSON.stringify(current.deletions) !== JSON.stringify(inspection.deletions)) throw new Rejection("generated workflows state changed before managed file write");
+    if (current.defaultSha !== inspection.defaultSha || current.targetSha !== inspection.targetSha || current.pullRequest !== inspection.pullRequest || JSON.stringify(current.deletions) !== JSON.stringify(inspection.deletions)) throw new Rejection("generated workflows state changed before managed file write");
   }
   if (!inspection.branchNeedsWrite) {
     const pullRequest = await ensurePullRequest(writeGh, inspection, inspection.targetSha ?? inspection.defaultSha);
@@ -281,8 +313,8 @@ export async function applyManagedFiles(gh: GitHub, input: ManagedFilesInput & {
     const { owner, repo } = splitRepository(input.repository);
     const { data: currentDefault } = await gh.rest.git.getRef({ owner, repo, ref: `heads/${input.defaultBranch}` });
     if (currentDefault.object.sha !== inspection.defaultSha) throw new Rejection("generated workflows default branch moved before commit creation");
-    const current = await inspectGeneratedWorkflows(gh, { ...input, generated: input.generated, additional: input.files, defaultSha: inspection.defaultSha });
-    if (JSON.stringify(current.record) !== JSON.stringify(inspection.generatedRecord) || JSON.stringify(current.deletions) !== JSON.stringify(inspection.deletions)) throw new Rejection("generated workflows ownership changed before commit creation");
+    const deletions = await generatedDeletions(gh, { owner, repo, defaultSha: inspection.defaultSha, generated: input.generated, additional: input.files });
+    if (JSON.stringify(deletions) !== JSON.stringify(inspection.deletions)) throw new Rejection("generated workflows deletions changed before commit creation");
   }
   const commit = await createCommit(writeGh, inspection);
   const pullRequest = await ensurePullRequest(writeGh, inspection, commit);
@@ -296,7 +328,7 @@ async function createCommit(gh: GitHub, inspection: ManagedFilesInspection): Pro
     { input: {
       branch: { repositoryNameWithOwner: inspection.repository, branchName: BRANCH },
       expectedHeadOid: inspection.defaultSha,
-      message: { headline: MANAGED_FILES_TITLE, ...(inspection.generatedRecord ? { body: ownershipBody(inspection.generatedRecord) } : {}) },
+      message: { headline: MANAGED_FILES_TITLE },
       fileChanges: { additions, deletions: (inspection.deletions ?? []).map((path) => ({ path })) },
     } },
   );

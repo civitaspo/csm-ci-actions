@@ -55,9 +55,7 @@ test.each([
   ["nonboolean input", ["securefix"], { release_prepare: { update_root_version: "false" } }, {}, "expected boolean"],
   ["conflicting branch", ["securefix"], {}, { to: "release/custom" }, "release-pr route must use release/next"],
   ["conflicting workflow", ["securefix"], {}, { workflow: ".github/workflows/custom.yml" }, "release-pr route must use release/next"],
-  ["unselected adoption", [], { workflow_adoption: { [callerPath("merge")]: "a".repeat(64) } }, {}, "workflow_adoption destination must be a selected standard caller"],
-  ["arbitrary adoption", ["merge"], { workflow_adoption: { "custom.yml": "a".repeat(64) } }, {}, "workflow_adoption destination must be a selected standard caller"],
-  ["malformed digest", ["merge"], { workflow_adoption: { [callerPath("merge")]: "A".repeat(64) } }, {}, "must be a lowercase SHA256 digest"],
+  ["removed adoption key", ["merge"], { workflow_adoption: { [callerPath("merge")]: "a".repeat(64) } }, {}, "workflow_adoption was removed; selected standard callers are always regenerated, so delete this key"],
 ] satisfies [string, Op[], object, object, string][]) ("rejects %s", (_name, ops, extra, routeExtra, message) => {
   expect(() => candidate(ops, extra, routeExtra)).toThrow(message);
 });
@@ -76,17 +74,6 @@ test("emits exact event sets", () => {
   expect(parse(files[callerPath("policy-check")]!).on).toEqual({ pull_request_target: { types: ["opened", "synchronize", "reopened", "ready_for_review", "edited"] } });
   expect(parse(files[callerPath("merge")]!).on).toEqual({ issue_comment: { types: ["created"] } });
   expect(parse(files[callerPath("release")]!).on).toEqual({ pull_request: { types: ["closed"] } });
-});
-
-test("testing adoption entries bind exactly the committed fixture callers", async () => {
-  const { parseConfig } = await import("./config.ts");
-  const { digest } = await import("./generated-workflows.ts");
-  const fixtureConfig = parseConfig(await Bun.file(new URL("../../e2e/fixtures/testing-csm-ci-server/csm-ci.yaml", import.meta.url)).text());
-  const entry = fixtureConfig.repositories.find((entry) => entry.name === "civitaspo/testing-csm-ci-client")!;
-  expect(Object.keys(entry.workflow_adoption ?? {})).toHaveLength(5);
-  for (const [path, expected] of Object.entries(entry.workflow_adoption ?? {})) {
-    expect(digest(await Bun.file(new URL(`../../e2e/fixtures/testing-csm-ci-client/${path}`, import.meta.url)).text())).toBe(expected);
-  }
 });
 
 

@@ -314,7 +314,6 @@ export const withoutReleaseOperation = (text: string): string => {
   const document = parseDocument(text);
   document.setIn(["repositories", index, "ops"], entry.ops.filter((op) => op !== "release"));
   document.deleteIn(["repositories", index, "release"]);
-  document.deleteIn(["repositories", index, "workflow_adoption", ".github/workflows/csm-ci-release.yml"]);
   return String(document);
 };
 

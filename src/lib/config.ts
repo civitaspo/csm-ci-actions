@@ -136,7 +136,8 @@ const RepositoryEntry = z.strictObject({
   ops: z.array(z.enum(OPS)).refine((ops) => new Set(ops).size === ops.length, "duplicate op"),
   release: ReleaseSchema.optional(),
   release_prepare: z.strictObject({ update_root_version: z.boolean().optional() }).optional(),
-  workflow_adoption: z.record(z.string(), z.string().regex(/^[a-f0-9]{64}$/u, "must be a lowercase SHA256 digest")).refine((value) => Object.keys(value).length <= 5, "must contain at most five entries").optional(),
+  // Removed key: reject it explicitly so older configurations fail with an actionable message.
+  workflow_adoption: z.never({ error: "workflow_adoption was removed; selected standard callers are always regenerated, so delete this key" }).optional(),
   sensitive_paths: z.strictObject({ paths: z.array(z.string().min(1)).optional(), exempt: z.array(Principal).optional() }).optional(),
   merge: z.strictObject({ allow_bot_requests: z.boolean().optional() }).optional(),
 }).superRefine((entry, ctx) => {
@@ -181,11 +182,6 @@ export const ConfigSchema = z
         ctx.addIssue({ code: "custom", path: ["repositories", index], message: "release-pr route must use release/next and .github/workflows/csm-ci-release-pr.yml" });
       }
       if (entry.release_prepare !== undefined && !preparation) ctx.addIssue({ code: "custom", path: ["repositories", index, "release_prepare"], message: "release_prepare requires selected release preparation" });
-      const selected = entry.ops.filter((op) => op !== "securefix").map((op) => `.github/workflows/csm-ci-${op}.yml`);
-      if (preparation) selected.push(".github/workflows/csm-ci-release-pr.yml");
-      for (const path of Object.keys(entry.workflow_adoption ?? {})) {
-        if (!selected.includes(path)) ctx.addIssue({ code: "custom", path: ["repositories", index, "workflow_adoption", path], message: "workflow_adoption destination must be a selected standard caller" });
-      }
     }
     for (const [index, route] of (c.securefix?.routes ?? []).entries()) {
       if (!isSafeSecurefixPath(route.workflow) || !route.workflow.startsWith(".github/workflows/")) {

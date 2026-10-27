@@ -1,5 +1,4 @@
 import * as core from "@actions/core";
-import { repositoryEntry } from "../lib/config.ts";
 import { generateWorkflows, ReleasedRevision, selectedCallers } from "../lib/generated-workflows.ts";
 import { resolveWorkflowRelease } from "../lib/workflow-release.ts";
 import { loadAdditionalManagedFiles } from "../lib/additional-managed-files.ts";
@@ -97,7 +96,7 @@ async function main(): Promise<void> {
     const { data: repo } = await readGH.rest.repos.get(address);
     const files = await loadAdditionalManagedFiles(configGH, { repository: serverRepository, sha: env("GITHUB_SHA"), settings: config.repo_settings });
     const release = ReleasedRevision.parse(JSON.parse(input("workflow-release", true)));
-    const generated = { release, files: generateWorkflows(config, target.name, repo.default_branch, release), adoption: repositoryEntry(config, target.name)?.workflow_adoption ?? {} };
+    const generated = { release, files: generateWorkflows(config, target.name, repo.default_branch, release) };
     if (mode === "managed-inspect") {
       const result = await inspectManagedFiles(readGH, { repository: target.name, defaultBranch: repo.default_branch, serverBotId: config.apps.server_bot_id, generated, files });
       core.setOutput("result", result.status);
