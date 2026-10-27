@@ -76,13 +76,6 @@ async function postBotMergeRequest(ctx: Parameters<Scenario["run"]>[0], pr: Pr):
   return { comment, requestInfo: fromComment(pr, comment) };
 }
 
-async function closeIfOpen(ctx: Parameters<Scenario["run"]>[0], pr: Pr): Promise<void> {
-  const repo = splitRepository(CLIENT);
-  const { data } = await ctx.gh.rest.pulls.get({ ...repo, pull_number: pr.number });
-  if (data.state === "open") await ctx.gh.rest.pulls.update({ ...repo, pull_number: pr.number, state: "closed" });
-  await ctx.gh.rest.git.deleteRef({ ...repo, ref: `heads/${pr.branch}` });
-}
-
 async function withSignedPr(ctx: Parameters<Scenario["run"]>[0], fn: (pr: Pr) => Promise<void>): Promise<void> {
   const since = new Date(Date.now() - 2_000);
   const pr = await openPr(ctx, "signed");
@@ -328,7 +321,7 @@ export const merge: Scenario[] = [
           await noMerge(ctx, mixedPr);
           assert(!(await serverComments(ctx, mixedPr)).some((body) => body.includes(marker("merge", comment.id))), "rejected mixed-identity bot request unexpectedly posted a receipt");
         } finally {
-          if (mixedPr) await closeIfOpen(ctx, mixedPr);
+          if (mixedPr) await closePr(ctx, mixedPr);
         }
 
         let botPr: Pr | undefined;
@@ -342,7 +335,7 @@ export const merge: Scenario[] = [
           assert(data.merged && data.merge_commit_sha, `test bot's pull request #${botPr.number} was not merged`);
           assert((await serverComments(ctx, botPr)).some((body) => body.includes(marker("merge", comment.id)) && body.includes("Squash-merged")), "test bot merge has no success receipt");
         } finally {
-          if (botPr) await closeIfOpen(ctx, botPr);
+          if (botPr) await closePr(ctx, botPr);
         }
       });
     },
