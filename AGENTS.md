@@ -18,6 +18,10 @@ Follow this workflow for changes to csm-ci-actions and its live testing environm
 - Cover each new or changed rejection rule with a table-driven test that checks the rejection message. Test observable behavior, including rejected inputs and replay, rather than internal call structure.
 - Mutation-check each changed rule individually. Use isolated copies, bound each mutant's runtime, and restore the original files after every attempt. A surviving mutant requires a stronger test.
 - Verify assumptions about GitHub in the testing repositories. Record exact run URLs and distinguish observed behavior from assumptions or untested cases.
+- Remove superseded configuration keys, inputs, and values outright: no aliases and no dedicated removal messages. The strict parser's ordinary unknown-key or invalid-value error is enough.
+- Code that rewrites a pull request's head branch must never leave that branch equal to its base, even briefly: GitHub then closes or auto-merges the open PR asynchronously. Rebuild through `src/lib/branch-rebuild.ts`.
+- Generated client files must already be stable under client tooling. Emit the pin comment that pinact-style autofix adds (`@<sha> # <version>`) and the jactionlint annotations that self-linting repositories need, so neither tool rewrites or rejects them.
+- Server operations on one pull request share a concurrency group only with the same kind. A new operation that waits must not hold a group that `/approve`, `/recheck`, or policy-check needs.
 - Continue authorized, reversible work without repeated permission requests. Report concrete blockers and the specific action needed from the user. Keep progress updates focused on findings and remaining work.
 
 ## Verify before opening a pull request
@@ -52,6 +56,9 @@ GH_TOKEN=$(gh auth token) bun e2e/run.ts --ref <full-head-sha> --feature smoke
 - The harness writes to `testing-csm-ci-client`, `testing-csm-ci-server`, and this repository's `e2e` ref. Production repositories are not test fixtures.
 - Run one feature suite at a time. Scenarios within a suite may run concurrently. Wait for completion before dispatching another CI suite, because a newer pending run can replace an older one.
 - Use `--scenario <substring>` while iterating, then run the full affected feature. The `release-prepare` client action belongs to the `release-pr` suite.
+- Another session or a multi-feature run can hold `e2e-lock` for a long time. Read the lock's description before waiting, and tell the user what you are waiting on.
+- Under GitHub's account-wide job limit, runs can stay queued for more than ten minutes, and a job's API status can lag its finished steps. Check the queue and step conclusions before blaming the code or retrying.
+- For mutation checks in copied trees, exclude `mise.toml` (an untrusted copy makes `mise` refuse to run) and call the real binary from `mise which bun`. Confirm the unmutated baseline passes. Install dependencies in every worktree instead of symlinking `node_modules`, because bundles embed the dependency path.
 - Local runs skip scenarios requiring the second identity. Record those skips. Run the affected suites and smoke through `e2e.yml` on `main` against the merged SHA after an authorized merge. Keep the runner checkout on `main` so candidate code cannot receive the privileged e2e environment.
 - Before removing a stale `e2e-lock`, confirm ownership and that the harness and its dispatched workflows have stopped. Inspect cleanup diagnostics, restore only owned test state, and close owned leftover `e2e-*` PRs and branches. Never delete a ruleset by name alone or reset an unverified managed branch.
 
@@ -76,9 +83,13 @@ For workflow failures, also check these repository-specific constraints:
 
 - Read [docs/cutover.md](docs/cutover.md) before production configuration, ruleset, or caller changes. Snapshot affected settings and identify managed resources by ID and full configuration. Preserve unrelated protection and settings.
 - Roll out to one repository at a time. Finish its original CI jobs, approval, policy, protected merge, and applicable release checks before starting the next repository.
+- Before moving csm-ci-server pins, diff every called reusable workflow's `on.workflow_call` between the old and new SHA. Change the callers in the same PR. A required secret that exists only in the `csm-ci` environment needs an explicit mapping; `secrets: inherit` cannot satisfy it, and the label workflow then fails for every request.
+- Reconcile many repositories as one repo-settings run without a repository selector. Its matrix runs serially. Parallel per-repository dispatches exhausted the Server App's hourly API limit.
+- If the label workflow is down, the protected merge path is down too. Follow [docs/development/production-recovery.md](docs/development/production-recovery.md).
 - Treat client CI and server publication as separate gates. For releases, follow [docs/release.md](docs/release.md) and [docs/release-attestation.md](docs/release-attestation.md). Verify the actual asset set, digests, checksums, attestations, and supported installation path. For Terraform providers, also verify the public GPG signature, Registry discovery, and provider loading.
 - Use intended versions for production releases. Immutable tags and assets are permanent. A docs change alone does not establish runtime or release compatibility.
 - Declare completion only after checking the live result. Report remaining failures, skipped scenarios, and unverified behavior explicitly. Link detailed evidence instead of adding a development narrative to this file.
+- Bound every wait on GitHub to about five minutes. Before a longer wait, say what it waits on and roughly how long; past the bound, inspect the cause.
 
 ## Keep language and reviews consistent
 
