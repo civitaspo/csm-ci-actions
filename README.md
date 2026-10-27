@@ -224,7 +224,7 @@ The [release guide](docs/release.md) describes the five release stages, build co
 
 ## Development
 
-Follow [AGENTS.md](AGENTS.md) when contributing. The [specification](docs/first-release-plan.md) defines the supported behavior. Source entry points are `src/<side>-<name>/main.ts`; committed bundles are `dist/<side>-<name>.js`.
+Follow [AGENTS.md](AGENTS.md) when contributing. The [design](docs/design.md) and the operation pages in `docs/` define the supported behavior. Source entry points are `src/<side>-<name>/main.ts`; committed bundles are `dist/<side>-<name>.js`.
 
 The [repository CI structure](docs/ci.md) describes the event entries, reusable checks, and required `status-check`.
 

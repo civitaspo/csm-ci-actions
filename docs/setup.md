@@ -1,6 +1,6 @@
 # Setup
 
-This guide sets up one server repository and its client repositories. The names of Apps, environments, variables and secrets are fixed. They are listed in [first-release-plan.md](first-release-plan.md) under "Naming list". For a test setup, prefix the App names with `testing-`.
+This guide sets up one server repository and its client repositories. The names of Apps, environments, variables and secrets are fixed. They are listed in the [Naming list](design.md#naming-list). For a test setup, prefix the App names with `testing-`.
 
 ## 1. Create the repositories
 
@@ -86,11 +86,13 @@ repositories:
   - { name: your-account/*, ops: [approve, merge, policy-check] }
 ```
 
-The schema rejects unknown keys and puts the server bot in no trust list.
+Prefer an explicit list of repositories in production. A wildcard enrolls every repository the Server App is later installed on, and the next reconcile then requires `csm-ci/policy` on a repository without callers. The first matching entry wins, so keep the server's entry first when you use globs.
+
+The schema rejects unknown keys and rejects the Server or Approver bot in any trust list. Every operation reads `csm-ci.yaml` from the triggering server commit, `GITHUB_SHA`; merge readiness reloads it from the current default branch.
 
 ## Explicit secret contract migration
 
-These examples require a reviewed reusable workflow revision that implements the [explicit secret contract](first-release-plan.md#explicit-secret-contract-and-staged-migration). Upgrade each caller's pin and secret mapping together. Existing production callers on older pins still use inheritance until their staged rollout. Changing only their mapping can fail GitHub workflow validation.
+Each reusable workflow declares the secrets it consumes by name, and callers map each one explicitly; supported callers do not use `secrets: inherit`. Older reusable workflow revisions relied on inheritance, so upgrade a caller's pin and secret mapping together. Changing only the mapping can fail GitHub workflow validation.
 
 | Caller | Required mapping | Feature-specific mappings |
 |---|---|---|
@@ -101,7 +103,9 @@ These examples require a reviewed reusable workflow revision that implements the
 
 Map every name to the identical `secrets.NAME` expression. Each client repository stores only the Client App key at repository level. Strong credentials remain in the server's `csm-ci` environment with its default-branch-only deployment restriction. The calling job can evaluate an environment-only name to an empty string; the called job's environment supplies it. GitHub checks that required mappings exist before jobs start. It does not check whether their values are nonempty.
 
-Approval and manual activation fail at the pinned App-token action if the approver key is empty. Terraform provider publication requires both signing inputs before signing. Other release types need neither signing input. Managed-files-only runs and repairs without activation need no approver capability. Repo-settings never forwards provider signing credentials, and production callers never forward `csm-ci-e2e` credentials.
+Never pass credentials through workflow inputs, outputs, artifacts, logs or command arguments, and never add a PAT fallback.
+
+Approval and manual activation fail at the pinned App-token action if the approver key is empty, with `The 'private-key' input must be set to a non-empty string. If using a secret or variable, ensure it is available in this workflow context.` Terraform provider publication requires both signing inputs before signing and fails with `Input required and not supplied: gpg-private-key` or `Input required and not supplied: gpg-passphrase`. Other release types need neither signing input. Managed-files-only runs and repairs without activation need no approver capability. Repo-settings never forwards provider signing credentials, and production callers never forward `csm-ci-e2e` credentials.
 
 Verify the named contract, both nested repo-settings edges, and bootstrap activation in testing before rolling out compatible pins and callers to production one repository at a time. No credential placement or App permission change is needed.
 
@@ -142,7 +146,7 @@ The example enables approval. If Terraform provider publication is enabled, add 
       CSM_CI_TERRAFORM_PROVIDER_GPG_PASSPHRASE: ${{ secrets.CSM_CI_TERRAFORM_PROVIDER_GPG_PASSPHRASE }}
 ```
 
-Omit feature-specific names when their features are disabled. Keep the Server App key mapping in every label caller. The [isolated probe](handoff.md#explicit-secret-contract-probe) verified environment availability and required mapping validation. Full runtime verification remains a separate rollout gate.
+Omit feature-specific names when their features are disabled. Keep the Server App key mapping in every label caller. The [isolated probe](testing.md#github-behavior-relied-on) verified environment availability and required mapping validation. Full runtime verification remains a separate rollout gate.
 
 `.github/workflows/csm-ci-check.yml` validates `csm-ci.yaml` and lints the workflows on every change:
 
@@ -229,7 +233,7 @@ jobs:
       CSM_CI_CLIENT_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}
 ```
 
-The command is exactly `/merge`. The server waits for the latest approver review, current policies, and configured checks. After readiness succeeds, the workflow mints fresh read and notification tokens plus a contents and pull-requests write token, then revalidates and merges. If an accepted wait fails, the workflow mints a fresh notification token for the failure receipt.
+The command is exactly `/merge`. The server waits for the latest approver review, current policies, and configured checks. After readiness succeeds, the workflow mints fresh read and notification tokens plus a contents, pull-requests and workflows write token, then revalidates and merges. If an accepted wait fails, the workflow mints a fresh notification token for the failure receipt.
 
 For releases, enable the `release` op and choose its build type in `csm-ci.yaml`. Add a caller that requests a release when a `release/next` pull request is merged:
 

@@ -37,7 +37,7 @@ Configuration comes from the triggering server commit, `GITHUB_SHA`. Discovery i
 
 ## Standard client workflows, planned
 
-This runtime implements the contract for [issue #77](https://github.com/civitaspo/csm-ci-actions/issues/77). Deployment and an intended compatible stable release are still required. Do not add its new fields to configurations using older strict parser pins. It depends on the [explicit Secret contract](first-release-plan.md#explicit-secret-contract-and-staged-migration), not the separate additional-files implementation.
+This runtime implements the contract for [issue #77](https://github.com/civitaspo/csm-ci-actions/issues/77). Deployment and an intended compatible stable release are still required. Do not add its new fields to configurations using older strict parser pins. It depends on the [explicit Secret contract](setup.md#explicit-secret-contract-migration), not the separate additional-files implementation.
 
 ### Caller selection
 
@@ -125,7 +125,7 @@ Implement table-driven cases for every selection combination, prepare-only and p
 
 Cover producer collisions with writes and deletions, replacement of differing and header callers, equal-byte no-ops, header deletion at standard and non-standard paths, preservation of files without the first-line header, last-caller deletion, rejected pending histories, recovery, and an unchanged second sync. Assert rejection messages and mutation-check every changed rule. Update fixtures, generated bundles, repo-settings, release, setup, and cutover instructions together.
 
-Run all required local gates and independent specification review. Run affected repo-settings and release-pr feature suites, affected client suites, and smoke at the signed pushed implementation SHA. After an authorized merge, run affected CI suites and smoke through the runner checkout on `main`. Record exact runtime and Server configuration SHAs, generated PRs, run URLs, skips, and restoration in `docs/handoff.md`.
+Run all required local gates and independent specification review. Run affected repo-settings and release-pr feature suites, affected client suites, and smoke at the signed pushed implementation SHA. After an authorized merge, run affected CI suites and smoke through the runner checkout on `main`. Record exact runtime and Server configuration SHAs, generated PRs, run URLs, skips, and restoration in the PR.
 
 The latest stable release observed on 2026-10-27 is `v0.1.0`, whose prepare interface lacks the required root-version input and explicit Secret contracts. An intended compatible stable release is a deployment gate. Review its exact release PR and candidate under the normal checks and obtain publication authorization. Do not publish a throwaway release or choose an arbitrary version for this generator. The release need not contain the generator if the deployed runtime does, but its client interfaces must support every emitted caller and preserve deployed client behavior. Full-SHA tests cannot satisfy the published-stable acceptance case. Report that gap until an authorized intended release exists. The runtime does not authorize publication, credential, App permission, or production configuration changes. Live e2e remains required after the compatible stable release gate.
 
@@ -157,7 +157,7 @@ Source-only changes propose the same signed Server-owned PR updates as inline co
 
 ### Migrate deployed inline content
 
-Perform this procedure only after the runtime has passed the required local checks, independent review, repo-settings live tests, and smoke. Follow [cutover](cutover.md) for production PRs, protections, snapshots, and rollout. This specification does not authorize credential or App permission changes.
+Perform this procedure only after the runtime has passed the required local checks, independent review, repo-settings live tests, and smoke. This specification does not authorize credential or App permission changes.
 
 1. Inventory the inline destinations, exact bytes and caller pins, existing managed branches and open PRs, and current parser workflow revisions. Confirm ownership before any later branch recovery. Drain old configuration-writing runs and recheck queued runs so an older writer cannot race migration.
 2. In a reviewed Server PR, add ordinary source files with those exact inline bytes and omit `managed_files` while retaining repository settings. Keep source copies outside runnable Server workflows. This temporarily pauses additional-file management without changing target files, existing managed branches, or their PRs. An empty desired set makes no file write and does not inspect existing branch ownership. Unrelated managed PRs do not need merging.
@@ -167,7 +167,7 @@ Perform this procedure only after the runtime has passed the required local chec
 
 The final runtime rejects the removed `repo_settings.managed_files` key, including an empty map or both keys together. Its error directs the operator to commit the inline contents as Server files and replace the key with `repo_settings.additional_managed_files`. The migration does not retain two runtime formats.
 
-Implementation must update fixtures and harness configuration rewrites, generated bundles, setup examples, and cutover's empty-map instructions together. Table-driven and mutation tests cover changed rejection rules, exact-commit resolution, preserved bytes, source-only updates, identical retries, removal, and safe existing-PR reuse. Record live evidence and any existing verification gaps in `docs/handoff.md`; this specification has no live execution evidence of its own.
+Implementation must update fixtures and harness configuration rewrites, generated bundles, and setup examples together. Table-driven and mutation tests cover changed rejection rules, exact-commit resolution, preserved bytes, source-only updates, identical retries, removal, and safe existing-PR reuse. Record live evidence and any existing verification gaps in the PR; this specification has no live execution evidence of its own.
 
 ## Sponsorships
 
@@ -198,11 +198,11 @@ When the `settings` target is selected, the existing target-scoped administratio
 
 The inspection reports `changes.sponsorships`, and administration apply reports `sponsorshipsUpdated` separately from `settingsUpdated`. Managed-file inspection and apply retain their separate result and PR number. The setting result and funding-file PR result are separate. An enabled setting with a pending PR is not completed funding setup. The generated file reaches default only after normal review, CI, approval, and protected merging. An exact repeat reuses the PR and head; matching default-branch content needs no PR. GraphQL `fundingLinks` exposes resolved funding links, not a recipient-write API or proof that a pending PR has merged. See [GitHub's sponsor-button documentation](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/displaying-a-sponsor-button-in-your-repository) and [GraphQL repository reference](https://docs.github.com/en/graphql/reference/repos#updaterepositoryinput).
 
-Implementation must verify setting changes with the existing Server App and record testing-repository run URLs, generated PRs, repeat behavior, and merged default-branch content in `docs/handoff.md`. Permission failures remain errors. Only the operator changes App permissions or credentials. Production recipients must come from explicit reviewed Server configuration.
+Implementation must verify setting changes with the existing Server App and record testing-repository run URLs, generated PRs, repeat behavior, and merged default-branch content in the PR. Permission failures remain errors. Only the operator changes App permissions or credentials. Production recipients must come from explicit reviewed Server configuration.
 
 ## Rulesets and emergency stop
 
-The rulesets have fixed meanings from the [security specification](first-release-plan.md#s6-placement-of-secrets-and-permissions):
+The rulesets have fixed meanings from the [security design](design.md#s6-placement-of-secrets-and-permissions):
 
 | Name | Target | Rules |
 |---|---|---|
@@ -215,12 +215,24 @@ The server matches rulesets by name and `source_type: Repository`. Duplicate nam
 
 A scheduled run does not create `controlled-merges` or activate a disabled ruleset. Every repair that does not activate it, scheduled or dispatched, omits its enforcement, so a stop set during the run is kept. Set its enforcement to `disabled` for an emergency stop. Manual dispatch activates it, creating it when absent, only after these checks pass:
 
-- The default branch contains a merge caller for newly created issue comments, with an explicit same-name `CSM_CI_CLIENT_APP_PRIVATE_KEY` mapping and no job-level `if:`. The server also needs its label caller with a same-name `CSM_CI_SERVER_APP_PRIVATE_KEY` mapping. Any present approval or provider signing names must also map to their identical secret expressions. Optional feature presence is checked when that feature runs. Preflight rejects inheritance, missing required names, renamed names, literals, wrong secret references, and undeclared extra names. Whitespace inside the expression is allowed. See the [explicit secret contract](first-release-plan.md#explicit-secret-contract-and-staged-migration) and [setup examples](setup.md#explicit-secret-contract-migration). Caller triggers, unconditional jobs, referenced repository checks, and activation rejection messages are unchanged. Upgrade old caller pins and mappings together before selecting this preflight revision.
+- The default branch contains a merge caller for newly created issue comments, with an explicit same-name `CSM_CI_CLIENT_APP_PRIVATE_KEY` mapping and no job-level `if:`. The server also needs its label caller with a same-name `CSM_CI_SERVER_APP_PRIVATE_KEY` mapping. Any present approval or provider signing names must also map to their identical secret expressions. Optional feature presence is checked when that feature runs. Preflight rejects inheritance, missing required names, renamed names, literals, wrong secret references, and undeclared extra names. Whitespace inside the expression is allowed. See the [explicit secret contract](setup.md#explicit-secret-contract-migration). Caller triggers, unconditional jobs, referenced repository checks, and activation rejection messages are unchanged, including `caller workflow has not been distributed` and `caller workflow is not distributed on <repository>`. Upgrade old caller pins and mappings together before selecting this preflight revision.
 - The configured approver App can obtain a repository-scoped contents-write token, and its bot identity matches configuration.
 - No open pull request has auto-merge queued.
 - An existing `controlled-merges` ruleset has only the Server App's `pull_request` bypass.
 
 The checks run only when a dispatch would activate the ruleset. A dispatch for a repository whose `controlled-merges` is already active repairs drift without them. A failed preflight fails the run before administrative changes. App permission proof uses the official token action. The collaborator-permission endpoint does not reliably describe whether an App's approval counts.
+
+A reconcile takes over any existing ruleset that has one of these four names. Before enrolling a repository that already has protection, rename such rulesets (for example to `legacy-<name>`) and remove them once the csm-ci rulesets are active and a protected merge has passed.
+
+To change one field of a ruleset, send the full body, because only omitting `enforcement` is verified to keep the current value:
+
+```bash
+gh api repos/<owner>/<repo>/rulesets/<id> | jq '{name, target, enforcement, conditions, rules, bypass_actors} + {enforcement: "disabled"}' | gh api -X PUT repos/<owner>/<repo>/rulesets/<id> --input -
+```
+
+### Break glass
+
+When csm-ci itself cannot merge, stop repo-settings from touching the repository first, because a scheduled run re-activates `integrity`, `review-and-checks` and `release-tags`. Disable the workflow with `gh workflow disable csm-ci-repo-settings -R <owner>/<server-repo>`, or uninstall the Server App from the repository. Then disable the blocking rulesets with the command above. The same applies to the server repository itself. Save the affected settings first and restore protection afterward.
 
 ## Targets
 
@@ -238,7 +250,7 @@ Unselected targets are neither read nor written, and their tokens are not minted
 
 Use `targets: managed-files` to distribute the configured files before a target has the merge caller, policy checks, or the approver App needed for activation. This selection skips settings and ruleset inspection, activation preflight, approver capability, and administrative apply. It still validates the server and target context, inspects the managed branch, and opens or updates the managed-file pull request. Use the same selection to distribute generated callers without touching rulesets.
 
-After Apps and credentials are provisioned, dispatch `targets: managed-files`, review and merge the generated pull request through the repository's current process, verify the caller workflows and required checks on the default branch, then dispatch `targets: all`. The [first-release plan](first-release-plan.md#phase-6-repo-settings) defines the complete bootstrap order.
+After Apps and credentials are provisioned, dispatch `targets: managed-files`, review and merge the generated pull request through the repository's current process, verify the caller workflows and required checks on the default branch, then dispatch `targets: all`.
 
 ## Managed-file pull requests
 

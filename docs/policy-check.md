@@ -40,7 +40,7 @@ paths:
 
 The policy fails closed at 3,000 changed files. Exemptions apply only when the pull request author and every commit have the same user identity.
 
-Sensitive changes require a current approval by the configured approver App, pinned to the head, with an `approve:command` marker. The marker points to the source `/approve` comment, which must still exist, remain unedited, and have been written by a configured trusted approver. Ordinary GitHub UI approvals do not authorize sensitive paths. Protection of the server and actions repositories comes from explicit [repository policy overrides](first-release-plan.md#repository-policy-overrides-and-staged-migration); the runtime has no fixed repository rule.
+Sensitive changes require a current approval by the configured approver App, pinned to the head, with an `approve:command` marker. The marker points to the source `/approve` comment, which must still exist, remain unedited, and have been written by a configured trusted approver. Ordinary GitHub UI approvals do not authorize sensitive paths. Protection of the server and actions repositories comes from explicit [repository policy overrides](#effective-repository-policy-resolution); the runtime has no fixed repository rule.
 
 The `/approve` command first validates all trust and configured policies other than `sensitive-paths`, then writes its marked approval, and finally refreshes `csm-ci/policy`. This provides the approval evidence required by `sensitive-paths` without creating an approval cycle. Automatic approval and `/recheck` refresh the same check after their evaluation.
 
@@ -91,7 +91,7 @@ Cover every lifecycle row above, multiple pages of comments, and recovery of alr
 
 Test forged markers, wrong PRs, wrong author IDs or types, missing or inconsistent node identity, moved heads, changed PR state, out-of-order evaluations, and REST or GraphQL failures. Assert the rejection messages and mutation results. Mutation-check every new or changed rejection rule individually in bounded isolated copies.
 
-Run the affected policy-check and approve suites, then smoke, at the signed pushed implementation SHA. In the testing repositories, inspect a real first failure, identical retry, changed failure, and passing recovery. Verify rendered `<sub>` metadata, escaped content, minimization classifiers, and recovery of outdated reports with the existing Server App permissions. Record exact run URLs and any skipped or unverified cases in `docs/handoff.md`. Complete CI-only identity cases after an authorized merge, using the runner checkout on `main`.
+Run the affected policy-check and approve suites, then smoke, at the signed pushed implementation SHA. In the testing repositories, inspect a real first failure, identical retry, changed failure, and passing recovery. Verify rendered `<sub>` metadata, escaped content, minimization classifiers, and recovery of outdated reports with the existing Server App permissions. Record exact run URLs and any skipped or unverified cases in the PR. Complete CI-only identity cases after an authorized merge, using the runner checkout on `main`.
 
 ## Effective repository policy resolution
 

@@ -15,9 +15,9 @@ Use the existing agent and approved tools. This skill adds no Server operation, 
 
 ## Load the effective contract
 
-Read [approve](../../../docs/approve.md), [merge](../../../docs/merge.md), and the [security design](../../../docs/first-release-plan.md#security-design). Discover the target's actual caller pins, called workflow revision, deployed Server runtime, and Server configuration revision. Read the effective policies, immutable trust IDs, required check names and producer App IDs, and applicable repository overrides.
+Read [approve](../../../docs/approve.md), [merge](../../../docs/merge.md), and the [security design](../../../docs/design.md#security-design). Discover the target's actual caller pins, called workflow revision, deployed Server runtime, and Server configuration revision. Read the effective policies, immutable trust IDs, required check names and producer App IDs, and applicable repository overrides.
 
-Check deployed code as well as configuration. The [repository policy migration](../../../docs/first-release-plan.md#repository-policy-overrides-and-staged-migration) can describe support that is not yet deployed. Apply the deployed restrictions until its migration is verified. Do not turn historical repository-name restrictions into permanent skill policy. An assessment cannot grant an exemption.
+Check deployed code as well as configuration. Do not turn historical repository-name restrictions into permanent skill policy. An assessment cannot grant an exemption.
 
 ## Collect and assess each revision
 
@@ -33,7 +33,7 @@ Each assessment records the following facts and links. A title such as "patch up
 | Trust boundary | Changes to workflows, reusable callers, token permissions, environment access, checkout refs, credential persistence, scripts, dependency install hooks, caches, release signing, or publication. Explain where changed code executes and which credentials it can reach. |
 | Decision | Findings with source links, uncertainty, remaining tests, proposed disposition, and the account that would submit each command. Record operator authorization separately from the agent's assessment. |
 
-A dependency's valid signature establishes provenance, not that its code is safe. Passing CI does not establish privileged workflow safety. The [security design](../../../docs/first-release-plan.md#security-design) specifically notes that a writer can modify a required GitHub Actions workflow. Approval and server policy remain security gates.
+A dependency's valid signature establishes provenance, not that its code is safe. Passing CI does not establish privileged workflow safety. The [security design](../../../docs/design.md#security-design) specifically notes that a writer can modify a required GitHub Actions workflow. Approval and server policy remain security gates.
 
 Use explained dispositions rather than a numerical score. Use no numerical score unless a separately validated scoring method is available.
 
@@ -52,7 +52,7 @@ Prepare read-only evidence for the batch, then advance one PR at a time per repo
 3. Revalidate again before a covered `/merge`. A User must be in `trust.mergers`. A Bot must satisfy the effective Bot-request setting, `trust.bot_mergers`, and ownership of the PR and every effective commit identity. Use the existing Server path in [merge](../../../docs/merge.md), with no direct merge or protection bypass.
 4. Wait for the correlated Server run and receipt. Verify GitHub's merge commit and `merged_by` against the configured Server App identity. Then verify post-merge CI and applicable release results.
 5. Refresh the next PR after every merge or rebase. The previous merge changes its base even when its head stays unchanged. Wait for Renovate and current-head checks where needed, then reassess before the next action.
-6. Stop advancement on unexpected changes, a failed gate, an authorization gap, or missing evidence. Inspect current comments, reviews, receipts, and PR state before retrying a write whose response was lost. Use [handoff correlation and cleanup rules](../../../docs/handoff.md#7-using-the-e2e-and-cautions).
+6. Stop advancement on unexpected changes, a failed gate, an authorization gap, or missing evidence. Inspect current comments, reviews, receipts, and PR state before retrying a write whose response was lost. Use [testing correlation and cleanup rules](../../../docs/testing.md#writing-scenarios).
 
 The Server pins the head and validates the default base branch. It does not lease the reviewed base SHA or enforce the agent assessment. External base revalidation reduces stale assessments but cannot make the batch atomic.
 
