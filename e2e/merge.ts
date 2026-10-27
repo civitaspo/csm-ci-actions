@@ -164,6 +164,53 @@ export const merge: Scenario[] = [
     }),
   },
   {
+    id: "merge.concurrent-approve",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "/merge posted before /approve on the same pull request still merges",
+        classification: "positive",
+        checks: [
+          "approval-policy",
+          "head-consistency"
+        ],
+        steps: [
+          {
+            "operation": "merge",
+            "outcome": "permitted",
+            "expected": "A waiting /merge does not block /approve on the same pull request, and the merge completes"
+          }
+        ],
+        identity: OWNER_IDENTITY
+      }
+    },
+    name: "/merge posted before /approve on the same pull request still merges",
+    serial: true,
+    run: (ctx) => withServerConfig(ctx, (text) => {
+      const exemption = 'exempt: [{ id: 4525500, login: civitaspo }]';
+      assert(text.includes(exemption) && text.includes("deadline_minutes: 1"), "could not find the expected exemption and merge deadline");
+      return text.replace(exemption, "exempt: []").replace("deadline_minutes: 1", "deadline_minutes: 5");
+    }, async () => {
+      const since = new Date(Date.now() - 2_000);
+      const path = `.github/e2e-concurrent-${crypto.randomUUID()}.txt`;
+      const pr = await openPr(ctx, { intent: prCase(ctx, "fixture"), kind: "signed", filePath: path, fileContent: "concurrent approve and merge\n" });
+      try {
+        await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number } }, since, "success");
+        assert(!(await approverReviews(ctx, pr)).some((review) => review.state === "APPROVED" && review.commit_id === pr.head), "sensitive change unexpectedly received automatic approval");
+        const merge = await postComment(ctx, pr, "/merge");
+        const approval = await postComment(ctx, pr, "/approve");
+        const mergeInfo = fromComment(pr, merge);
+        await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: approval.id } }, approval.since, "success");
+        await expectOp(ctx, mergeInfo.match, mergeInfo.since, "success");
+        const { data: merged } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
+        assert(merged.merged && merged.head.sha === pr.head, `pull request #${pr.number} was not merged after concurrent /merge and /approve`);
+      } finally {
+        await closePr(ctx, pr);
+      }
+    }),
+  },
+  {
     id: "merge.workflow-change",
     cases: {
       fixture: {

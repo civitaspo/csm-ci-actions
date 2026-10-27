@@ -85,9 +85,10 @@ export function validateIntake(event: LabelEvent, env: { repositoryId: number; r
   return request;
 }
 
+// Keyed by kind as well, so a waiting /merge never blocks /approve or policy-check on the same pull request.
 export function concurrencyKey(request: Request): string {
   const n = "pull_number" in request.args ? request.args.pull_number : request.args.run_id;
-  return `${request.repository}#${n}`;
+  return `${request.kind}-${request.repository}#${n}`;
 }
 
 // Validated by round-tripping through parseLabel, so client and server share one rule set.
