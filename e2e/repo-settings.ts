@@ -429,6 +429,9 @@ export const repoSettings: Scenario[] = [
           assert(repeat.stepConclusions.get(name) === "skipped", `the repeated run did not skip ${name} (${repeat.url})`);
         }
 
+        const { data: managedContent } = await ctx.gh.rest.repos.getContent({ ...splitRepository(CLIENT), path: "e2e/repo-settings-managed.txt", ref: observedHead });
+        assert(!Array.isArray(managedContent) && managedContent.type === "file" && Buffer.from(managedContent.content, "base64").toString("utf8") === "managed by csm-ci e2e\n", "Server-source managed file bytes differ");
+
         await withServerConfig(ctx, (text) => {
           const changed = text.replace("    has_wiki: false\n    has_projects: false\n    allow_update_branch: true\n", "");
           assert(changed !== text, "could not omit feature settings for the unmanaged settings scenario");
@@ -471,8 +474,8 @@ export const repoSettings: Scenario[] = [
       assert(await managedBranchHead(ctx.gh, SERVER) === undefined, `ref ${BRANCH} already exists in ${SERVER}; refusing to reuse it`);
       assert((await openManagedPull(ctx.gh, SERVER)).length === 0, `an open managed-files pull request already exists in ${SERVER}`);
       await withServerConfig(ctx, (text) => {
-        const changed = text.replace('  managed_files:\n    e2e/repo-settings-managed.txt: "managed by csm-ci e2e\\n"', "  managed_files: {}");
-        assert(changed !== text, "could not set managed_files to empty for the server schedule scenario");
+        const changed = text.replace('  additional_managed_files:\n    e2e/repo-settings-managed.txt: managed-files/repo-settings-managed.txt', "  additional_managed_files: {}");
+        assert(changed !== text, "could not set additional_managed_files to empty for the server schedule scenario");
         return changed;
       }, async () => {
         await withCleanup(async () => {
@@ -487,7 +490,7 @@ export const repoSettings: Scenario[] = [
           }
           const controlledAfter = (await listManagedRulesets(ctx.gh, SERVER)).find((ruleset) => ruleset.name === "controlled-merges");
           assert(controlledAfter?.enforcement === originalControlled?.enforcement, "server schedule created or changed controlled-merges");
-          assert(await managedBranchHead(ctx.gh, SERVER) === undefined, `empty managed_files created ${BRANCH} in ${SERVER}`);
+          assert(await managedBranchHead(ctx.gh, SERVER) === undefined, `empty additional_managed_files created ${BRANCH} in ${SERVER}`);
           assert(await immutableReleaseState(ctx.gh, SERVER), `server schedule did not enable immutable releases in ${SERVER}`);
         }, [() => restoreRepository(ctx.gh, SERVER, serverSnapshot, serverCreatedRulesetIds)]);
       });

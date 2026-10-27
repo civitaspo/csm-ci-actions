@@ -5,18 +5,18 @@ import { applyRepoSettings, inspectRepoSettings, repoSettingsRuleSets } from "./
 import { CONFIG_YAML, config, fakeFetch } from "./testing.ts";
 
 function configured(sponsorships: unknown, files = {}) {
-  return parseConfig(`${CONFIG_YAML}\nrepo_settings: ${JSON.stringify({ sponsorships, managed_files: files })}\n`);
+  return parseConfig(`${CONFIG_YAML}\nrepo_settings: ${JSON.stringify({ sponsorships, additional_managed_files: files })}\n`);
 }
 
 describe("sponsorship configuration and generated funding", () => {
   test.each([true, false])("generates ordered normalized recipients with enabled=%s", (enabled) => {
-    const cfg = configured({ enabled, github: ["One-User", "TWO", "3", "a".repeat(39)] }, { "README.md": "keep" });
+    const cfg = configured({ enabled, github: ["One-User", "TWO", "3", "a".repeat(39)] }, { "README.md": "source" });
     expect(cfg.repo_settings?.sponsorships).toEqual({ enabled, github: ["one-user", "two", "3", "a".repeat(39)] });
-    expect(repoSettingsManagedFiles(cfg.repo_settings)).toEqual({ "README.md": "keep", ".github/FUNDING.yml": `github: ["one-user", "two", "3", "${"a".repeat(39)}"]\n` });
+    expect(repoSettingsManagedFiles(cfg.repo_settings, { "README.md": "keep" })).toEqual({ "README.md": "keep", ".github/FUNDING.yml": `github: ["one-user", "two", "3", "${"a".repeat(39)}"]\n` });
   });
   test.each([undefined, { enabled: true }, { enabled: false }])("omitted recipients preserve literal funding ownership: %j", (sponsorships) => {
-    const cfg = configured(sponsorships, { ".github/FUNDING.yml": "custom: existing\n" });
-    expect(repoSettingsManagedFiles(cfg.repo_settings)).toEqual({ ".github/FUNDING.yml": "custom: existing\n" });
+    const cfg = configured(sponsorships, { ".github/FUNDING.yml": "source" });
+    expect(repoSettingsManagedFiles(cfg.repo_settings, { ".github/FUNDING.yml": "custom: existing\n" })).toEqual({ ".github/FUNDING.yml": "custom: existing\n" });
     expect(repoSettingsManagedFiles(configured(sponsorships).repo_settings)).toEqual({});
   });
   test("an omitted block generates no files", () => expect(repoSettingsManagedFiles(undefined)).toEqual({}));
@@ -38,21 +38,16 @@ describe("sponsorship configuration and generated funding", () => {
     expect(() => configured(value)).toThrow(String(message));
   });
   test.each([true, false])("rejects a funding producer collision even for identical bytes, enabled=%s", (enabled) => {
-    expect(() => configured({ enabled, github: ["user"] }, { ".github/FUNDING.yml": 'github: ["user"]\n' })).toThrow("destination is reserved by sponsorships.github");
+    expect(() => configured({ enabled, github: ["user"] }, { ".github/FUNDING.yml": "source" })).toThrow("destination is reserved by sponsorships.github");
   });
   test.each([
-    ["count", Object.fromEntries(Array.from({ length: 512 }, (_, index) => [`file-${index}`, ""])), "must contain at most 512 files"],
-    ["bytes", { a: "x".repeat(8 * 1024 * 1024), b: "x".repeat(2 * 1024 * 1024) }, "total file content must be at most 10 MiB"],
+    ["count", Object.fromEntries(Array.from({ length: 512 }, (_, index) => [`file-${index}`, "source"])), "must contain at most 512 files"],
     ["parent", { ".github": "file" }, "file paths must not contain a file as a directory prefix"],
     ["child", { ".github/FUNDING.yml/child": "file" }, "file paths must not contain a file as a directory prefix"],
   ])("includes generated funding in combined %s validation", (_name, files, message) => {
     expect(() => configured({ enabled: false, github: ["user"] }, files)).toThrow(message);
   });
-  test("accepts the inclusive combined count and bytes limit", () => {
-    const funding = 'github: ["user"]\n';
-    const files = { a: "x".repeat(8 * 1024 * 1024), b: "x".repeat(2 * 1024 * 1024 - funding.length), ...Object.fromEntries(Array.from({ length: 509 }, (_, index) => [`file-${index}`, ""])) };
-    expect(Object.keys(repoSettingsManagedFiles(configured({ enabled: false, github: ["user"] }, files).repo_settings))).toHaveLength(512);
-  });
+
 });
 
 function administrativeFetch(graphql: typeof globalThis.fetch) {

@@ -47,5 +47,5 @@ repo_settings:
     has_wiki: false
     has_projects: false
     allow_update_branch: true
-  managed_files:
-    e2e/repo-settings-managed.txt: "managed by csm-ci e2e\n"
+  additional_managed_files:
+    e2e/repo-settings-managed.txt: managed-files/repo-settings-managed.txt

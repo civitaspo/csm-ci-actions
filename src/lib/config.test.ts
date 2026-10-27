@@ -12,7 +12,7 @@ describe("parseConfig", () => {
 
   test("accepts global repository settings and defaults managed files", () => {
     const parsed = parseConfig(`${CONFIG_YAML}\nrepo_settings: { settings: { delete_branch_on_merge: true, allow_auto_merge: true, allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false } }\n`);
-    expect(parsed.repo_settings?.managed_files).toEqual({});
+    expect(parsed.repo_settings?.additional_managed_files).toEqual({});
     expect(parsed.repo_settings?.settings?.allow_squash_merge).toBe(true);
   });
 
@@ -22,17 +22,15 @@ describe("parseConfig", () => {
     ["repo settings cannot enable merge methods outside squash", `${CONFIG_YAML}\nrepo_settings: { settings: { delete_branch_on_merge: true, allow_auto_merge: true, allow_squash_merge: true, allow_merge_commit: true, allow_rebase_merge: false } }\n`, /Invalid input/],
     ["repo settings cannot disable squash merge", `${CONFIG_YAML}\nrepo_settings: { settings: { allow_squash_merge: false } }\n`, /Invalid input/],
     ["repo settings cannot enable rebase merge", `${CONFIG_YAML}\nrepo_settings: { settings: { allow_rebase_merge: true } }\n`, /Invalid input/],
-    ["managed files reject unsafe paths", `${CONFIG_YAML}\nrepo_settings: { managed_files: { '../README.md': nope } }\n`, /safe literal relative file path/],
-    ["managed files reject globs", `${CONFIG_YAML}\nrepo_settings: { managed_files: { 'src/*.ts': nope } }\n`, /safe literal relative file path/],
-    ["managed files reject prefix collisions", `${CONFIG_YAML}\nrepo_settings: { managed_files: { 'a': one, 'a/b': two } }\n`, /file paths must not contain a file as a directory prefix/],
+    ["managed files reject unsafe paths", `${CONFIG_YAML}\nrepo_settings: { additional_managed_files: { '../README.md': nope } }\n`, /safe literal relative file path/],
+    ["managed files reject globs", `${CONFIG_YAML}\nrepo_settings: { additional_managed_files: { 'src/*.ts': nope } }\n`, /safe literal relative file path/],
+    ["managed files reject prefix collisions", `${CONFIG_YAML}\nrepo_settings: { additional_managed_files: { 'a': one, 'a/b': two } }\n`, /file paths must not contain a file as a directory prefix/],
     ...["", "C:/absolute", ".git/config", "src\\\\file", "/absolute", "./relative", "src//file", "bad\\u0001path"].map((path) => [
       `managed file path rejects ${JSON.stringify(path)}`,
-      `${CONFIG_YAML}\nrepo_settings: { managed_files: { ${JSON.stringify(path)}: value } }\n`,
+      `${CONFIG_YAML}\nrepo_settings: { additional_managed_files: { ${JSON.stringify(path)}: value } }\n`,
       /safe literal relative file path/,
     ] as [string, string, RegExp]),
-    ["managed files reject more than 512 files", `${CONFIG_YAML}\nrepo_settings: { managed_files: ${JSON.stringify(Object.fromEntries(Array.from({ length: 513 }, (_, index) => [`file-${index}`, ""])))} }\n`, /must contain at most 512 files/],
-    ["managed files reject a file over 8 MiB", `${CONFIG_YAML}\nrepo_settings: { managed_files: { file: ${JSON.stringify("x".repeat(8 * 1024 * 1024 + 1))} } }\n`, /file must be at most 8 MiB/],
-    ["managed files reject aggregate content over 10 MiB", `${CONFIG_YAML}\nrepo_settings: { managed_files: { a: ${JSON.stringify("x".repeat(5 * 1024 * 1024 + 1))}, b: ${JSON.stringify("y".repeat(5 * 1024 * 1024))} } }\n`, /total file content must be at most 10 MiB/],
+    ["managed files reject more than 512 files", `${CONFIG_YAML}\nrepo_settings: { additional_managed_files: ${JSON.stringify(Object.fromEntries(Array.from({ length: 513 }, (_, index) => [`file-${index}`, "source"])))} }\n`, /must contain at most 512 files/],
     ["unknown policy type", CONFIG_YAML.replace("signed-commits", "no-such-policy"), /policies/],
     ["unknown sensitive-paths key", CONFIG_YAML.replace("type: signed-commits", "type: sensitive-paths, paths: [Makefile], extra: true"), /extra/],
     ["server bot as trusted committer", CONFIG_YAML.replace("committers: [{ id: 10, login: alice }", "committers: [{ id: 3000, login: alice }"), /must not be in a trust list/],
