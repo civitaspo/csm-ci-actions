@@ -19,8 +19,9 @@ const LOCK = "e2e-lock";
 const LOCK_TTL_MS = 60 * 60_000;
 const LOCK_POLL_MS = 15_000;
 const LOCK_HEARTBEAT_MS = 5 * 60_000;
-// About 30 scenarios opening pull requests within seconds left some of them without workflow runs.
 const MAX_CONCURRENT_SCENARIOS = 20;
+// About 20 pull requests opened within two seconds left the last ones without workflow runs.
+const SCENARIO_START_SPACING_MS = 2_000;
 
 // The label name is unique in a repository, so creating it is an atomic test-and-set.
 async function acquireLock(gh: GitHub, holder: string): Promise<void> {
@@ -129,8 +130,14 @@ async function main(): Promise<void> {
     };
     const queue = scenarios.filter(({ scenario }) => !scenario.serial);
     const results: Awaited<ReturnType<typeof runScenario>>[] = [];
+    let nextStart = Date.now();
     await Promise.all(Array.from({ length: MAX_CONCURRENT_SCENARIOS }, async () => {
-      for (let item = queue.shift(); item; item = queue.shift()) results.push(await runScenario(item));
+      for (let item = queue.shift(); item; item = queue.shift()) {
+        const startAt = Math.max(nextStart, Date.now());
+        nextStart = startAt + SCENARIO_START_SPACING_MS;
+        await sleep(startAt - Date.now());
+        results.push(await runScenario(item));
+      }
     }));
     for (const item of scenarios.filter(({ scenario }) => scenario.serial)) results.push(await runScenario(item));
     console.log("scenario durations:");
