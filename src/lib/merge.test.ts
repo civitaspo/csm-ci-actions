@@ -53,7 +53,7 @@ function context(s: Setup = {}) {
   cfg.merge.deadline_minutes = 1;
   if (s.policies) cfg.policies = s.policies;
   const notify = fakeFetch([
-    { method: "POST", path: `${P}/issues/comments/9/reactions`, status: 201, body: { id: 3 } },
+    { method: "POST", path: `${path}/issues/comments/9/reactions`, status: 201, body: { id: 3 } },
     { method: "GET", path: `${path}/issues/12/comments`, body: [] },
     { method: "POST", path: `${path}/issues/12/comments`, status: s.receiptStatus ?? 201, body: { id: 4 } },
   ]);
@@ -194,6 +194,14 @@ describe("waitForMerge", () => {
     ctx.config.repositories = [{ name: repository, ops: ["merge"], merge: { allow_bot_requests: false }, sensitive_paths: { paths: ["**"], exempt: [] } }];
     await expect(waitForMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow(`bot merge requests are disabled for repository ${repository}`);
     expect(notify.calls).toEqual([]);
+  });
+
+  test.each(["owner/server", "civitaspo/csm-ci-actions"])("%s with explicit Bot permission follows the configured trust", async (repository) => {
+    const bot = { id: 20, login: "renovate[bot]", type: "Bot" };
+    const { ctx } = context({ repository, pull: pull({ user: bot }, repository), comment: comment({ user: bot }, repository), commits: [{ sha: HEAD, commit: { verification: { verified: true } }, author: bot, committer: bot }] });
+    ctx.config.owners.push("civitaspo");
+    ctx.config.repositories = [{ name: repository, ops: ["merge"], merge: { allow_bot_requests: true } }];
+    expect(await waitForMerge(ctx, { pull_number: 12, comment_id: 9 })).toEqual({ head: HEAD });
   });
 
   test("the server repository without a Bot restriction follows the configured trust", async () => {

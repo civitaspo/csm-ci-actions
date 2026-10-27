@@ -52,6 +52,23 @@ describe("updatePolicyCheck", () => {
     expect(results.find((result) => result.type === "sensitive-paths")).toEqual({ type: "sensitive-paths", ok: false, problems: ["sensitive paths need a trusted approver's /approve: ordinary.txt"] });
   });
 
+  test.each(["owner/server", "civitaspo/csm-ci-actions"])("an explicit exemption applies to %s", async (repository) => {
+    const cfg = config();
+    cfg.owners.push("civitaspo");
+    cfg.policies = [{ type: "sensitive-paths", paths: ["**"], exempt: [] }];
+    cfg.repositories = [{ name: repository, ops: ["policy-check"], sensitive_paths: { exempt: [{ id: 10, login: "alice" }] } }];
+    const results = await evaluatePullPolicies({ server: github("token", protectionFetch(repository)), config: cfg, repository, pull });
+    expect(results.find((result) => result.type === "sensitive-paths")).toEqual({ type: "sensitive-paths", ok: true, problems: [] });
+  });
+
+  test.each(["owner/server", "civitaspo/csm-ci-actions"])("%s without a global policy or override has no sensitive-paths result", async (repository) => {
+    const cfg = config();
+    cfg.owners.push("civitaspo");
+    cfg.policies = [];
+    cfg.repositories = [{ name: repository, ops: ["policy-check"] }];
+    expect(effectivePolicies(cfg, repository).some((policy) => policy.type === "sensitive-paths")).toBe(false);
+  });
+
   test.each([
     ["owner/server", "no override", undefined],
     ["civitaspo/csm-ci-actions", "explicit empty paths", { paths: [], exempt: [] }],

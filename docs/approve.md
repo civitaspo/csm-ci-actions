@@ -100,4 +100,4 @@ The runtime implements the [repository policy contract](first-release-plan.md#re
 
 An exemption requires the PR author and every commit to have the same effective identity. It does not bypass signature verification or trusted-committer checks. `/approve` retains its trusted human command and current-head evidence requirements. Permission for a Bot to request a merge remains a separate repository setting.
 
-During this stage, the configured server repository and `civitaspo/csm-ci-actions` still treat every path as sensitive and ignore exemptions, even when a repository override requests relaxation.
+The server and actions repositories get all-path sensitivity without exemptions only from their explicit `sensitive_paths` entries. Removing or relaxing those entries relaxes them.
