@@ -402,7 +402,8 @@ export const merge: Scenario[] = [
       const requestInfo = fromComment(pr, comment);
       await awaitServerWait(ctx, comment.id);
       await pushSignedCommit(ctx, pr, pr.head);
-      await expectOp(ctx, requestInfo.match, requestInfo.since, "failure", /head changed|newer than comment/);
+      // A short poll can see the new commit in the commit list before the pull request head moves.
+      await expectOp(ctx, requestInfo.match, requestInfo.since, "failure", /head changed|newer than comment|is not the pinned head/);
       await noMerge(ctx, pr);
     }),
   },
