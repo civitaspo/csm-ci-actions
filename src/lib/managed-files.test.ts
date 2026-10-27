@@ -253,13 +253,17 @@ describe("inspectManagedFiles", () => {
     expect(matched.status).toBe("already-applied");
   });
 
-  test("resets only the managed branch to the observed default SHA before a changed-content commit", async () => {
+  test("rebuilds the managed branch through a temporary branch and moves it with a lease on the observed head", async () => {
     const read = githubFixture({ targetContent: "stale\n" });
-    let branchSha = defaultSha;
+    const appliedSha = "c".repeat(40);
+    const commitBranches: unknown[] = [];
+    const deleted: unknown[] = [];
+    let branchSha = targetSha;
     const writeClient = {
       rest: {
         git: {
           getRef: async ({ ref }: { ref: string }) => ({ data: { object: { sha: ref === "heads/main" ? defaultSha : branchSha } } }),
+          deleteRef: async (args: unknown) => { deleted.push(args); return { data: {} }; },
         },
         pulls: {
           list: async () => ({ data: [] }),
@@ -267,20 +271,23 @@ describe("inspectManagedFiles", () => {
         },
       },
       paginate: async () => [],
-      graphql: async () => { branchSha = targetSha; return { createCommitOnBranch: { commit: { oid: targetSha } } }; },
+      graphql: async (_query: string, variables: { input: { branch: { branchName: string }; expectedHeadOid: string } }) => {
+        commitBranches.push({ branch: variables.input.branch.branchName, expectedHeadOid: variables.input.expectedHeadOid });
+        return { createCommitOnBranch: { commit: { oid: appliedSha } } };
+      },
     } as unknown as GitHub;
-    const reset = spyOn(gitRef, "resetBranchWithLease").mockImplementation(async () => undefined);
+    const reset = spyOn(gitRef, "resetBranchWithLease").mockImplementation(async ({ targetBranch, sourceSha }) => { if (targetBranch === "csm-ci/repo-settings") branchSha = sourceSha; });
     try {
       const result = await applyManagedFiles(read, { ...input, writeToken: "test-token", writeClient });
-      expect(result).toEqual({ status: "applied", commit: targetSha, pullRequest: 74 });
-      expect(reset).toHaveBeenCalledWith({
-        remote: "https://github.com/owner/repo.git",
-        sourceBranch: "main",
-        targetBranch: "csm-ci/repo-settings",
-        sourceSha: defaultSha,
-        expectedTargetSha: targetSha,
-        token: "test-token",
-      });
+      expect(result).toEqual({ status: "applied", commit: appliedSha, pullRequest: 74 });
+      const temporaryBranch = reset.mock.calls[0]?.[0].targetBranch ?? "";
+      expect(temporaryBranch).toMatch(/^csm-ci\/tmp\/managed-[a-f0-9]{16}$/u);
+      expect(reset.mock.calls.map(([call]) => call)).toEqual([
+        { remote: "https://github.com/owner/repo.git", sourceBranch: "main", targetBranch: temporaryBranch, sourceSha: defaultSha, expectedTargetSha: null, token: "test-token" },
+        { remote: "https://github.com/owner/repo.git", sourceBranch: temporaryBranch, targetBranch: "csm-ci/repo-settings", sourceSha: appliedSha, expectedTargetSha: targetSha, token: "test-token" },
+      ]);
+      expect(commitBranches).toEqual([{ branch: temporaryBranch, expectedHeadOid: defaultSha }]);
+      expect(deleted).toEqual([{ owner: "owner", repo: "repo", ref: `heads/${temporaryBranch}` }]);
     } finally {
       reset.mockRestore();
     }
@@ -312,7 +319,8 @@ describe("inspectManagedFiles", () => {
     try {
       const result = await applyManagedFiles(read, { ...input, writeToken: "unused", writeClient });
       expect(result).toEqual({ status: "applied", commit: targetSha, pullRequest: 73 });
-      expect(reset).toHaveBeenCalledWith(expect.objectContaining({ sourceSha: defaultSha, expectedTargetSha: targetSha }));
+      expect(reset).toHaveBeenCalledWith(expect.objectContaining({ sourceBranch: "main", sourceSha: defaultSha, expectedTargetSha: null }));
+      expect(reset).toHaveBeenCalledWith(expect.objectContaining({ targetBranch: "csm-ci/repo-settings", sourceSha: targetSha, expectedTargetSha: targetSha }));
     } finally {
       reset.mockRestore();
     }
@@ -502,7 +510,7 @@ describe("inspectManagedFiles", () => {
     }
     expect(mutations).toHaveLength(1);
     expect(mutations[0]?.variables.input).toMatchObject({
-      branch: { repositoryNameWithOwner: "owner/repo", branchName: "csm-ci/repo-settings" },
+      branch: { repositoryNameWithOwner: "owner/repo", branchName: "targetMissing" in options ? "csm-ci/repo-settings" : expect.stringMatching(/^csm-ci\/tmp\/managed-/u) },
       expectedHeadOid: defaultSha,
       message: { headline: "chore(repo-settings): sync managed files" },
     });

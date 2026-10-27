@@ -1,3 +1,24 @@
+# Changelog
+
+All notable changes to this project are documented in this file.
+
+## [0.3.1] - 2026-10-27
+
+### 🐛 Bug Fixes
+
+- *(server)* Let /approve run while /merge waits on the same pull request
+- *(securefix)* Keep route and managed-file pull requests open when their branch is rebuilt
+- *(merge)* End the squash commit title with the pull request number
+
+### 📚 Documentation
+
+- *(handoff)* Record stacked verification, v0.2.0 and the caller rollout
+
+### ⚙️ Miscellaneous Tasks
+
+- *(repo-settings)* Sync managed files
+- *(changelog)* Define the CHANGELOG format with cliff.toml
+
 ## [0.3.0] - 2026-10-27
 
 ### 🚀 Features
@@ -15,6 +36,7 @@
 ### 🚜 Refactor
 
 - *(repo-settings)* Select reconciliation targets explicitly instead of modes
+
 ## [0.2.0] - 2026-10-27
 
 ### 🚀 Features
@@ -45,6 +67,11 @@
 - *(notifications)* Restore context and run links in approval and merge comments
 - *(repo-settings)* Use a Conventional Commit title for managed-file pull requests
 
+### 🚜 Refactor
+
+- *(ci)* Aggregate checks through reusable workflows
+- *(workflows)* Declare explicit secret contracts
+
 ### 📚 Documentation
 
 - *(plan)* Preserve dbt package release versions
@@ -66,11 +93,6 @@
 - *(repo-settings)* Specify generated client workflow ownership
 - *(plan)* Define the repository-owned git-cliff installer
 
-### 🚜 Refactor
-
-- *(ci)* Aggregate checks through reusable workflows
-- *(workflows)* Declare explicit secret contracts
-
 ### 🧪 Testing
 
 - *(merge)* Exercise native bot comment requests
@@ -79,56 +101,57 @@
 
 - *(merge)* Update the actions caller and Renovate requests
 - *(renovate)* Disable Dependency Dashboard
-- *(release)* V0.2.0
 
-### 💼 Other
+### 🛡️ Security
 
 - *(release-pr)* Install git-cliff from a pinned release digest
+
 ## [0.1.0] - 2026-10-25
 
 ### 🚀 Features
 
-- *(policy-check)* Enforce head-bound sensitive path policies (#8)
-- *(merge)* Squash approved pull requests with current policy checks (#9)
-- *(securefix)* Apply bounded generated changes through server validation (#11)
-- *(release)* Publish immutable releases with verified attestations (#14)
-- *(release-pr)* Prepare releases through securefix (#21)
-- *(repo-settings)* Reconcile repository settings and managed files (#23)
-- *(securefix)* Make the client a single action (#29)
+- *(policy-check)* Enforce head-bound sensitive path policies ([#8](https://github.com/civitaspo/csm-ci-actions/pull/8))
+- *(merge)* Squash approved pull requests with current policy checks ([#9](https://github.com/civitaspo/csm-ci-actions/pull/9))
+- *(securefix)* Apply bounded generated changes through server validation ([#11](https://github.com/civitaspo/csm-ci-actions/pull/11))
+- *(release)* Publish immutable releases with verified attestations ([#14](https://github.com/civitaspo/csm-ci-actions/pull/14))
+- *(release-pr)* Prepare releases through securefix ([#21](https://github.com/civitaspo/csm-ci-actions/pull/21))
+- *(repo-settings)* Reconcile repository settings and managed files ([#23](https://github.com/civitaspo/csm-ci-actions/pull/23))
+- *(securefix)* Make the client a single action ([#29](https://github.com/civitaspo/csm-ci-actions/pull/29))
 - *(ci)* Prepare actions releases through csm-ci
 
 ### 🐛 Bug Fixes
 
-- *(github)* Bound request timeouts and retry safe reads (#6)
-- *(e2e)* Accept shared loader rejection for edited merge comments (#10)
-- *(release)* Tolerate tag visibility delays (#17)
-- *(repo-settings)* Address the final whole-diff review (#26)
-- *(repo-settings)* Enforce bootstrap boundaries and history proofs (#32)
-- *(repo-settings)* Allow the configured actions repository as a client (#35)
-
-### 📚 Documentation
-
-- *(handoff)* Point at the rebuilt history (#1)
-- *(handoff)* Add e2e parallelism and API timeouts as next work (#5)
-- *(release)* Record verified attestation contract (#13)
-- *(plan)* Record Phase 6 repo-settings decisions (#22)
-- *(cutover)* Add the production cutover runbook (#24)
-- *(handoff)* Add the final report through Phase 7 (#25)
-- *(plan)* Make the securefix client a single action (#27)
-- *(plan)* Lay out actions by side and split client actions by use (#28)
-- *(plan)* Define managed-files-only bootstrap mode (#31)
-- Document client and server action usage (#33)
-- *(plan)* Include the actions repository in production management (#34)
+- *(github)* Bound request timeouts and retry safe reads ([#6](https://github.com/civitaspo/csm-ci-actions/pull/6))
+- *(e2e)* Accept shared loader rejection for edited merge comments ([#10](https://github.com/civitaspo/csm-ci-actions/pull/10))
+- *(release)* Tolerate tag visibility delays ([#17](https://github.com/civitaspo/csm-ci-actions/pull/17))
+- *(repo-settings)* Address the final whole-diff review ([#26](https://github.com/civitaspo/csm-ci-actions/pull/26))
+- *(repo-settings)* Enforce bootstrap boundaries and history proofs ([#32](https://github.com/civitaspo/csm-ci-actions/pull/32))
+- *(repo-settings)* Allow the configured actions repository as a client ([#35](https://github.com/civitaspo/csm-ci-actions/pull/35))
 
 ### 🚜 Refactor
 
-- *(actions)* Align public interfaces with planned layout (#30)
+- *(actions)* Align public interfaces with planned layout ([#30](https://github.com/civitaspo/csm-ci-actions/pull/30))
+
+### 📚 Documentation
+
+- *(handoff)* Point at the rebuilt history ([#1](https://github.com/civitaspo/csm-ci-actions/pull/1))
+- *(handoff)* Add e2e parallelism and API timeouts as next work ([#5](https://github.com/civitaspo/csm-ci-actions/pull/5))
+- *(release)* Record verified attestation contract ([#13](https://github.com/civitaspo/csm-ci-actions/pull/13))
+- *(plan)* Record Phase 6 repo-settings decisions ([#22](https://github.com/civitaspo/csm-ci-actions/pull/22))
+- *(cutover)* Add the production cutover runbook ([#24](https://github.com/civitaspo/csm-ci-actions/pull/24))
+- *(handoff)* Add the final report through Phase 7 ([#25](https://github.com/civitaspo/csm-ci-actions/pull/25))
+- *(plan)* Make the securefix client a single action ([#27](https://github.com/civitaspo/csm-ci-actions/pull/27))
+- *(plan)* Lay out actions by side and split client actions by use ([#28](https://github.com/civitaspo/csm-ci-actions/pull/28))
+- *(plan)* Define managed-files-only bootstrap mode ([#31](https://github.com/civitaspo/csm-ci-actions/pull/31))
+- Document client and server action usage ([#33](https://github.com/civitaspo/csm-ci-actions/pull/33))
+- *(plan)* Include the actions repository in production management ([#34](https://github.com/civitaspo/csm-ci-actions/pull/34))
 
 ### 🧪 Testing
 
-- *(e2e)* Run correlated feature scenarios in parallel (#7)
+- *(e2e)* Run correlated feature scenarios in parallel ([#7](https://github.com/civitaspo/csm-ci-actions/pull/7))
 
 ### ⚙️ Miscellaneous Tasks
 
-- *(ci)* Bootstrap managed client callers (#36)
-- *(release)* V0.1.0
+- *(ci)* Bootstrap managed client callers ([#36](https://github.com/civitaspo/csm-ci-actions/pull/36))
+
+<!-- generated by git-cliff -->

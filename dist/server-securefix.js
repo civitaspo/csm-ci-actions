@@ -37226,6 +37226,25 @@ esac
   }
 }
 
+// src/lib/branch-rebuild.ts
+import { randomBytes } from "node:crypto";
+var TEMPORARY_BRANCH_PREFIX = "csm-ci/tmp/";
+async function rebuildBranchWithLease(input) {
+  const temporaryBranch = `${TEMPORARY_BRANCH_PREFIX}${input.temporaryName}-${randomBytes(8).toString("hex")}`;
+  try {
+    await resetBranchWithLease({ remote: input.remote, sourceBranch: input.sourceBranch, targetBranch: temporaryBranch, sourceSha: input.sourceSha, expectedTargetSha: null, token: input.token });
+    const commit = await input.commit(temporaryBranch);
+    await resetBranchWithLease({ remote: input.remote, sourceBranch: temporaryBranch, targetBranch: input.targetBranch, sourceSha: commit, expectedTargetSha: input.expectedTargetSha, token: input.token });
+    return commit;
+  } finally {
+    try {
+      await input.deleteBranch(temporaryBranch);
+    } catch (error) {
+      console.warn(`could not delete temporary branch ${temporaryBranch}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+}
+
 // src/lib/server-owned-history.ts
 async function isServerMadeCommit(gh, input) {
   const { data: commit } = await gh.rest.repos.getCommit({ owner: input.owner, repo: input.repo, ref: input.sha });
@@ -37371,12 +37390,25 @@ async function applySecurefix(gh, config, repository, runId, artifactPath, write
     return { status: "already-applied", commit, pullRequest };
   }
   const expectedHead = context.run.head_sha;
-  if (context.route)
-    await resetRouteBranch(context, context.route, expectedHead, inspection.routeTargetSha ?? null, writeToken);
+  const rebuild = context.route !== null && inspection.routeTargetSha !== expectedHead;
   let commit;
   try {
-    commit = await createCommit(gh, context, branch, expectedHead, manifest.message, changes);
+    commit = rebuild ? await rebuildBranchWithLease({
+      remote: `https://github.com/${context.repository}.git`,
+      sourceBranch: context.run.head_branch,
+      sourceSha: expectedHead,
+      targetBranch: branch,
+      expectedTargetSha: inspection.routeTargetSha ?? null,
+      token: writeToken,
+      temporaryName: "route",
+      commit: (temporaryBranch) => createCommit(gh, context, temporaryBranch, expectedHead, manifest.message, changes),
+      deleteBranch: async (temporaryBranch) => {
+        await gh.rest.git.deleteRef({ owner: context.owner, repo: context.repo, ref: `heads/${temporaryBranch}` });
+      }
+    }) : await createCommit(gh, context, branch, expectedHead, manifest.message, changes);
   } catch (error) {
+    if (error instanceof GitRefChanged)
+      throw new Rejection("securefix route branch or source moved before the conditional reset");
     const applied = await isAlreadyApplied(gh, config, context, changes);
     if (applied) {
       const commit = await branchHead(gh, context, branch);
@@ -37386,7 +37418,7 @@ async function applySecurefix(gh, config, repository, runId, artifactPath, write
       }
       return { status: "already-applied", commit };
     }
-    if (isCompareAndSwapFailure(error) || await branchHead(gh, context, branch) !== expectedHead)
+    if (isCompareAndSwapFailure(error) || !rebuild && await branchHead(gh, context, branch) !== expectedHead)
       throw new Rejection("the branch moved after the request");
     throw error;
   }
@@ -37567,24 +37599,6 @@ async function validateRouteBranch(gh, config, context) {
     }
   }
   return targetSha;
-}
-async function resetRouteBranch(context, route, expectedHead, observedTargetSha, token) {
-  if (observedTargetSha === expectedHead)
-    return;
-  try {
-    await resetBranchWithLease({
-      remote: `https://github.com/${context.repository}.git`,
-      sourceBranch: context.run.head_branch,
-      targetBranch: route.to,
-      sourceSha: expectedHead,
-      expectedTargetSha: observedTargetSha,
-      token
-    });
-  } catch (error) {
-    if (error instanceof GitRefChanged)
-      throw new Rejection("securefix route branch or source moved before the conditional reset");
-    throw error;
-  }
 }
 async function createCommit(gh, context, branch, expectedHead, message, changes) {
   const additions = changes.filter((change) => change.kind === "write").map((change) => ({ path: change.path, contents: change.content.toString("base64") }));

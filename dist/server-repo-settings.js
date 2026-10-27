@@ -37206,6 +37206,25 @@ esac
   }
 }
 
+// src/lib/branch-rebuild.ts
+import { randomBytes } from "node:crypto";
+var TEMPORARY_BRANCH_PREFIX = "csm-ci/tmp/";
+async function rebuildBranchWithLease(input) {
+  const temporaryBranch = `${TEMPORARY_BRANCH_PREFIX}${input.temporaryName}-${randomBytes(8).toString("hex")}`;
+  try {
+    await resetBranchWithLease({ remote: input.remote, sourceBranch: input.sourceBranch, targetBranch: temporaryBranch, sourceSha: input.sourceSha, expectedTargetSha: null, token: input.token });
+    const commit = await input.commit(temporaryBranch);
+    await resetBranchWithLease({ remote: input.remote, sourceBranch: temporaryBranch, targetBranch: input.targetBranch, sourceSha: commit, expectedTargetSha: input.expectedTargetSha, token: input.token });
+    return commit;
+  } finally {
+    try {
+      await input.deleteBranch(temporaryBranch);
+    } catch (error) {
+      console.warn(`could not delete temporary branch ${temporaryBranch}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+}
+
 // src/lib/server-owned-history.ts
 async function isServerMadeCommit(gh, input) {
   const { data: commit } = await gh.rest.repos.getCommit({ owner: input.owner, repo: input.repo, ref: input.sha });
@@ -37538,22 +37557,8 @@ async function applyManagedFiles(gh, input) {
     const pullRequest = await ensurePullRequest(writeGh, inspection, inspection.targetSha ?? inspection.defaultSha);
     return pullRequest === undefined ? { status: "applied", commit: inspection.targetSha ?? inspection.defaultSha } : { status: "applied", commit: inspection.targetSha ?? inspection.defaultSha, pullRequest };
   }
-  if (inspection.targetSha && inspection.targetSha !== inspection.defaultSha) {
-    try {
-      await resetBranchWithLease({
-        remote: `https://github.com/${inspection.repository}.git`,
-        sourceBranch: inspection.defaultBranch,
-        targetBranch: BRANCH,
-        sourceSha: inspection.defaultSha,
-        expectedTargetSha: inspection.targetSha,
-        token: input.writeToken
-      });
-    } catch (error) {
-      if (error instanceof GitRefChanged)
-        throw new Rejection("managed files branch or default branch moved before the conditional reset");
-      throw error;
-    }
-  } else if (!inspection.targetSha) {
+  const rebuild = inspection.targetSha !== null && inspection.targetSha !== inspection.defaultSha;
+  if (!inspection.targetSha) {
     const { owner, repo } = splitRepository(inspection.repository);
     const { data: currentDefault } = await writeGh.rest.git.getRef({ owner, repo, ref: `heads/${inspection.defaultBranch}` });
     if (currentDefault.object.sha !== inspection.defaultSha)
@@ -37569,14 +37574,38 @@ async function applyManagedFiles(gh, input) {
     if (JSON.stringify(deletions) !== JSON.stringify(inspection.deletions))
       throw new Rejection("generated workflows deletions changed before commit creation");
   }
-  const commit = await createCommit(writeGh, inspection);
+  let commit;
+  if (rebuild) {
+    const { owner, repo } = splitRepository(inspection.repository);
+    try {
+      commit = await rebuildBranchWithLease({
+        remote: `https://github.com/${inspection.repository}.git`,
+        sourceBranch: inspection.defaultBranch,
+        sourceSha: inspection.defaultSha,
+        targetBranch: BRANCH,
+        expectedTargetSha: inspection.targetSha,
+        token: input.writeToken,
+        temporaryName: "managed",
+        commit: (temporaryBranch) => createCommit(writeGh, inspection, temporaryBranch),
+        deleteBranch: async (temporaryBranch) => {
+          await writeGh.rest.git.deleteRef({ owner, repo, ref: `heads/${temporaryBranch}` });
+        }
+      });
+    } catch (error) {
+      if (error instanceof GitRefChanged)
+        throw new Rejection("managed files branch or default branch moved before the conditional reset");
+      throw error;
+    }
+  } else {
+    commit = await createCommit(writeGh, inspection, BRANCH);
+  }
   const pullRequest = await ensurePullRequest(writeGh, inspection, commit);
   return pullRequest === undefined ? { status: "applied", commit } : { status: "applied", commit, pullRequest };
 }
-async function createCommit(gh, inspection) {
+async function createCommit(gh, inspection, branch) {
   const additions = inspection.files.filter(({ path }) => inspection.changedPaths.includes(path)).map(({ path, content }) => ({ path, contents: Buffer.from(content, "utf8").toString("base64") }));
   const result = await gh.graphql("mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }", { input: {
-    branch: { repositoryNameWithOwner: inspection.repository, branchName: BRANCH },
+    branch: { repositoryNameWithOwner: inspection.repository, branchName: branch },
     expectedHeadOid: inspection.defaultSha,
     message: { headline: MANAGED_FILES_TITLE },
     fileChanges: { additions, deletions: (inspection.deletions ?? []).map((path) => ({ path })) }

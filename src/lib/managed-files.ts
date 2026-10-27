@@ -2,7 +2,8 @@ import { hasGeneratedHeader, isWorkflowFileName, type GeneratedWorkflows } from 
 import { Rejection } from "./request.ts";
 import { MAX_SECUREFIX_FILES, MAX_SECUREFIX_FILE_SIZE, MAX_SECUREFIX_TOTAL_SIZE } from "./securefix.ts";
 import { github, splitRepository, type GitHub } from "./github.ts";
-import { GitRefChanged, resetBranchWithLease } from "./git-ref.ts";
+import { GitRefChanged } from "./git-ref.ts";
+import { rebuildBranchWithLease } from "./branch-rebuild.ts";
 import { loadServerOwnedHistory } from "./server-owned-history.ts";
 
 const BRANCH = "csm-ci/repo-settings";
@@ -152,7 +153,7 @@ export async function inspectManagedFiles(gh: GitHub, input: ManagedFilesInput):
   const status = branchNeedsWrite || requiresPullRequestUpdate ? "ready" : "already-applied";
   return {
     status,
-    // The reset moves the branch across any default-branch workflow changes, which GitHub may refuse without workflows write.
+    // The final ref move carries the branch across any default-branch workflow changes, which GitHub may refuse without workflows write.
     requiresWorkflowsWrite: branchNeedsWrite && (changedPaths.some((path) => path.startsWith(".github/workflows/")) || (targetSha !== null && targetSha !== defaultSha)),
     requiresPullRequestUpdate,
     branchNeedsWrite,
@@ -289,21 +290,8 @@ export async function applyManagedFiles(gh: GitHub, input: ManagedFilesInput & {
       ? { status: "applied", commit: inspection.targetSha ?? inspection.defaultSha }
       : { status: "applied", commit: inspection.targetSha ?? inspection.defaultSha, pullRequest };
   }
-  if (inspection.targetSha && inspection.targetSha !== inspection.defaultSha) {
-    try {
-      await resetBranchWithLease({
-        remote: `https://github.com/${inspection.repository}.git`,
-        sourceBranch: inspection.defaultBranch,
-        targetBranch: BRANCH,
-        sourceSha: inspection.defaultSha,
-        expectedTargetSha: inspection.targetSha,
-        token: input.writeToken,
-      });
-    } catch (error) {
-      if (error instanceof GitRefChanged) throw new Rejection("managed files branch or default branch moved before the conditional reset");
-      throw error;
-    }
-  } else if (!inspection.targetSha) {
+  const rebuild = inspection.targetSha !== null && inspection.targetSha !== inspection.defaultSha;
+  if (!inspection.targetSha) {
     const { owner, repo } = splitRepository(inspection.repository);
     const { data: currentDefault } = await writeGh.rest.git.getRef({ owner, repo, ref: `heads/${inspection.defaultBranch}` });
     if (currentDefault.object.sha !== inspection.defaultSha) throw new Rejection("managed files default branch moved before branch creation");
@@ -316,17 +304,38 @@ export async function applyManagedFiles(gh: GitHub, input: ManagedFilesInput & {
     const deletions = await generatedDeletions(gh, { owner, repo, defaultSha: inspection.defaultSha, generated: input.generated, additional: input.files });
     if (JSON.stringify(deletions) !== JSON.stringify(inspection.deletions)) throw new Rejection("generated workflows deletions changed before commit creation");
   }
-  const commit = await createCommit(writeGh, inspection);
+  let commit: string;
+  if (rebuild) {
+    const { owner, repo } = splitRepository(inspection.repository);
+    try {
+      commit = await rebuildBranchWithLease({
+        remote: `https://github.com/${inspection.repository}.git`,
+        sourceBranch: inspection.defaultBranch,
+        sourceSha: inspection.defaultSha,
+        targetBranch: BRANCH,
+        expectedTargetSha: inspection.targetSha,
+        token: input.writeToken,
+        temporaryName: "managed",
+        commit: (temporaryBranch) => createCommit(writeGh, inspection, temporaryBranch),
+        deleteBranch: async (temporaryBranch) => { await writeGh.rest.git.deleteRef({ owner, repo, ref: `heads/${temporaryBranch}` }); },
+      });
+    } catch (error) {
+      if (error instanceof GitRefChanged) throw new Rejection("managed files branch or default branch moved before the conditional reset");
+      throw error;
+    }
+  } else {
+    commit = await createCommit(writeGh, inspection, BRANCH);
+  }
   const pullRequest = await ensurePullRequest(writeGh, inspection, commit);
   return pullRequest === undefined ? { status: "applied", commit } : { status: "applied", commit, pullRequest };
 }
 
-async function createCommit(gh: GitHub, inspection: ManagedFilesInspection): Promise<string> {
+async function createCommit(gh: GitHub, inspection: ManagedFilesInspection, branch: string): Promise<string> {
   const additions = inspection.files.filter(({ path }) => inspection.changedPaths.includes(path)).map(({ path, content }) => ({ path, contents: Buffer.from(content, "utf8").toString("base64") }));
   const result = await gh.graphql<{ createCommitOnBranch: { commit: { oid: string } } }>(
     "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }",
     { input: {
-      branch: { repositoryNameWithOwner: inspection.repository, branchName: BRANCH },
+      branch: { repositoryNameWithOwner: inspection.repository, branchName: branch },
       expectedHeadOid: inspection.defaultSha,
       message: { headline: MANAGED_FILES_TITLE },
       fileChanges: { additions, deletions: (inspection.deletions ?? []).map((path) => ({ path })) },
