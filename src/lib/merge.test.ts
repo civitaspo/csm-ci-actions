@@ -32,7 +32,7 @@ function pull(over: Record<string, unknown> = {}, repository = "owner/repo") {
 function comment(over: Record<string, unknown> = {}, repository = "owner/repo") {
   return { id: 9, body: "/merge", issue_url: `https://api.github.com/repos/${repository}/issues/12`, created_at: "2026-10-24T11:30:00Z", updated_at: "2026-10-24T11:30:00Z", node_id: "comment-node", user: alice, ...over };
 }
-type Setup = { repository?: string; policies?: Config["policies"]; files?: unknown[]; pull?: unknown; pullAfter?: unknown; pullThen?: unknown[]; comment?: unknown; commentStatus?: number; commentAfter?: unknown; lastEditedAt?: string | null; comments?: unknown[]; timeline?: unknown[]; headDate?: string; commits?: unknown[]; reviews?: unknown[]; reviewThen?: unknown[]; checks?: unknown[]; protectedServerRepo?: boolean; receiptStatus?: number };
+type Setup = { repository?: string; policies?: Config["policies"]; files?: unknown[]; pull?: unknown; pullAfter?: unknown; pullThen?: unknown[]; comment?: unknown; commentStatus?: number; commentAfter?: unknown; lastEditedAt?: string | null; comments?: unknown[]; timeline?: unknown[]; headDate?: string; commits?: unknown[]; reviews?: unknown[]; reviewThen?: unknown[]; checks?: unknown[]; receiptStatus?: number };
 function context(s: Setup = {}) {
   const repository = s.repository ?? "owner/repo";
   const path = `/repos/${repository}`;
@@ -52,7 +52,6 @@ function context(s: Setup = {}) {
   const cfg = config();
   cfg.merge.deadline_minutes = 1;
   if (s.policies) cfg.policies = s.policies;
-  if (s.protectedServerRepo) cfg.server_repository = "owner/repo";
   const notify = fakeFetch([
     { method: "POST", path: `${P}/issues/comments/9/reactions`, status: 201, body: { id: 3 } },
     { method: "GET", path: `${path}/issues/12/comments`, body: [] },
@@ -188,13 +187,20 @@ describe("waitForMerge", () => {
     } else expect(await waitForMerge(ctx, { pull_number: 12, comment_id: 9 })).toEqual({ head: HEAD });
   });
 
-  test.each(["owner/server", "civitaspo/csm-ci-actions"])("legacy protection rejects explicit Bot permission for %s", async (repository) => {
+  test.each(["owner/server", "civitaspo/csm-ci-actions"])("explicit configuration rejects Bot requests for %s", async (repository) => {
     const bot = { id: 20, login: "renovate[bot]", type: "Bot" };
     const { ctx, notify } = context({ repository, pull: pull({ user: bot }, repository), comment: comment({ user: bot }, repository) });
     ctx.config.owners.push("civitaspo");
-    ctx.config.repositories = [{ name: repository, ops: ["merge"], merge: { allow_bot_requests: true }, sensitive_paths: { paths: [], exempt: [bot] } }];
-    await expect(waitForMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow(`bot mergers cannot merge pull requests in protected repository ${repository}`);
+    ctx.config.repositories = [{ name: repository, ops: ["merge"], merge: { allow_bot_requests: false }, sensitive_paths: { paths: ["**"], exempt: [] } }];
+    await expect(waitForMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow(`bot merge requests are disabled for repository ${repository}`);
     expect(notify.calls).toEqual([]);
+  });
+
+  test("the server repository without a Bot restriction follows the configured trust", async () => {
+    const bot = { id: 20, login: "renovate[bot]", type: "Bot" };
+    const { ctx } = context({ pull: pull({ user: bot }), comment: comment({ user: bot }), commits: [{ sha: HEAD, commit: { verification: { verified: true } }, author: bot, committer: bot }] });
+    ctx.config.server_repository = "owner/repo";
+    expect(await waitForMerge(ctx, { pull_number: 12, comment_id: 9 })).toEqual({ head: HEAD });
   });
 
   test("repository Bot restriction does not reject an authorized human", async () => {
@@ -229,8 +235,6 @@ describe("waitForMerge", () => {
     ["a changed head while waiting", { pull: pull(), pullAfter: pull({ head: { sha: NEXT, repo: { full_name: "owner/repo" } } }) }, /head changed from/],
     ["a bot merging another author's pull request", { pull: pull({ user: { id: 10, login: "alice" } }), comment: comment({ user: { id: 20, login: "renovate[bot]", type: "Bot" } }) }, /bot merger renovate\[bot\] can merge only its own/],
     ["a bot merger with another committer's commit", { pull: pull({ user: { id: 20, login: "renovate[bot]" } }), comment: comment({ user: { id: 20, login: "renovate[bot]", type: "Bot" } }), commits: [{ sha: HEAD, commit: { verification: { verified: true } }, author: alice, committer: alice }] }, /bot merger renovate\[bot\] can merge only commits by itself/],
-    ["a bot merger targeting the server repository", { protectedServerRepo: true, pull: pull({ user: { id: 20, login: "renovate[bot]" } }), comment: comment({ user: { id: 20, login: "renovate[bot]", type: "Bot" } }) }, /bot mergers cannot merge pull requests in protected repository/],
-    ["a bot merger targeting csm-ci-actions", { repository: "civitaspo/csm-ci-actions", pull: pull({}, "civitaspo/csm-ci-actions"), comment: comment({ user: { id: 20, login: "renovate[bot]", type: "Bot" } }, "civitaspo/csm-ci-actions") }, /bot mergers cannot merge pull requests in protected repository/],
     ["an unsupported account type", { comment: comment({ user: { id: 20, login: "some-org", type: "Organization" } }) }, /some-org has unsupported account type Organization/],
     ["an unsigned commit", { commits: [{ sha: HEAD, commit: { verification: { verified: false } }, author: alice, committer: alice }] }, /trust failed: signed-commits: .*not signed/],
     ["a latest review that requests changes", { reviews: [{ user: { id: 4000 }, state: "APPROVED", commit_id: HEAD, submitted_at: "2026-10-24T11:20:00Z" }, { user: { id: 4000 }, state: "CHANGES_REQUESTED", commit_id: HEAD, submitted_at: "2026-10-24T11:40:00Z" }] }, /readiness deadline passed: the approver has not approved/],
@@ -246,12 +250,8 @@ describe("waitForMerge", () => {
   ];
   test.each(rejects)("rejects %s with an observable reason", async (_, setup, message) => {
     const { ctx, notify } = context(setup);
-    if (_ === "a bot merger targeting csm-ci-actions") {
-      ctx.config.owners.push("civitaspo");
-      ctx.config.repositories.push({ name: "civitaspo/csm-ci-actions", ops: ["merge"] });
-    }
     await expect(waitForMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow(message);
-    const accepted = !["a commenter outside the merger allowlist", "a non-command comment", "a draft pull request", "a replayed command", "a deleted comment author", "a deleted command", "a wrong command routed to merge", "a head newer than the command", "a force-push after the command", "an edited command", "a command edited in the same second", "a bot merging another author's pull request", "a bot merger with another committer's commit", "a bot merger targeting the server repository", "a bot merger targeting csm-ci-actions", "an unsupported account type"].includes(_);
+    const accepted = !["a commenter outside the merger allowlist", "a non-command comment", "a draft pull request", "a replayed command", "a deleted comment author", "a deleted command", "a wrong command routed to merge", "a head newer than the command", "a force-push after the command", "an edited command", "a command edited in the same second", "a bot merging another author's pull request", "a bot merger with another committer's commit", "an unsupported account type"].includes(_);
     expect(notify.calls.includes(`POST ${P}/issues/comments/9/reactions`)).toBe(accepted);
     if (accepted) {
       expect(notify.calls).toContain(`POST ${P}/issues/12/comments`);

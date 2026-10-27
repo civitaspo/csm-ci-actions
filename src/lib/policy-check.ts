@@ -12,12 +12,11 @@ type PublicationContext = PolicyCheckContext & { serverRun: ServerRun; requestKi
 
 export function effectivePolicies(config: Config, repository: string): Policy[] {
   const override = repositoryEntry(config, repository)?.sensitive_paths;
-  const protectedRepository = repository.toLowerCase() === config.server_repository || repository.toLowerCase() === "civitaspo/csm-ci-actions";
   const configured = config.policies.filter((policy) => !ALWAYS.some((always) => always.type === policy.type)).map((policy): Policy => {
     if (policy.type !== "sensitive-paths") return policy;
     return { type: "sensitive-paths", paths: override?.paths ?? policy.paths, exempt: override?.exempt ?? policy.exempt };
   });
-  if (!configured.some((policy) => policy.type === "sensitive-paths") && (override !== undefined || protectedRepository)) {
+  if (!configured.some((policy) => policy.type === "sensitive-paths") && override !== undefined) {
     configured.push({ type: "sensitive-paths", paths: override?.paths ?? [], exempt: override?.exempt ?? [] });
   }
   return [...ALWAYS, ...configured];

@@ -34,35 +34,34 @@ function setup(checkRuns: unknown[], current = { state: "open", head: { sha: hea
 }
 
 describe("updatePolicyCheck", () => {
-  const protectedCases: Array<[string, Config["policies"]]> = [
-    ["omitted policy", []],
-    ["no override", []],
-    ["exemption", [{ type: "sensitive-paths", paths: [], exempt: [{ id: 10, login: "alice" }] }]],
-  ];
-  test.each(protectedCases)("forces every path in the protected server repository despite %s", async (_case, policies) => {
-    const protectedConfig = config();
-    protectedConfig.policies = policies;
-    if (_case !== "no override") protectedConfig.repositories = [{ name: "owner/server", ops: ["approve"], sensitive_paths: { paths: [], exempt: [{ id: 10, login: "alice" }] } }];
-    const fetch = fakeFetch([
-      { method: "GET", path: "/repos/owner/server/pulls/12/commits", body: [{ sha: head, commit: { verification: { verified: true } }, author: { id: 10, login: "alice" }, committer: { id: 10, login: "alice" } }] },
-      { method: "GET", path: "/repos/owner/server/pulls/12/files", body: [{ filename: "ordinary.txt" }] },
-      { method: "GET", path: "/repos/owner/server/pulls/12/reviews", body: [] },
-    ]);
-    const results = await evaluatePullPolicies({ server: github("token", fetch), config: protectedConfig, repository: "owner/server", pull });
-    expect(results.find((result) => result.type === "sensitive-paths")).toEqual({ type: "sensitive-paths", ok: false, problems: ["sensitive paths need a trusted approver's /approve: ordinary.txt"] });
-  });
-
-  test("legacy actions protection also rejects explicit empty paths and exemptions", async () => {
-    const cfg = config();
-    cfg.owners.push("civitaspo");
-    cfg.repositories = [{ name: "civitaspo/csm-ci-actions", ops: ["policy-check"], sensitive_paths: { paths: [], exempt: [{ id: 10, login: "alice" }] } }];
-    const path = "/repos/civitaspo/csm-ci-actions/pulls/12";
-    const fetch = fakeFetch([
-      { method: "GET", path: `${path}/commits`, body: [{ sha: head, commit: { verification: { verified: true } }, author: { id: 10 }, committer: { id: 10 } }] },
+  function protectionFetch(repository: string) {
+    const path = `/repos/${repository}/pulls/12`;
+    return fakeFetch([
+      { method: "GET", path: `${path}/commits`, body: [{ sha: head, commit: { verification: { verified: true } }, author: { id: 10, login: "alice" }, committer: { id: 10, login: "alice" } }] },
       { method: "GET", path: `${path}/files`, body: [{ filename: "ordinary.txt" }] },
       { method: "GET", path: `${path}/reviews`, body: [] },
     ]);
-    expect((await evaluatePullPolicies({ server: github("token", fetch), config: cfg, repository: "civitaspo/csm-ci-actions", pull })).at(-1)).toEqual({ type: "sensitive-paths", ok: false, problems: ["sensitive paths need a trusted approver's /approve: ordinary.txt"] });
+  }
+
+  test.each(["owner/server", "civitaspo/csm-ci-actions"])("explicit protection of %s covers every path and ignores the global exemption", async (repository) => {
+    const cfg = config();
+    cfg.owners.push("civitaspo");
+    cfg.policies = [{ type: "sensitive-paths", paths: ["docs/**"], exempt: [{ id: 10, login: "alice" }] }];
+    cfg.repositories = [{ name: repository, ops: ["policy-check"], sensitive_paths: { paths: ["**"], exempt: [] } }];
+    const results = await evaluatePullPolicies({ server: github("token", protectionFetch(repository)), config: cfg, repository, pull });
+    expect(results.find((result) => result.type === "sensitive-paths")).toEqual({ type: "sensitive-paths", ok: false, problems: ["sensitive paths need a trusted approver's /approve: ordinary.txt"] });
+  });
+
+  test.each([
+    ["owner/server", "no override", undefined],
+    ["civitaspo/csm-ci-actions", "explicit empty paths", { paths: [], exempt: [] }],
+  ] as const)("%s follows its configuration with %s", async (repository, _case, override) => {
+    const cfg = config();
+    cfg.owners.push("civitaspo");
+    cfg.policies = [{ type: "sensitive-paths", paths: ["docs/**"], exempt: [] }];
+    cfg.repositories = [{ name: repository, ops: ["policy-check"], ...(override ? { sensitive_paths: { paths: [...override.paths], exempt: [...override.exempt] } } : {}) }];
+    const results = await evaluatePullPolicies({ server: github("token", protectionFetch(repository)), config: cfg, repository, pull });
+    expect(results.find((result) => result.type === "sensitive-paths")).toEqual({ type: "sensitive-paths", ok: true, problems: [] });
   });
 
   test.each([[[]], [[{ id: 7, name: "csm-ci/policy", external_id: head, app: { id: 1 } }]]])("skips a closed PR without evaluating or publishing, checks %j", async (checks) => {

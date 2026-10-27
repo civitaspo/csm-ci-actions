@@ -13,13 +13,11 @@ export async function sensitivePaths(policy: Extract<import("../config.ts").Poli
   const files = await ctx.gh.paginate(ctx.gh.rest.pulls.listFiles, { owner, repo, pull_number: ctx.pullNumber, per_page: 100 }) as ChangedFile[];
   if (files.length >= MAX_FILES) return [`pull request changes ${MAX_FILES} or more files; sensitive-paths cannot verify every file`];
 
-  const forceAll = ctx.repository.toLowerCase() === ctx.config.server_repository || ctx.repository.toLowerCase() === "civitaspo/csm-ci-actions";
-  const patterns = forceAll ? ["**"] : policy.paths;
-  const match = picomatch(patterns, { dot: true });
+  const match = picomatch(policy.paths, { dot: true });
   const changed = files.filter((f) => match(f.filename) || (f.previous_filename !== undefined && match(f.previous_filename)));
   if (changed.length === 0) return [];
 
-  const exempt = !forceAll && policy.exempt.some((p) => p.id === ctx.authorId)
+  const exempt = policy.exempt.some((p) => p.id === ctx.authorId)
     && ctx.trust.commits.length > 0
     && ctx.trust.commits.every((c) => c.identity.kind === "user" && c.identity.principal.id === ctx.authorId);
   if (exempt) return [];

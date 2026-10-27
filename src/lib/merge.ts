@@ -79,10 +79,6 @@ async function verifyMerger(ctx: MergeContext, pull: PullFacts, comment: Comment
   if (!author) throw new Rejection("the merge comment author was deleted");
   if (author.type === "Bot") {
     const bot = principal(author, ctx.config.trust.bot_mergers, "bot mergers");
-    const target = ctx.repository.toLowerCase();
-    if (target === ctx.config.server_repository.toLowerCase() || target === "civitaspo/csm-ci-actions") {
-      throw new Rejection(`bot mergers cannot merge pull requests in protected repository ${ctx.repository}`);
-    }
     if (repositoryEntry(ctx.config, ctx.repository)?.merge?.allow_bot_requests === false) {
       throw new Rejection(`bot merge requests are disabled for repository ${ctx.repository}`);
     }

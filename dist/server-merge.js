@@ -36995,13 +36995,11 @@ async function sensitivePaths(policy, ctx) {
   const files = await ctx.gh.paginate(ctx.gh.rest.pulls.listFiles, { owner, repo, pull_number: ctx.pullNumber, per_page: 100 });
   if (files.length >= MAX_FILES)
     return [`pull request changes ${MAX_FILES} or more files; sensitive-paths cannot verify every file`];
-  const forceAll = ctx.repository.toLowerCase() === ctx.config.server_repository || ctx.repository.toLowerCase() === "civitaspo/csm-ci-actions";
-  const patterns = forceAll ? ["**"] : policy.paths;
-  const match = import_picomatch2.default(patterns, { dot: true });
+  const match = import_picomatch2.default(policy.paths, { dot: true });
   const changed = files.filter((f) => match(f.filename) || f.previous_filename !== undefined && match(f.previous_filename));
   if (changed.length === 0)
     return [];
-  const exempt = !forceAll && policy.exempt.some((p) => p.id === ctx.authorId) && ctx.trust.commits.length > 0 && ctx.trust.commits.every((c) => c.identity.kind === "user" && c.identity.principal.id === ctx.authorId);
+  const exempt = policy.exempt.some((p) => p.id === ctx.authorId) && ctx.trust.commits.length > 0 && ctx.trust.commits.every((c) => c.identity.kind === "user" && c.identity.principal.id === ctx.authorId);
   if (exempt)
     return [];
   const commandApproval = ctx.commandApproval;
@@ -37155,13 +37153,12 @@ var stateSchema = object({ node: object({
 var ALWAYS = [{ type: "signed-commits" }, { type: "trusted-committers" }];
 function effectivePolicies(config, repository) {
   const override = repositoryEntry(config, repository)?.sensitive_paths;
-  const protectedRepository = repository.toLowerCase() === config.server_repository || repository.toLowerCase() === "civitaspo/csm-ci-actions";
   const configured = config.policies.filter((policy) => !ALWAYS.some((always) => always.type === policy.type)).map((policy) => {
     if (policy.type !== "sensitive-paths")
       return policy;
     return { type: "sensitive-paths", paths: override?.paths ?? policy.paths, exempt: override?.exempt ?? policy.exempt };
   });
-  if (!configured.some((policy) => policy.type === "sensitive-paths") && (override !== undefined || protectedRepository)) {
+  if (!configured.some((policy) => policy.type === "sensitive-paths") && override !== undefined) {
     configured.push({ type: "sensitive-paths", paths: override?.paths ?? [], exempt: override?.exempt ?? [] });
   }
   return [...ALWAYS, ...configured];
@@ -37236,10 +37233,6 @@ async function verifyMerger(ctx, pull, comment) {
     throw new Rejection("the merge comment author was deleted");
   if (author.type === "Bot") {
     const bot = principal(author, ctx.config.trust.bot_mergers, "bot mergers");
-    const target = ctx.repository.toLowerCase();
-    if (target === ctx.config.server_repository.toLowerCase() || target === "civitaspo/csm-ci-actions") {
-      throw new Rejection(`bot mergers cannot merge pull requests in protected repository ${ctx.repository}`);
-    }
     if (repositoryEntry(ctx.config, ctx.repository)?.merge?.allow_bot_requests === false) {
       throw new Rejection(`bot merge requests are disabled for repository ${ctx.repository}`);
     }
