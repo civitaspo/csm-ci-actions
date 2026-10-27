@@ -135,6 +135,8 @@ const RepositoryEntry = z.strictObject({
   name: z.string().min(1).transform((s) => s.toLowerCase()),
   ops: z.array(z.enum(OPS)).refine((ops) => new Set(ops).size === ops.length, "duplicate op"),
   release: ReleaseSchema.optional(),
+  release_prepare: z.strictObject({ update_root_version: z.boolean().optional() }).optional(),
+  workflow_adoption: z.record(z.string(), z.string().regex(/^[a-f0-9]{64}$/u, "must be a lowercase SHA256 digest")).refine((value) => Object.keys(value).length <= 5, "must contain at most five entries").optional(),
   sensitive_paths: z.strictObject({ paths: z.array(z.string().min(1)).optional(), exempt: z.array(Principal).optional() }).optional(),
   merge: z.strictObject({ allow_bot_requests: z.boolean().optional() }).optional(),
 }).superRefine((entry, ctx) => {
@@ -171,6 +173,19 @@ export const ConfigSchema = z
     }
     if (c.repositories.some((r) => r.ops.includes("securefix")) && c.securefix === undefined) {
       ctx.addIssue({ code: "custom", path: ["securefix"], message: "securefix settings are required when a repository enables securefix" });
+    }
+    for (const [index, entry] of c.repositories.entries()) {
+      const route = c.securefix?.routes.find((route) => route.name === "release-pr");
+      const preparation = entry.ops.includes("securefix") && route !== undefined;
+      if (preparation && (route.to !== "release/next" || route.workflow !== ".github/workflows/csm-ci-release-pr.yml")) {
+        ctx.addIssue({ code: "custom", path: ["repositories", index], message: "release-pr route must use release/next and .github/workflows/csm-ci-release-pr.yml" });
+      }
+      if (entry.release_prepare !== undefined && !preparation) ctx.addIssue({ code: "custom", path: ["repositories", index, "release_prepare"], message: "release_prepare requires selected release preparation" });
+      const selected = entry.ops.filter((op) => op !== "securefix").map((op) => `.github/workflows/csm-ci-${op}.yml`);
+      if (preparation) selected.push(".github/workflows/csm-ci-release-pr.yml");
+      for (const path of Object.keys(entry.workflow_adoption ?? {})) {
+        if (!selected.includes(path)) ctx.addIssue({ code: "custom", path: ["repositories", index, "workflow_adoption", path], message: "workflow_adoption destination must be a selected standard caller" });
+      }
     }
     for (const [index, route] of (c.securefix?.routes ?? []).entries()) {
       if (!isSafeSecurefixPath(route.workflow) || !route.workflow.startsWith(".github/workflows/")) {

@@ -35,6 +35,7 @@ jobs:
     permissions:
       contents: read
     outputs:
+      workflow-release: ${{ steps.discover.outputs.workflow-release }}
       operation-mode: ${{ steps.validate-mode.outputs.operation-mode }}
       clients: ${{ steps.discover.outputs.clients }}
       has-clients: ${{ steps.discover.outputs.has-clients }}
@@ -93,6 +94,7 @@ jobs:
       event-mode: ${{ github.event_name == 'schedule' && 'schedule' || 'dispatch' }}
       mode: ${{ needs.discover.outputs.operation-mode }}
       config-path: ${{ inputs.config-path }}
+      workflow-release: ${{ needs.discover.outputs.workflow-release }}
     secrets:
       CSM_CI_SERVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
       CSM_CI_APPROVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_APPROVER_APP_PRIVATE_KEY }}
@@ -111,6 +113,7 @@ jobs:
       event-mode: ${{ github.event_name == 'schedule' && 'schedule' || 'dispatch' }}
       mode: ${{ needs.discover.outputs.operation-mode }}
       config-path: ${{ inputs.config-path }}
+      workflow-release: ${{ needs.discover.outputs.workflow-release }}
     secrets:
       CSM_CI_SERVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
       CSM_CI_APPROVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_APPROVER_APP_PRIVATE_KEY }}

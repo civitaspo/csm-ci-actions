@@ -8,6 +8,10 @@ on:
       CSM_CI_APPROVER_APP_PRIVATE_KEY:
         required: false
     inputs:
+      workflow-release:
+        description: Stable version and full SHA validated by trusted discovery.
+        type: string
+        required: true
       repository:
         description: Validated owner/repo target selected by the server workflow.
         type: string
@@ -135,6 +139,7 @@ jobs:
         uses: ./.csm-ci-actions/actions/server/repo-settings
         with:
           mode: managed-inspect
+          workflow-release: ${{ inputs.workflow-release }}
           operation-mode: ${{ steps.target.outputs.operation-mode }}
           github-token: ${{ github.token }}
           config-path: ${{ inputs.config-path }}
@@ -169,6 +174,7 @@ jobs:
         uses: ./.csm-ci-actions/actions/server/repo-settings
         with:
           mode: managed-apply
+          workflow-release: ${{ inputs.workflow-release }}
           operation-mode: ${{ steps.target.outputs.operation-mode }}
           github-token: ${{ github.token }}
           config-path: ${{ inputs.config-path }}

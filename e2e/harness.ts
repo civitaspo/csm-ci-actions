@@ -1,4 +1,5 @@
 // Helpers shared by the e2e scenarios. GitHub is the system under test, so every check reads the API.
+import { parseDocument } from "yaml";
 import { randomUUID } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -294,9 +295,15 @@ export function configureRelease(type: ReleaseBuildType): (text: string) => stri
 }
 
 export const withoutReleaseOperation = (text: string): string => {
-  const changed = text.replace("ops: [approve, merge, policy-check, securefix, release], release: { build_type: none }", "ops: [approve, merge, policy-check, securefix]");
-  assert(changed !== text, "could not locate enabled release operation in fixture");
-  return changed;
+  const config = parseConfig(text);
+  const index = config.repositories.findIndex((entry) => entry.name === CLIENT);
+  const entry = config.repositories[index];
+  if (!entry?.ops.includes("release")) throw new Error("could not locate enabled release operation in fixture");
+  const document = parseDocument(text);
+  document.setIn(["repositories", index, "ops"], entry.ops.filter((op) => op !== "release"));
+  document.deleteIn(["repositories", index, "release"]);
+  document.deleteIn(["repositories", index, "workflow_adoption", ".github/workflows/csm-ci-release.yml"]);
+  return String(document);
 };
 
 export async function openReleasePr(ctx: Ctx, version: string, additions: Record<string, string | null> = {}): Promise<Pr & { openedAt: Date }> {

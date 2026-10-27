@@ -1,6 +1,10 @@
+import { digest } from "../src/lib/generated-workflows.ts";
+import { resolveWorkflowRelease } from "../src/lib/workflow-release.ts";
+import { parseOwnership, recoverWorkflowOwnership } from "../src/lib/workflow-ownership.ts";
+import { MANAGED_FILES_TITLE, readFileAtRef } from "../src/lib/managed-files.ts";
+import { isServerMadeCommit } from "../src/lib/server-owned-history.ts";
 import { z } from "zod";
 import { type GitHub, splitRepository } from "../src/lib/github.ts";
-import { MANAGED_FILES_TITLE } from "../src/lib/managed-files.ts";
 import { inspectRepoSettingsPreflight } from "../src/lib/repo-settings.ts";
 import { assert, CLIENT, dispatch, hasStatus, jobLog, SERVER, SERVER_BOT_ID, type Ctx, type Scenario, until, withServerConfig } from "./harness.ts";
 import { withCleanup } from "./cleanup.ts";
@@ -177,7 +181,35 @@ export async function ownedManagedHead(ctx: Pick<Ctx, "gh">, repository = CLIENT
   if (!sha) return undefined;
   const { data: commit } = await ctx.gh.rest.repos.getCommit({ ...splitRepository(repository), ref: sha });
   const changedPaths = commit.files?.map((file) => file.filename) ?? [];
-  if (commit.author?.id !== SERVER_BOT_ID || !MANAGED_SUBJECTS.has(commit.commit.message) || changedPaths.length === 0 || changedPaths.some((path) => !managedPaths.includes(path))) return undefined;
+  let generatedPaths: string[] = [];
+  const [headline] = commit.commit.message.split("\n");
+  if (!MANAGED_SUBJECTS.has(headline ?? "")) return undefined;
+  if (commit.commit.message !== headline) {
+    const { data: repositoryInfo } = await ctx.gh.rest.repos.get(splitRepository(repository));
+    let record;
+    try { record = parseOwnership(commit.commit.message, Number(repositoryInfo.id)); } catch { return undefined; }
+    if (!record || !await isServerMadeCommit(ctx.gh, { ...splitRepository(repository), sha, serverBotId: SERVER_BOT_ID })) return undefined;
+    const address = splitRepository(repository);
+    for (const [path, expected] of Object.entries(record.files)) {
+      const value = await readFileAtRef(ctx.gh, address.owner, address.repo, path, sha);
+      if (value.content === null || digest(value.content) !== expected) return undefined;
+    }
+    generatedPaths = Object.keys(record.files);
+    const removed = (commit.files ?? []).filter((file) => file.status === "removed" && !managedPaths.includes(file.filename) && !generatedPaths.includes(file.filename));
+    if (removed.length > 0) {
+      const { data: defaultRef } = await ctx.gh.rest.git.getRef({ ...address, ref: `heads/${repositoryInfo.default_branch}` });
+      const prior = await recoverWorkflowOwnership(ctx.gh, { repository, repositoryId: Number(repositoryInfo.id), defaultBranch: repositoryInfo.default_branch, defaultSha: defaultRef.object.sha, serverBotId: SERVER_BOT_ID });
+      // Pending records omit deletions; only authenticated merged ownership can authorize these paths.
+      for (const { filename: path } of removed) {
+        const expected = prior.record?.files[path];
+        const before = await readFileAtRef(ctx.gh, address.owner, address.repo, path, defaultRef.object.sha);
+        const after = await readFileAtRef(ctx.gh, address.owner, address.repo, path, sha);
+        if (before.content === null || digest(before.content) !== expected || after.content !== null) return undefined;
+        generatedPaths.push(path);
+      }
+    }
+  }
+  if (commit.author?.id !== SERVER_BOT_ID || (changedPaths.length === 0 && generatedPaths.length === 0) || changedPaths.some((path) => !managedPaths.includes(path) && !generatedPaths.includes(path))) return undefined;
   if (commit.commit.verification?.verified !== true || commit.commit.verification.reason !== "valid") return undefined;
   const pulls = await openManagedPull(ctx.gh, repository);
   if (pulls.length > 1) return undefined;
@@ -200,6 +232,8 @@ async function dispatchReconciliation(
     "event-mode": eventMode,
     mode: operationMode,
     ...(configPath ? { "config-path": configPath } : {}),
+    // The schedule branch calls the target workflow directly, so it supplies what discovery would resolve.
+    ...(eventMode === "schedule" ? { "workflow-release": JSON.stringify(await resolveWorkflowRelease(ctx.gh, [])) } : {}),
   });
   const namedJobs = await until(`repo-settings jobs for ${run.html_url}`, async () => {
     const result = await ctx.gh.rest.actions.listJobsForWorkflowRun({ ...splitRepository(SERVER), run_id: run.id });
@@ -421,7 +455,20 @@ export const repoSettings: Scenario[] = [
         assert(managedPull, "managed-files pull request was not created");
         const { data: createdPull } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: managedPull.number });
         const { data: createdCommit } = await ctx.gh.rest.repos.getCommit({ ...splitRepository(CLIENT), ref: observedHead });
-        assert(createdPull.title === MANAGED_FILES_TITLE && createdCommit.commit.message === MANAGED_FILES_TITLE, `managed-files pull request or commit subject is not ${MANAGED_FILES_TITLE} (${initial.url})`);
+        assert(createdPull.title === MANAGED_FILES_TITLE && createdCommit.commit.message.split("\n")[0] === MANAGED_FILES_TITLE, `managed-files pull request or commit subject is not ${MANAGED_FILES_TITLE} (${initial.url})`);
+
+        const { data: generatedCommit } = await ctx.gh.rest.repos.getCommit({ ...splitRepository(CLIENT), ref: observedHead });
+        const { data: clientInfo } = await ctx.gh.rest.repos.get(splitRepository(CLIENT));
+        const ownership = parseOwnership(generatedCommit.commit.message, Number(clientInfo.id));
+        assert(ownership, "managed commit has no generated workflow ownership record");
+        const expectedCallers = ["approve", "policy-check", "merge", "release", "release-pr"].map((name) => `.github/workflows/csm-ci-${name}.yml`).sort();
+        assert(JSON.stringify(Object.keys(ownership.files).sort()) === JSON.stringify(expectedCallers), "generated ownership did not select the complete enabled caller set");
+        for (const path of expectedCallers) {
+          const content = await readFileAtRef(ctx.gh, splitRepository(CLIENT).owner, splitRepository(CLIENT).repo, path, observedHead);
+          assert(content.content !== null && digest(content.content) === ownership.files[path], `generated workflow ${path} does not match its ownership digest`);
+          assert(content.content.includes(`@${ownership.release.sha}`) && content.content.includes(`# Generated by csm-ci from ${ownership.release.version} (${ownership.release.sha}).`), `generated workflow ${path} has inconsistent released revision`);
+          assert(content.content.includes("CSM_CI_CLIENT_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}"), `generated workflow ${path} does not use the minimal named secret map`);
+        }
 
         const beforeRepeat = await rulesetUpdateTimes(ctx.gh);
         const repeat = await dispatchReconciliation(ctx, CLIENT, "dispatch", undefined, { createdRulesetIds });
