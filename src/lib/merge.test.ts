@@ -83,6 +83,21 @@ describe("waitForMerge", () => {
     expect(body).not.toContain("rebase");
   });
 
+  test.each([
+    [1, 5_000, 12],
+    [6, 30_000, 12],
+    [30, 30_000, 60],
+  ])("a %i minute deadline polls readiness every %i ms", async (minutes, interval, polls) => {
+    const { ctx } = context({ reviews: [] });
+    ctx.config.merge.deadline_minutes = minutes;
+    const sleeps: number[] = [];
+    const sleep = ctx.sleep;
+    ctx.sleep = async (ms) => { sleeps.push(ms); await sleep(ms); };
+    await expect(waitForMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow(/readiness deadline/);
+    expect(sleeps.filter((ms) => ms === interval)).toHaveLength(polls);
+    expect(sleeps.every((ms) => ms <= interval)).toBe(true);
+  });
+
   test("fresh-token failure receipt escapes the reason and preserves the supplied original head without reading client state", async () => {
     const { ctx, server, notify } = context({ commentStatus: 404, pullAfter: pull({ head: { sha: NEXT } }) });
     await postMergeFailureReceipt(ctx, { pull_number: 12, comment_id: 9 }, 'failed <sub>small</sub> & "unsafe"', HEAD);

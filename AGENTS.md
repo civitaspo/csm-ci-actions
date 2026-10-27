@@ -54,7 +54,7 @@ GH_TOKEN=$(gh auth token) bun e2e/run.ts --ref <full-head-sha> --feature smoke
 ```
 
 - The harness writes to `testing-csm-ci-client`, `testing-csm-ci-server`, and this repository's `e2e` ref. Production repositories are not test fixtures.
-- Run one feature suite at a time. Scenarios within a suite may run concurrently. Wait for completion before dispatching another CI suite, because a newer pending run can replace an older one.
+- Run one harness invocation at a time. An invocation may list several features, such as `--feature approve,merge,policy-check`; their concurrent scenarios overlap and serial scenarios run alone. Wait for completion before dispatching another CI suite, because a newer pending run can replace an older one.
 - Use `--scenario <substring>` while iterating, then run the full affected feature. The `release-prepare` client action belongs to the `release-pr` suite.
 - Another session or a multi-feature run can hold `e2e-lock` for a long time. Read the lock's description before waiting, and tell the user what you are waiting on.
 - Under GitHub's account-wide job limit, runs can stay queued for more than ten minutes, and a job's API status can lag its finished steps. Check the queue and step conclusions before blaming the code or retrying.

@@ -8,18 +8,9 @@ on:
         required: true
         type: string
       feature:
-        description: Feature whose scenarios run.
+        description: Comma-separated features whose scenarios run together, for example approve,merge,policy-check,smoke.
         default: smoke
-        type: choice
-        options:
-          - smoke
-          - approve
-          - merge
-          - policy-check
-          - securefix
-          - release
-          - release-pr
-          - repo-settings
+        type: string
 
 permissions: {}
 
@@ -31,7 +22,8 @@ concurrency:
 jobs:
   e2e:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # Several features can run in one invocation.
+    timeout-minutes: 120
     environment: csm-ci-e2e
     permissions:
       contents: write

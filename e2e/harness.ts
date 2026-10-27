@@ -146,18 +146,45 @@ export async function recentWorkflowRuns(ctx: Ctx, repository: string, workflow:
   return recentItems(pages(), since);
 }
 
+// A completed run's jobs and logs do not change. Concurrent scenarios poll the same server runs,
+// so they share these instead of downloading them again on every poll.
+type Jobs = Map<string, { id: number; conclusion: string | null }>;
+const completedCaches = new WeakMap<GitHub, { jobs: Map<number, Jobs>; logs: Map<number, string> }>();
+function completedCache(ctx: Ctx) {
+  let cache = completedCaches.get(ctx.gh);
+  if (!cache) completedCaches.set(ctx.gh, cache = { jobs: new Map(), logs: new Map() });
+  return cache;
+}
+
+async function completedJobs(ctx: Ctx, runId: number): Promise<Jobs> {
+  const cached = completedCache(ctx).jobs.get(runId);
+  if (cached) return cached;
+  const byName = await jobs(ctx, SERVER, runId);
+  // Right after a run completes, its job list can still be empty or unfinished.
+  if (byName.size > 0 && [...byName.values()].every((job) => job.conclusion !== null)) completedCache(ctx).jobs.set(runId, byName);
+  return byName;
+}
+
+async function completedJobLog(ctx: Ctx, jobId: number): Promise<string> {
+  const cached = completedCache(ctx).logs.get(jobId);
+  if (cached !== undefined) return cached;
+  const log = await jobLog(ctx, SERVER, jobId);
+  if (log.length > 0) completedCache(ctx).logs.set(jobId, log);
+  return log;
+}
+
 export async function serverRuns(ctx: Ctx, match: RequestMatch, since: Date): Promise<Run[]> {
   const candidates = await recentWorkflowRuns(ctx, SERVER, "csm-ci.yml", "label", since);
   const found: Run[] = [];
   for (const run of candidates) {
     if (run.status !== "completed") continue;
-    const byName = await jobs(ctx, SERVER, run.id);
+    const byName = await completedJobs(ctx, run.id);
     const intake = byName.get("intake");
     if (!intake) continue;
     if (match.label) {
       const cleanup = byName.get("cleanup");
-      if (cleanup && matchesCleanupLabel(await jobLog(ctx, SERVER, cleanup.id), match.label)) found.push(run);
-    } else if (intake.conclusion !== "skipped" && matchesAcceptedRequest(await jobLog(ctx, SERVER, intake.id), match)) {
+      if (cleanup && matchesCleanupLabel(await completedJobLog(ctx, cleanup.id), match.label)) found.push(run);
+    } else if (intake.conclusion !== "skipped" && matchesAcceptedRequest(await completedJobLog(ctx, intake.id), match)) {
       found.push(run);
     }
   }
@@ -421,9 +448,10 @@ export async function serverComments(ctx: Ctx, pr: Pr): Promise<string[]> {
   return comments.filter((c) => Number(c.user?.id) === SERVER_BOT_ID).map((c) => c.body ?? "");
 }
 
-// Waits for the one server run started since `since` and checks its op job.
+// Waits for the first server run started since `since` and checks its op job. A command can
+// produce several requests, which the server handles in order; runs are listed newest first.
 export async function expectOp(ctx: Ctx, match: RequestMatch, since: Date, op: Conclusion, logPattern?: RegExp): Promise<void> {
-  const run = (await until("the server run for the request", async () => (await serverRuns(ctx, match, since))[0]))!;
+  const run = (await until("the server run for the request", async () => (await serverRuns(ctx, match, since)).at(-1)))!;
   await waitRun(ctx, SERVER, run.id);
   const byName = await jobs(ctx, SERVER, run.id);
   const opJob = byName.get("op");

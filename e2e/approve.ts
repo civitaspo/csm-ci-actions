@@ -23,7 +23,6 @@ import {
   serverComments,
   serverRuns,
   recentWorkflowRuns,
-  sleep,
   until,
 } from "./harness.ts";
 
@@ -109,9 +108,8 @@ async function expectClientSkipped(ctx: Ctx, since: Date, pr: number, commentIds
   }
 }
 
-// After the client runs are done, no label can still be on its way.
+// expectClientSkipped proved every client request job skipped, so no label can still be on its way.
 async function expectNoServerRun(ctx: Ctx, since: Date, match: {kind:string; repository:string; args:Record<string,number>}): Promise<void> {
-  await sleep(15_000);
   const recent = await recentWorkflowRuns(ctx, SERVER, "csm-ci.yml", "label", since);
   const runs = [];
   for (const run of recent) {
