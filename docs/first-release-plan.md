@@ -409,7 +409,7 @@ After Phase 0, phases 1, 2, 3, 4, 5a, and 6 can proceed independently in paralle
 - **server**
   1. Validate S5. The author is in `mergers`, or in `bot_mergers` with the PR author and the effective identity of every commit being that same bot.
   2. Check the PR state, pass S3, and pin the head.
-  3. Poll for readiness. Poll every 30 seconds, up to `deadline_minutes`. Each time, re-validate the PR state, the head, and the comment. All of the following must hold.
+  3. Poll for readiness up to `deadline_minutes`. Poll every 30 seconds, or every twelfth of the deadline when that is shorter, so a short testing deadline polls more often while a 6 minute or longer deadline keeps the 30 second interval. Each time, re-validate the PR state, the head, and the comment. All of the following must hold.
      - The approver's latest review is an APPROVE on this head. Do not look at `reviewDecision`, because the ruleset and the merge API already block a human's changes requested.
      - **Policies are re-evaluated inside the server and pass**. Do not use the check run result, so that we judge with the latest configuration even if it changed.
      - `required_checks` are success or skipped, with the specified app as the producer.
