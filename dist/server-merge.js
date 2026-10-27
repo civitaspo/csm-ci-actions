@@ -37392,7 +37392,7 @@ async function waitForMerge(ctx, args) {
       const remaining = deadline - ctx.now().getTime();
       if (remaining <= 0)
         break;
-      await ctx.sleep(Math.min(30000, remaining));
+      await ctx.sleep(Math.min(30000, ctx.config.merge.deadline_minutes * 5000, remaining));
     }
     throw new Rejection(`merge readiness deadline passed: ${last instanceof Error ? last.message : "not ready"}`);
   } catch (error) {

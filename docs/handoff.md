@@ -520,10 +520,10 @@ This phase is mostly human work. A human creates and installs the Apps, register
 
 ```bash
 # From your machine. GH_TOKEN is the owner's gh token
-GH_TOKEN=$(gh auth token) bun e2e/run.ts --ref <full sha of the PR head> --feature <smoke|approve|...> [--scenario <name substring>]
+GH_TOKEN=$(gh auth token) bun e2e/run.ts --ref <full sha of the PR head> --feature <feature>[,<feature>...] [--scenario <name substring>]
 
 # From CI (the harness on main runs. The untrusted scenarios also run)
-gh workflow run e2e.yml --repo civitaspo/csm-ci-actions --ref main -f ref=<sha> -f feature=<feature>
+gh workflow run e2e.yml --repo civitaspo/csm-ci-actions --ref main -f ref=<sha> -f feature=<feature>[,<feature>...]
 ```
 
 Use `--scenario` to run a representative scenario while iterating, for example `--feature approve --scenario "edited after posting"`. The filter is a case-sensitive substring of the scenario name; it must match at least one scenario. Omitting it runs the full feature. CI runs still execute the full feature.
@@ -533,12 +533,15 @@ The harness runs in this order.
 1. Take the lock.
 2. Force-push the `e2e` branch of csm-ci-actions to `--ref`. The testing callers reference `@e2e`.
 3. Sync the fixtures to `main` of the testing repos (commit if there is a diff).
-4. Run scenarios concurrently, and print PASS / FAIL / SKIP with the run URLs.
-5. Release the lock.
+4. Run the concurrent scenarios of every selected feature together, then the serial scenarios one at a time. Print PASS / FAIL / SKIP with each scenario's duration and run URLs.
+5. Print the scenario durations, longest first.
+6. Release the lock.
+
+Several features in one invocation share the lock and the fixture sync. Serial scenarios change state that every request reads, such as the server configuration and client rulesets, so no other scenario runs beside them. Concurrent scenarios of different features touch only their own pull requests and requests. Separate invocations still wait for each other.
 
 ### 7.2 The lock
 
-- Take it with the label `e2e-lock` in csm-ci-actions. The description is `<ISO time> <feature>@<sha7>#<rand>`.
+- Take it with the label `e2e-lock` in csm-ci-actions. The description is `<ISO time> <features>@<sha7>#<rand>`, with the comma-separated features cut to 40 characters.
 - If it cannot take the lock, it waits and retries every 15 seconds. It steals a lock older than 60 minutes.
 - We confirmed that two runs started at the same time run in series (smoke printed "waiting for the e2e lock" 38 times and started after approve finished).
 - **If you kill the harness process, the lock stays.** After you confirm that it is yours, delete it with `gh label delete e2e-lock --repo civitaspo/csm-ci-actions --yes`.
@@ -638,7 +641,7 @@ Comment reads now fetch GraphQL `databaseId` and `lastEditedAt`, verify that the
 
 ## 12. Parallel e2e request correlation
 
-Scenarios within one feature run concurrently. The cross-process lock still serializes feature runs because they share the testing repositories and the `e2e` ref. A failed scenario does not release that lock while other scenarios are running.
+Concurrent scenarios of the features in one invocation run together. The cross-process lock still serializes invocations because they share the testing repositories and the `e2e` ref. A failed scenario does not release that lock while other scenarios are running.
 
 The harness identifies accepted requests by operation, repository, and numeric arguments in the intake log. Rejected labels use the complete label value printed by the runner in the cleanup step's environment. This is verified in [server run 40117575130](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40117575130); the runner prints `LABEL:` even though the shell command does not echo it. Cleanup checks examine only the scenario's label.
 

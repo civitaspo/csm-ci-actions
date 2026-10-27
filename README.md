@@ -248,10 +248,11 @@ The harness uses only `civitaspo/testing-csm-ci-client` and `civitaspo/testing-c
 
 Prerequisites are a signed, pushed full commit SHA; the testing Apps, configuration, variables, and secrets from [setup](docs/setup.md); and an authenticated `gh` session with the required access to all three repositories. `GH_TOKEN` acts as the testing owner. `CSM_CI_ACTIONS_TOKEN`, when set, handles the actions repository's branch and lock; otherwise the harness uses `GH_TOKEN` for both. Credential provisioning is an operator task.
 
-Run one feature suite at a time, then smoke:
+Run one invocation at a time, then smoke. One invocation can run several features together; their concurrent scenarios overlap and their serial scenarios run alone:
 
 ```sh
 GH_TOKEN=$(gh auth token) bun e2e/run.ts --ref <full-sha> --feature repo-settings
+GH_TOKEN=$(gh auth token) bun e2e/run.ts --ref <full-sha> --feature approve,merge,policy-check
 GH_TOKEN=$(gh auth token) bun e2e/run.ts --ref <full-sha> --feature smoke
 ```
 

@@ -50,7 +50,7 @@ GH_TOKEN=$(gh auth token) bun e2e/run.ts --ref <full-head-sha> --feature smoke
 ```
 
 - The harness writes to `testing-csm-ci-client`, `testing-csm-ci-server`, and this repository's `e2e` ref. Production repositories are not test fixtures.
-- Run one feature suite at a time. Scenarios within a suite may run concurrently. Wait for completion before dispatching another CI suite, because a newer pending run can replace an older one.
+- Run one harness invocation at a time. An invocation may list several features, such as `--feature approve,merge,policy-check`; their concurrent scenarios overlap and serial scenarios run alone. Wait for completion before dispatching another CI suite, because a newer pending run can replace an older one.
 - Use `--scenario <substring>` while iterating, then run the full affected feature. The `release-prepare` client action belongs to the `release-pr` suite.
 - Local runs skip scenarios requiring the second identity. Record those skips. Run the affected suites and smoke through `e2e.yml` on `main` against the merged SHA after an authorized merge. Keep the runner checkout on `main` so candidate code cannot receive the privileged e2e environment.
 - Before removing a stale `e2e-lock`, confirm ownership and that the harness and its dispatched workflows have stopped. Inspect cleanup diagnostics, restore only owned test state, and close owned leftover `e2e-*` PRs and branches. Never delete a ruleset by name alone or reset an unverified managed branch.
