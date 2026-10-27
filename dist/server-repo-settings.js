@@ -29665,6 +29665,9 @@ function handlePipeResult(left, next, ctx) {
   }
   return next._zod.run({ value: left.value, issues: left.issues }, ctx);
 }
+var $ZodPreprocess = /* @__PURE__ */ $constructor("$ZodPreprocess", (inst, def) => {
+  $ZodPipe.init(inst, def);
+});
 var $ZodReadonly = /* @__PURE__ */ $constructor("$ZodReadonly", (inst, def) => {
   $ZodType.init(inst, def);
   defineLazyInternal(inst, "propValues", (zod) => zod.def.innerType._zod.propValues);
@@ -32595,6 +32598,10 @@ function pipe(in_, out) {
     out
   });
 }
+var ZodPreprocess = /* @__PURE__ */ $constructor("ZodPreprocess", (inst, def) => {
+  ZodPipe.init(inst, def);
+  $ZodPreprocess.init(inst, def);
+});
 var ZodReadonly = /* @__PURE__ */ $constructor("ZodReadonly", (inst, def) => {
   $ZodReadonly.init(inst, def);
   ZodType.init(inst, def);
@@ -32617,6 +32624,13 @@ function refine(fn, _params = {}) {
 }
 function superRefine(fn, params) {
   return _superRefine(fn, params);
+}
+function preprocess(fn, schema) {
+  return new ZodPreprocess({
+    type: "pipe",
+    in: transform(fn),
+    out: schema
+  });
 }
 // src/lib/config.ts
 var Id = number2().int().positive();
@@ -32677,12 +32691,17 @@ var Sponsorships = strictObject({
   enabled: boolean2(),
   github: array(string2().regex(/^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/u, "must be a GitHub recipient login").max(39).transform((login) => login.toLowerCase())).min(1).max(4).refine((logins) => new Set(logins).size === logins.length, "duplicate GitHub recipient login").optional()
 });
-function repoSettingsManagedFiles(settings) {
+function repoSettingsManagedFiles(settings, files = {}) {
   const recipients = settings?.sponsorships?.github;
-  return { ...settings?.managed_files, ...recipients ? { ".github/FUNDING.yml": `github: [${recipients.map((login) => JSON.stringify(login)).join(", ")}]
+  return { ...files, ...recipients ? { ".github/FUNDING.yml": `github: [${recipients.map((login) => JSON.stringify(login)).join(", ")}]
 ` } : {} };
 }
-var RepoSettings = strictObject({
+var RepoSettings = preprocess((input, ctx) => {
+  if (typeof input === "object" && input !== null && Object.hasOwn(input, "managed_files")) {
+    ctx.addIssue({ code: "custom", message: "managed_files was removed: commit inline contents as Server source files and replace the key with repo_settings.additional_managed_files" });
+  }
+  return input;
+}, strictObject({
   sponsorships: Sponsorships.optional(),
   settings: strictObject({
     delete_branch_on_merge: boolean2().optional(),
@@ -32694,36 +32713,30 @@ var RepoSettings = strictObject({
     has_projects: boolean2().optional(),
     allow_update_branch: boolean2().optional()
   }).optional(),
-  managed_files: record(string2(), string2()).default({})
+  additional_managed_files: record(string2(), string2()).default({})
 }).superRefine((value, ctx) => {
-  if (value.sponsorships?.github && Object.hasOwn(value.managed_files, ".github/FUNDING.yml")) {
-    ctx.addIssue({ code: "custom", path: ["managed_files", ".github/FUNDING.yml"], message: "destination is reserved by sponsorships.github" });
+  if (value.sponsorships?.github && Object.hasOwn(value.additional_managed_files, ".github/FUNDING.yml")) {
+    ctx.addIssue({ code: "custom", path: ["additional_managed_files", ".github/FUNDING.yml"], message: "destination is reserved by sponsorships.github" });
   }
-  const files = repoSettingsManagedFiles(value);
+  const files = repoSettingsManagedFiles(value, value.additional_managed_files);
   const paths = Object.keys(files);
   if (paths.length > 512)
-    ctx.addIssue({ code: "custom", path: ["managed_files"], message: "must contain at most 512 files" });
-  let totalBytes = 0;
+    ctx.addIssue({ code: "custom", path: ["additional_managed_files"], message: "must contain at most 512 files" });
   for (const path of paths) {
-    const content = files[path] ?? "";
-    const bytes = new TextEncoder().encode(content).byteLength;
-    totalBytes += bytes;
     if (!isSafeManagedFilePath(path)) {
-      ctx.addIssue({ code: "custom", path: ["managed_files", path], message: "must be a safe literal relative file path" });
-    }
-    if (bytes > 8 * 1024 * 1024) {
-      ctx.addIssue({ code: "custom", path: ["managed_files", path], message: "file must be at most 8 MiB" });
+      ctx.addIssue({ code: "custom", path: ["additional_managed_files", path], message: "must be a safe literal relative file path" });
     }
   }
-  if (totalBytes > 10 * 1024 * 1024) {
-    ctx.addIssue({ code: "custom", path: ["managed_files"], message: "total file content must be at most 10 MiB" });
+  for (const source of Object.values(value.additional_managed_files)) {
+    if (!isSafeManagedFilePath(source))
+      ctx.addIssue({ code: "custom", path: ["additional_managed_files", source], message: "source must be a safe literal relative file path" });
   }
   for (const path of paths) {
     if (paths.some((other) => other !== path && other.startsWith(`${path}/`))) {
-      ctx.addIssue({ code: "custom", path: ["managed_files", path], message: "file paths must not contain a file as a directory prefix" });
+      ctx.addIssue({ code: "custom", path: ["additional_managed_files", path], message: "file paths must not contain a file as a directory prefix" });
     }
   }
-});
+}));
 function isSafeManagedFilePath(path) {
   return !/^[A-Za-z]:/u.test(path) && !path.includes("\\") && !/[\u0000-\u001f\u007f]/u.test(path) && !/[?*\[\]{}!()]/u.test(path) && path.split("/").every((segment) => segment !== "" && segment !== "." && segment !== ".." && segment.toLowerCase() !== ".git");
 }
@@ -32793,28 +32806,6 @@ function repositoryEntry(config, fullName) {
     return;
   return config.repositories.find((r) => import_picomatch.default.isMatch(name, r.name, { dot: true }));
 }
-
-// src/lib/request.ts
-var REQUEST_KINDS = {
-  approve: [["pull_number"], ["pull_number", "comment_id"]],
-  merge: [["pull_number", "comment_id"]],
-  "policy-check": [["pull_number"], ["pull_number", "comment_id"]],
-  securefix: [["run_id"]],
-  release: [["pull_number"]]
-};
-
-class Rejection extends Error {
-  name = "Rejection";
-}
-var LABEL_PREFIX = "csm-ci-";
-var KINDS = Object.keys(REQUEST_KINDS);
-var LABEL_NAME = new RegExp(`^${LABEL_PREFIX}(${KINDS.join("|")})-([a-z0-9]+)$`);
-var LabelEventSchema = object({
-  action: string2(),
-  repository: object({ id: number2(), full_name: string2() }),
-  label: object({ name: string2(), description: string2().nullable() }),
-  sender: object({ id: number2(), type: string2() })
-});
 
 // node_modules/universal-user-agent/index.js
 function getUserAgent() {
@@ -36775,6 +36766,28 @@ function legacyRestEndpointMethods(octokit) {
 }
 legacyRestEndpointMethods.VERSION = VERSION6;
 
+// src/lib/request.ts
+var REQUEST_KINDS = {
+  approve: [["pull_number"], ["pull_number", "comment_id"]],
+  merge: [["pull_number", "comment_id"]],
+  "policy-check": [["pull_number"], ["pull_number", "comment_id"]],
+  securefix: [["run_id"]],
+  release: [["pull_number"]]
+};
+
+class Rejection extends Error {
+  name = "Rejection";
+}
+var LABEL_PREFIX = "csm-ci-";
+var KINDS = Object.keys(REQUEST_KINDS);
+var LABEL_NAME = new RegExp(`^${LABEL_PREFIX}(${KINDS.join("|")})-([a-z0-9]+)$`);
+var LabelEventSchema = object({
+  action: string2(),
+  repository: object({ id: number2(), full_name: string2() }),
+  label: object({ name: string2(), description: string2().nullable() }),
+  sender: object({ id: number2(), type: string2() })
+});
+
 // src/lib/github.ts
 import { setTimeout as delay } from "node:timers/promises";
 var Octokit2 = Octokit.plugin(restEndpointMethods, paginateRest);
@@ -37171,6 +37184,8 @@ async function readFileAtRef(gh, owner, repo, path, ref) {
 async function findTreeEntry(gh, owner, repo, path, ref) {
   const { data: commit } = await gh.rest.repos.getCommit({ owner, repo, ref });
   let treeSha = commit.commit.tree.sha;
+  if (!treeSha)
+    throw new Rejection("managed files commit has no Git tree SHA");
   const segments = path.split("/");
   for (const [index, segment] of segments.entries()) {
     const { data: tree } = await gh.rest.git.getTree({ owner, repo, tree_sha: treeSha });
@@ -37287,6 +37302,34 @@ async function ensurePullRequest(gh, inspection, headSha) {
     return;
   const { data } = await gh.rest.pulls.create({ owner, repo, title: PULL_TITLE, body: PULL_BODY, head: BRANCH, base: inspection.defaultBranch });
   return data.number;
+}
+
+// src/lib/additional-managed-files.ts
+async function loadAdditionalManagedFiles(gh, input) {
+  const files = [];
+  const address = splitRepository(input.repository);
+  for (const [destination, source] of Object.entries(input.settings?.additional_managed_files ?? {})) {
+    validateManagedPath(destination);
+    validateManagedPath(source);
+    const entry = await findTreeEntry(gh, address.owner, address.repo, source, input.sha);
+    if (!entry?.sha)
+      throw new Rejection(`additional managed source ${JSON.stringify(source)} is missing`);
+    const { data } = await gh.rest.git.getBlob({ ...address, file_sha: entry.sha });
+    if (data.encoding !== "base64" || typeof data.content !== "string")
+      throw new Rejection(`additional managed source ${JSON.stringify(source)} has malformed or unsupported Git blob encoding`);
+    const encoded = data.content.replaceAll(`
+`, "");
+    const bytes = Buffer.from(encoded, "base64");
+    if (bytes.toString("base64") !== encoded)
+      throw new Rejection(`additional managed source ${JSON.stringify(source)} has malformed or unsupported Git blob encoding`);
+    try {
+      files.push([destination, new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes)]);
+    } catch {
+      throw new Rejection(`additional managed source ${JSON.stringify(source)} is not UTF-8`);
+    }
+    validateManagedFiles(repoSettingsManagedFiles(input.settings, Object.fromEntries(files)));
+  }
+  return repoSettingsManagedFiles(input.settings, Object.fromEntries(files));
 }
 
 // src/lib/repo-settings.ts
@@ -37761,7 +37804,7 @@ async function main() {
   }
   if (mode === "managed-inspect" || mode === "managed-apply") {
     const { data: repo } = await readGH.rest.repos.get(address);
-    const files = repoSettingsManagedFiles(config.repo_settings);
+    const files = await loadAdditionalManagedFiles(configGH, { repository: serverRepository, sha: env("GITHUB_SHA"), settings: config.repo_settings });
     if (mode === "managed-inspect") {
       const result = await inspectManagedFiles(readGH, { repository: target.name, defaultBranch: repo.default_branch, serverBotId: config.apps.server_bot_id, files });
       setOutput("result", result.status);
