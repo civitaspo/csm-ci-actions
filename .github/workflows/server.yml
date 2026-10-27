@@ -57,8 +57,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 70
     environment: csm-ci
-    # Keyed on the operation kind and the normalized repository and number from intake, so spelling variants share a group
-    # and a waiting /merge does not block /approve or policy-check on the same pull request.
+    # Keyed on the normalized repository and number from intake, so spelling variants share a group. /approve and policy-check
+    # share it because both publish policy checks and reports for the pull request; other kinds, such as a waiting /merge,
+    # keep their own key so they never block publication on the same pull request.
     concurrency:
       group: csm-ci-${{ needs.intake.outputs.concurrency-key }}
       cancel-in-progress: false

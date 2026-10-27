@@ -95,9 +95,11 @@ describe("concurrencyKey", () => {
     expect(concurrencyKey(parseLabel("csm-ci-merge-a", "Owner/Repo/5/6"))).toBe("merge-owner/repo#5");
     expect(concurrencyKey(parseLabel("csm-ci-securefix-a", "owner/repo/9"))).toBe("securefix-owner/repo#9");
   });
-  test("separates different kinds on one pull request and keeps the same kind together", () => {
+  test("serializes publishing kinds on one pull request and separates merge", () => {
     const merge = concurrencyKey(parseLabel("csm-ci-merge-a", "owner/repo/5/6"));
-    expect(concurrencyKey(parseLabel("csm-ci-approve-b", "owner/repo/5/7"))).not.toBe(merge);
+    const approve = concurrencyKey(parseLabel("csm-ci-approve-b", "owner/repo/5/7"));
+    expect(approve).not.toBe(merge);
+    expect(concurrencyKey(parseLabel("csm-ci-policy-check-c", "Owner/Repo/5"))).toBe(approve);
     expect(concurrencyKey(parseLabel("csm-ci-merge-c", "Owner/Repo/5/8"))).toBe(merge);
   });
 });

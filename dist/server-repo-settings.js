@@ -32924,6 +32924,7 @@ var LabelEventSchema = object({
   label: object({ name: string2(), description: string2().nullable() }),
   sender: object({ id: number2(), type: string2() })
 });
+var PUBLISHING_KINDS = new Set(["approve", "policy-check"]);
 
 // src/lib/workflow-release.ts
 var address = { owner: "civitaspo", repo: "csm-ci-actions" };
