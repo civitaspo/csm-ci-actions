@@ -18,6 +18,7 @@ import {
   smokeRequest,
   until,
   type Ctx,
+  closePr,
 } from "./harness.ts";
 
 const SERVER_APP_ID = 5455185;
@@ -72,8 +73,8 @@ async function openPolicyPr(ctx: Ctx, kind: "signed" | "unsigned", sensitive = f
 
 async function closePolicyPr(ctx: Ctx, pr: Pr): Promise<void> {
   const { data } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
-  await ctx.gh.rest.pulls.update({ ...splitRepository(CLIENT), pull_number: pr.number, state: "closed" });
-  await ctx.gh.rest.git.deleteRef({ ...splitRepository(CLIENT), ref: `heads/${data.head.ref}` });
+  // A PR reset to main counts as merged, so GitHub may already have deleted its branch.
+  await closePr(ctx, { ...pr, branch: data.head.ref });
 }
 
 async function withPolicyPr(ctx: Ctx, kind: "signed" | "unsigned", sensitive: boolean, fn: (pr: Pr, check: PolicyCheck) => Promise<void>, prAs?: Ctx["untrusted"]): Promise<void> {
