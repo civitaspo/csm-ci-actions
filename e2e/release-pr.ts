@@ -165,7 +165,7 @@ export const releasePr: Scenario[] = [
           {
             "operation": "release-pr",
             "outcome": "permitted",
-            "expected": "Generation creates one PR; repeated generation refreshes metadata without changing its exact generated commit"
+            "expected": "Generation creates one PR; repeated generation refreshes metadata without changing its exact generated commit; a new version rebuilds the branch and keeps the same open PR"
           }
         ],
         identity: [
@@ -184,6 +184,12 @@ export const releasePr: Scenario[] = [
       const repeated = await dispatch(ctx, CLIENT, "csm-ci-release-pr.yml", { version });
       const updated = await expectReleasePr(ctx, repeated, ids, version);
       assert(updated.number === pr.number && updated.head.sha === pr.head.sha, "repeated generation replaced the PR or changed its exact generated commit");
+      const nextVersion = `1.1.${Date.now()}`;
+      const rebuilt = await dispatch(ctx, CLIENT, "csm-ci-release-pr.yml", { version: nextVersion });
+      const rebuiltPr = await expectReleasePr(ctx, rebuilt, ids, nextVersion);
+      assert(rebuiltPr.number === pr.number && rebuiltPr.head.sha !== pr.head.sha, "rebuilding the release branch replaced the PR or kept the previous commit");
+      const { data: current } = await ctx.gh.rest.pulls.get({ ...repo, pull_number: pr.number });
+      assert(current.state === "open" && !current.merged && current.head.sha === rebuiltPr.head.sha, "rebuilding the release branch closed the PR or left it on another commit");
     }),
   },
   {
