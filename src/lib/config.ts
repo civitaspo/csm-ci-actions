@@ -137,7 +137,6 @@ const RepositoryEntry = z.strictObject({
   release: ReleaseSchema.optional(),
   release_prepare: z.strictObject({ update_root_version: z.boolean().optional() }).optional(),
   // Removed key: reject it explicitly so older configurations fail with an actionable message.
-  workflow_adoption: z.never({ error: "workflow_adoption was removed; selected standard callers are always regenerated, so delete this key" }).optional(),
   sensitive_paths: z.strictObject({ paths: z.array(z.string().min(1)).optional(), exempt: z.array(Principal).optional() }).optional(),
   merge: z.strictObject({ allow_bot_requests: z.boolean().optional() }).optional(),
 }).superRefine((entry, ctx) => {

@@ -32743,7 +32743,6 @@ var RepositoryEntry = strictObject({
   ops: array(_enum(OPS)).refine((ops) => new Set(ops).size === ops.length, "duplicate op"),
   release: ReleaseSchema.optional(),
   release_prepare: strictObject({ update_root_version: boolean2().optional() }).optional(),
-  workflow_adoption: never({ error: "workflow_adoption was removed; selected standard callers are always regenerated, so delete this key" }).optional(),
   sensitive_paths: strictObject({ paths: array(string2().min(1)).optional(), exempt: array(Principal).optional() }).optional(),
   merge: strictObject({ allow_bot_requests: boolean2().optional() }).optional()
 }).superRefine((entry, ctx) => {

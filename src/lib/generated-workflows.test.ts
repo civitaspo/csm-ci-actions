@@ -55,7 +55,6 @@ test.each([
   ["nonboolean input", ["securefix"], { release_prepare: { update_root_version: "false" } }, {}, "expected boolean"],
   ["conflicting branch", ["securefix"], {}, { to: "release/custom" }, "release-pr route must use release/next"],
   ["conflicting workflow", ["securefix"], {}, { workflow: ".github/workflows/custom.yml" }, "release-pr route must use release/next"],
-  ["removed adoption key", ["merge"], { workflow_adoption: { [callerPath("merge")]: "a".repeat(64) } }, {}, "workflow_adoption was removed; selected standard callers are always regenerated, so delete this key"],
 ] satisfies [string, Op[], object, object, string][]) ("rejects %s", (_name, ops, extra, routeExtra, message) => {
   expect(() => candidate(ops, extra, routeExtra)).toThrow(message);
 });
