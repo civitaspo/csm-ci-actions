@@ -49,7 +49,7 @@ Generation runs whenever the `managed-files` target is selected and `repo_settin
 | `policy-check` | `csm-ci-policy-check.yml` | `client-policy-check.yml` | `pull_request_target`: opened, synchronize, reopened, ready_for_review, edited | No inputs or job condition; empty permissions |
 | `merge` | `csm-ci-merge.yml` | `client-merge.yml` | `issue_comment`: created | No inputs or job condition; empty permissions |
 | `release` | `csm-ci-release.yml` | `client-release-publish.yml` | `pull_request`: closed | No inputs or job condition; empty permissions |
-| `securefix` and canonical `release-pr` route | `csm-ci-release-pr.yml` | `client-release-prepare.yml` | Push to the actual default branch; manual dispatch | `version`, `update-root-version`; `contents: read` |
+| `securefix` and canonical `release-pr` route | `csm-ci-release-pr.yml` | `client-release-prepare.yml` | Push to the actual default branch; manual dispatch | `version`, optional `version-files`; `contents: read` |
 
 Workflow names are `csm-ci-approve`, `csm-ci-policy-check`, `csm-ci-merge`, `csm-ci-release`, and `csm-ci-release-pr`. Job names are `approve`, `policy-check`, `merge`, `release`, and `release-pr`. Every caller sets top-level `permissions: {}` and maps only `CSM_CI_CLIENT_APP_PRIVATE_KEY` to `${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}` under the same name. No generated caller uses inheritance. Existing Naming-list variables remain unchanged. Do not add request-cancelling concurrency or duplicate the reusable workflows' client prefilters.
 
@@ -64,17 +64,17 @@ Preparation and publication remain independent:
 | Both selections | Prepare and publish |
 | Neither selection | Neither |
 
-The optional strict repository object `release_prepare` has one optional boolean, `update_root_version`, defaulting to `true`. Omission of the object has the same default. Unknown keys, non-booleans, or an explicit object without selected preparation fail validation. It is independent of `release` build settings, so a prepare-only repository needs no publication configuration.
+The optional strict repository object `release_prepare` has one optional list, `version_files`, of literal root-relative paths that [release preparation](release-pr.md#generated-files) rewrites. Omission keeps the default file set. An empty list updates only `.release-version` and `CHANGELOG.md`. Validation rejects unknown keys, an explicit object without selected preparation, a path outside `package.json`, `Cargo.toml`, `Cargo.lock`, `pyproject.toml`, `dbt_project.yml` and `herdr-plugin.toml`, a duplicate path, and `Cargo.lock` without `Cargo.toml`. It also rejects a listed path whose first matching rule in the canonical `release-pr` route is not `version-only`, so generation never requests an edit securefix would refuse. The setting is independent of `release` build settings, so a prepare-only repository needs no publication configuration.
 
 ```yaml
 repositories:
-  - name: owner/prepare-only
+  - name: owner/herdr-plugin
     ops: [securefix]
     release_prepare:
-      update_root_version: false
+      version_files: [Cargo.toml, Cargo.lock, herdr-plugin.toml]
 ```
 
-The prepare caller declares an optional string dispatch input `version`, default `""`, described as an optional semantic version without a `v` prefix. It passes `${{ inputs.version || '' }}` and the effective boolean to `version` and `update-root-version`. Version inference and generation remain in the reusable workflow. Do not persist a fixed version in Server configuration.
+The prepare caller declares an optional string dispatch input `version`, default `""`, described as an optional semantic version without a `v` prefix. It passes `${{ inputs.version || '' }}` to `version`. When `version_files` is configured, it also passes the list as a compact JSON string to `version-files`, for example `'["Cargo.toml","Cargo.lock"]'`; otherwise it omits that input. Version inference and generation remain in the reusable workflow. Do not persist a fixed version in Server configuration.
 
 The prepare job runs on manual dispatch or on pushes whose head commit message starts with neither `chore(release): v` nor `release-pr: chore(release): v`. This standardizes the existing release-commit push suppression and prevents the generator from removing it during takeover. Its job condition is:
 
@@ -91,7 +91,7 @@ Repository-specific securefix CI remains operator-owned. This feature generates 
 
 Discovery resolves the latest published stable release of fixed `civitaspo/csm-ci-actions` once per distribution run. Exclude drafts and prereleases. Validate release metadata, resolve its tag reference, and dereference annotated tags with a finite bound and cycle rejection until a full commit SHA is obtained. Reject missing or malformed metadata, missing tags, non-commit targets, excessive tag depth, and API failures. Do not use `target_commitish` alone as the resolved commit proof.
 
-Validate every reusable workflow required by the union of selected repositories at that commit before workflow-file writes. Parse their `workflow_call` contracts, not just file existence. Require the selected input names and types, compatible defaults and required inputs, the exact required Client App Secret declaration without additional required credentials, compatible workflow permissions, and the defining action-lock support required by their local composite calls. The prepare contract must accept the string `version` and boolean `update-root-version`. An incompatible release fails the run. There is no fallback to main, a tag pin, an older release, or the currently installed caller SHA.
+Validate every reusable workflow required by the union of selected repositories at that commit before workflow-file writes. Parse their `workflow_call` contracts, not just file existence. Require the selected input names and types, compatible defaults and required inputs, the exact required Client App Secret declaration without additional required credentials, compatible workflow permissions, and the defining action-lock support required by their local composite calls. The prepare contract must accept the optional strings `version` and `version-files`, both defaulting to `""`. An incompatible release fails the run. There is no fallback to main, a tag pin, an older release, or the currently installed caller SHA.
 
 Pass the validated version and full SHA through trusted discovery outputs to every target and both managed inspection and apply. Those stages consume the same result without independently resolving latest. Revalidate mutable target state before writes while retaining that resolved revision. A release published midway through a run affects only the next run. Include the version and full SHA in every proposed managed PR body and the deterministic generated header line in each caller.
 
@@ -115,7 +115,7 @@ Every change goes through the reviewed managed-file PR. Its normal review, CI, a
 
 Inventory existing caller bytes, default heads, explicit release inputs, parser pins, and outstanding managed branches before rollout. Drain old configuration-writing runs. Upgrade all Server parser pins to a compatible verified runtime before adding new strict fields. Verify workflow merges are supported by the deployed merger; any bootstrap recovery follows its separate authorization.
 
-In one reviewed Server configuration PR, select the operations and remove literal or additional entries that collide with selected callers. Preserve `update_root_version: false` where required. The next run proposes generated replacements for every selected caller whose bytes differ. Review that PR like any other workflow change before merging it.
+In one reviewed Server configuration PR, select the operations and remove literal or additional entries that collide with selected callers. Configure `version_files` where a repository needs a file set other than the default. The next run proposes generated replacements for every selected caller whose bytes differ. Review that PR like any other workflow change before merging it.
 
 An outstanding branch whose full signed history still changes an unmanaged literal path is rejected. Verify the exact owned PR, branch, and stopped writers before closing that PR and deleting only its owned branch under the existing recovery procedure. Then regenerate from current default. Do not reset an unverified branch, allow every reserved path, or require unrelated managed PRs to merge.
 

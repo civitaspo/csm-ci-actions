@@ -16,11 +16,11 @@ on:
         description: Optional semantic version without a v prefix.
         type: string
         required: false
-      update-root-version:
-        description: Update root manifests during release preparation.
-        type: boolean
+      version-files:
+        description: Optional JSON array of root version files to update.
+        type: string
         required: false
-        default: true
+        default: ""
 permissions: {}
 jobs:
   release-pr:
@@ -31,6 +31,6 @@ jobs:
     uses: civitaspo/csm-ci-actions/.github/workflows/client-release-prepare.yml@e2e
     with:
       version: ${{ inputs.version || '' }}
-      update-root-version: ${{ github.event_name != 'workflow_dispatch' || inputs.update-root-version }}
+      version-files: ${{ inputs.version-files || '' }}
     secrets:
       CSM_CI_CLIENT_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}

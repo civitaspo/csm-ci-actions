@@ -45,11 +45,28 @@ A pinned digest proves that the job runs the bytes reviewers pinned. It does not
 
 ## Generated files
 
-The preparation action writes `.release-version` and `CHANGELOG.md`. It updates existing root version fields in `package.json`, `Cargo.toml` (`[package]`), `pyproject.toml` (`[project]`), and `dbt_project.yml` (root `version`). When Cargo has a lockfile, it updates only the root package's version in `Cargo.lock`. A repository without these manifests still gets the release version and changelog.
+The preparation action writes `.release-version` and `CHANGELOG.md`. It updates the root version fields of the selected version files:
 
-For repositories whose release version comes only from `.release-version`, pass `update-root-version: false` to the action or reusable workflow. Preparation then leaves every manifest and lockfile untouched and generates only `.release-version` and `CHANGELOG.md`. Omitted or `true` preserves the default manifest updates. This option does not run client version-sync scripts.
+| File | Updated version |
+|---|---|
+| `package.json` | Root `version` |
+| `Cargo.toml` | `version` in `[package]` |
+| `Cargo.lock` | The root package entry named by `Cargo.toml` |
+| `pyproject.toml` | `version` in `[project]` |
+| `dbt_project.yml` | Root `version` |
+| `herdr-plugin.toml` | Root-table `version` |
+
+The action and reusable workflow accept an optional `version-files` input, a JSON array of these literal root-relative paths:
+
+- Empty or omitted: update every existing file in the table except `herdr-plugin.toml`. `Cargo.lock` is updated only with an existing `Cargo.toml`. This is the behavior of callers that predate the input. A repository without these manifests still gets the release version and changelog.
+- A list such as `["Cargo.toml","Cargo.lock","herdr-plugin.toml"]`: update exactly those files. Generation fails before any write when the input is not a JSON array of strings, or a listed path is unsupported, duplicated or absent, or `Cargo.lock` is listed without `Cargo.toml`.
+- `[]`: leave every manifest and lockfile untouched and generate only `.release-version` and `CHANGELOG.md`.
+
+The input does not run client version-sync scripts. Every listed file must be `version-only` in the server's `release-pr` route.
 
 Version edits preserve the other file contents. Existing manifests must have an unambiguous supported root version field. Dependency versions, lockfile dependencies, and nested workspace packages are not bumped. TOML manifests containing triple-quoted strings are rejected because their contents can resemble table headers or version fields. Unsupported or ambiguous files fail generation before a request is sent. The server independently enforces the route's line-level `version-only` rule, so JSON version fields must occupy their own line.
+
+For `herdr-plugin.toml`, the root table, before the first table header, must have exactly one single-line `version` string containing valid SemVer. Every other top-level statement must be a table header or a key/value pair, with terminated strings and balanced brackets. This check is conservative and is not a complete TOML parser. Comments, quoting, line endings, table contents and nested version fields are preserved.
 
 For dbt, the YAML must have unique keys and one string root version containing valid SemVer. The version must occupy a single block-mapping line using `version` or `"version"` as the key and a plain, single-quoted or double-quoted value. Flow mappings, aliases, anchors, tags and escaped version text are unsupported. Validation finishes before any manifest, release version or changelog is written. Comments, quoting, line endings and nested version fields are preserved.
 
@@ -91,4 +108,4 @@ See [setup](setup.md) for the default-branch push and manual-dispatch caller. Pi
 
 ## Planned standard caller generation
 
-The [repo-settings generator](repo-settings.md#standard-client-workflows-planned) selects preparation through `securefix` and the canonical `release-pr` route, independently of publication permission. Its `repositories[].release_prepare.update_root_version` boolean defaults to `true` and passes the existing `update-root-version` input. It uses the actual default branch and retains release-commit push suppression. Manual `version` remains a dispatch input. This requires deployment of the generator runtime and a compatible intended stable release. Existing callers remain operator-maintained until their exact bytes are adopted through the reviewed migration.
+The [repo-settings generator](repo-settings.md#standard-client-workflows-planned) selects preparation through `securefix` and the canonical `release-pr` route, independently of publication permission. Its optional `repositories[].release_prepare.version_files` list passes the `version-files` input; omission keeps the default file set. It uses the actual default branch and retains release-commit push suppression. Manual `version` remains a dispatch input. This requires deployment of the generator runtime and a compatible intended stable release. Existing callers remain operator-maintained until their exact bytes are adopted through the reviewed migration.

@@ -33,6 +33,7 @@ export function generateWorkflows(config: Config, repository: string, defaultBra
   const entry = repositoryEntry(config, repository);
   return Object.fromEntries(selectedCallers(config, repository).map((caller) => {
     const prepare = caller === "release-pr";
+    const files = entry?.release_prepare?.version_files;
     const events = caller === "approve"
       ? { pull_request_target: { types: ["opened", "synchronize", "reopened", "ready_for_review"] }, issue_comment: { types: ["created"] } }
       : caller === "policy-check" ? { pull_request_target: { types: ["opened", "synchronize", "reopened", "ready_for_review", "edited"] } }
@@ -43,7 +44,7 @@ export function generateWorkflows(config: Config, repository: string, defaultBra
       ...(prepare ? { if: "github.event_name == 'workflow_dispatch' || (!startsWith(github.event.head_commit.message, 'chore(release): v') && !startsWith(github.event.head_commit.message, 'release-pr: chore(release): v'))" } : {}),
       uses: `civitaspo/csm-ci-actions/.github/workflows/${STANDARD_CALLERS[caller]}@${release.sha}`,
       permissions: prepare ? { contents: "read" } : {},
-      ...(prepare ? { with: { version: "${{ inputs.version || '' }}", "update-root-version": entry?.release_prepare?.update_root_version ?? true } } : {}),
+      ...(prepare ? { with: { version: "${{ inputs.version || '' }}", ...(files ? { "version-files": JSON.stringify(files) } : {}) } } : {}),
       secrets: { CSM_CI_CLIENT_APP_PRIVATE_KEY: "${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}" },
     };
     const body = stringify({ name: `csm-ci-${caller}`, on: events, permissions: {}, jobs: { [caller]: job } }, { lineWidth: 0 });

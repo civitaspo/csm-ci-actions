@@ -46,7 +46,13 @@ test("prepares root versions while preserving every unrelated byte", async () =>
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test.each([false, true, undefined])("root version updates respect updateRootVersion=%s", async (updateRootVersion) => {
+const versionFileCases: Array<[string, string[] | undefined, string[]]> = [
+  ["omitted list updates every default manifest", undefined, ["package.json", "Cargo.toml", "Cargo.lock", "pyproject.toml", "dbt_project.yml"]],
+  ["empty list updates no manifest", [], []],
+  ["explicit list updates exactly the listed files", ["Cargo.toml", "Cargo.lock", "herdr-plugin.toml"], ["Cargo.toml", "Cargo.lock", "herdr-plugin.toml"]],
+  ["Cargo.toml alone leaves the lockfile", ["Cargo.toml"], ["Cargo.toml"]],
+];
+test.each(versionFileCases)("version files: %s", async (_name, versionFiles, updated) => {
   const root = await workspace();
   const originals = {
     "package.json": '{\n  "version": "0.1.0"\n}\n',
@@ -58,22 +64,22 @@ test.each([false, true, undefined])("root version updates respect updateRootVers
   };
   try {
     for (const [path, content] of Object.entries(originals)) await writeFile(join(root, path), content);
-    await prepareRelease({ workspace: root, version: "2.0.0", gitCliff: join(root, "git-cliff"), ...(updateRootVersion === undefined ? {} : { updateRootVersion }) });
+    await prepareRelease({ workspace: root, version: "2.0.0", gitCliff: join(root, "git-cliff"), ...(versionFiles === undefined ? {} : { versionFiles }) });
     for (const [path, content] of Object.entries(originals)) {
-      expect(await readFile(join(root, path), "utf8")).toBe(updateRootVersion === false || path === "herdr-plugin.toml" ? content : content.replace("0.1.0", "2.0.0"));
+      expect(await readFile(join(root, path), "utf8")).toBe(updated.includes(path) ? content.replace("0.1.0", "2.0.0") : content);
     }
     expect(await readFile(join(root, ".release-version"), "utf8")).toBe("2.0.0\n");
     expect(await readFile(join(root, "CHANGELOG.md"), "utf8")).toBe("generated\n");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("disabled root updates leave unsupported manifests and linked lockfiles untouched", async () => {
+test("an empty version file list leaves unsupported manifests and linked lockfiles untouched", async () => {
   const root = await workspace();
   try {
     await writeFile(join(root, "Cargo.toml"), "intentionally unsupported manifest\n");
     await writeFile(join(root, "untouched.lock"), "fixed lock\n");
     await symlink("untouched.lock", join(root, "Cargo.lock"));
-    await prepareRelease({ workspace: root, version: "2.0.0", updateRootVersion: false, gitCliff: join(root, "git-cliff") });
+    await prepareRelease({ workspace: root, version: "2.0.0", versionFiles: [], gitCliff: join(root, "git-cliff") });
     expect(await readFile(join(root, "Cargo.toml"), "utf8")).toBe("intentionally unsupported manifest\n");
     expect(await readFile(join(root, "Cargo.lock"), "utf8")).toBe("fixed lock\n");
   } finally { await rm(root, { recursive: true, force: true }); }
@@ -134,8 +140,41 @@ const dbtRejections = [
   { name: "tagged dbt version", text: "version: !!str 1.0.0\n", error: "dbt_project.yml root version must occupy its own supported version line" },
   { name: "escaped dbt version", text: 'version: "1.\\u0030.0"\n', error: "dbt_project.yml root version must occupy its own supported version line" },
 ];
+const herdrPlugin = 'id = "plugin"\r\nversion = "0.1.0" # root\r\nplatforms = [\r\n  "macos", # first\r\n  "linux",\r\n]\r\n\r\n[[actions]]\r\nid = "login"\r\nversion = "9.0.0"\r\npattern = "^https://x\\\\.y/[a-z]+"\r\n';
+test("prepares only the root herdr-plugin.toml version while preserving every other byte", async () => {
+  const root = await workspace();
+  try {
+    await writeFile(join(root, "herdr-plugin.toml"), herdrPlugin);
+    await prepareRelease({ workspace: root, version: "2.0.0", versionFiles: ["herdr-plugin.toml"], gitCliff: join(root, "git-cliff") });
+    expect(await readFile(join(root, "herdr-plugin.toml"), "utf8")).toBe(herdrPlugin.replace('"0.1.0"', '"2.0.0"'));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+const releaseFiles = { "Cargo.toml": '[package]\nname="x"\nversion="1.0.0"\n', ".release-version": "1.0.0\n", "CHANGELOG.md": "existing changelog\n" };
+const herdrRejections = [
+  { name: "missing herdr root version", text: 'id = "x"\n[[actions]]\nversion = "1.0.0"\n', error: "herdr-plugin.toml must have exactly one version in the root table" },
+  { name: "duplicate herdr root version", text: 'version = "1.0.0"\nversion = "1.0.0"\n', error: "herdr-plugin.toml must have exactly one version in the root table" },
+  { name: "invalid herdr SemVer", text: 'version = "1.0"\n', error: "herdr-plugin.toml has an invalid version in the root table" },
+  { name: "unsupported herdr version value", text: "version = 1\n", error: "herdr-plugin.toml has an unsupported version value in the root table" },
+  { name: "herdr multiline string", text: 'version = "1.0.0"\ndescription = """\nx\n"""\n', error: "herdr-plugin.toml multiline TOML strings are not supported" },
+  { name: "unterminated herdr string", text: 'version = "1.0.0"\nid = "x\n', error: "herdr-plugin.toml is not valid TOML" },
+  { name: "herdr string unterminated at end of file", text: 'version = "1.0.0"\nid = "x', error: "herdr-plugin.toml is not valid TOML" },
+  { name: "herdr single-line string spanning lines", text: 'version = "1.0.0"\nid = "a\nb"\n', error: "herdr-plugin.toml is not valid TOML" },
+  { name: "mismatched herdr brackets", text: 'version = "1.0.0"\nplatforms = ["macos"}\n', error: "herdr-plugin.toml is not valid TOML" },
+  { name: "unbalanced herdr array",text: 'version = "1.0.0"\nplatforms = ["macos"\n', error: "herdr-plugin.toml is not valid TOML" },
+  { name: "unterminated herdr table header", text: 'version = "1.0.0"\n[[actions]\nid = "x"\n', error: "herdr-plugin.toml is not valid TOML" },
+  { name: "herdr statement without a value", text: 'version = "1.0.0"\nid\n', error: "herdr-plugin.toml is not valid TOML" },
+];
 const invalidFiles = ["package.json", "Cargo.toml", "Cargo.lock", "pyproject.toml", "dbt_project.yml", ".release-version", "CHANGELOG.md"];
-const rejections: Array<{ name: string; files?: Record<string, string>; version?: string; error: string; workspaceKind?: "missing" | "file" | "symlink" }> = [
+const rejections: Array<{ name: string; files?: Record<string, string>; version?: string; versionFiles?: string[]; error: string; workspaceKind?: "missing" | "file" | "symlink" }> = [
+  { name: "unsupported version file", version: "1.2.3", versionFiles: ["README.md"], files: { "README.md": 'version = "1.0.0"\n' }, error: 'version file "README.md" is not supported' },
+  { name: "nested version file path", version: "1.2.3", versionFiles: ["sub/Cargo.toml"], error: 'version file "sub/Cargo.toml" is not supported' },
+  { name: "duplicate version file", version: "1.2.3", versionFiles: ["Cargo.toml", "Cargo.toml"], files: releaseFiles, error: 'version file "Cargo.toml" is listed more than once' },
+  { name: "Cargo.lock without Cargo.toml", version: "1.2.3", versionFiles: ["Cargo.lock"], files: { "Cargo.lock": '[[package]]\nname="x"\nversion="1.0.0"\n' }, error: 'version file "Cargo.lock" requires "Cargo.toml"' },
+  { name: "absent version file", version: "1.2.3", versionFiles: ["Cargo.toml", "herdr-plugin.toml"], files: releaseFiles, error: 'version file "herdr-plugin.toml" does not exist' },
+  { name: "listed version file is a symlink", version: "1.2.3", versionFiles: ["herdr-plugin.toml"], files: { "symlink:herdr-plugin.toml": "outside" }, error: "herdr-plugin.toml must be a regular file" },
+  { name: "listed manifest lacks a root version", version: "1.2.3", versionFiles: ["package.json"], files: { "package.json": '{\n  "name": "x"\n}\n' }, error: "package.json must have one string root version" },
+  ...herdrRejections.map(({ name, text, error }) => ({ name, error, version: "1.2.3", versionFiles: ["Cargo.toml", "herdr-plugin.toml"], files: { ...releaseFiles, "herdr-plugin.toml": text } })),
   { name: "missing workspace", error: "workspace must be a regular directory", workspaceKind: "missing" },
   { name: "workspace is a file", error: "workspace must be a regular directory", workspaceKind: "file" },
   { name: "workspace is a symlink", error: "workspace must be a regular directory", workspaceKind: "symlink" },
@@ -195,7 +234,7 @@ for (const rejection of rejections) {
         if (path.startsWith("symlink:")) await symlink(content, join(workspacePath, path.slice("symlink:".length)));
         else await writeFile(join(workspacePath, path), content, { mode: path === "git-cliff" ? 0o755 : undefined });
       }
-      await expect(prepareRelease({ workspace: workspacePath, gitCliff: join(workspacePath, "git-cliff"), ...(rejection.version ? { version: rejection.version } : {}) })).rejects.toThrow(rejection.error);
+      await expect(prepareRelease({ workspace: workspacePath, gitCliff: join(workspacePath, "git-cliff"), ...(rejection.version ? { version: rejection.version } : {}), ...(rejection.versionFiles ? { versionFiles: rejection.versionFiles } : {}) })).rejects.toThrow(rejection.error);
       for (const [path, content] of Object.entries(rejection.files ?? {})) {
         if (!path.startsWith("symlink:")) expect(await readFile(join(workspacePath, path), "utf8")).toBe(content);
       }
@@ -218,16 +257,24 @@ test("CLI reports a git-cliff failure as a failed action", async () => {
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test.each(["false", "true", "not-boolean"])("CLI handles update-root-version=%s", async (value) => {
+test.each([
+  ["", true, undefined],
+  ["[]", false, undefined],
+  ['["Cargo.toml"]', true, undefined],
+  ['["pyproject.toml"]', false, 'version file "pyproject.toml" does not exist'],
+  ["Cargo.toml", false, "version-files must be a JSON array of strings"],
+  ['{"files":["Cargo.toml"]}', false, "version-files must be a JSON array of strings"],
+  ["[1]", false, "version-files must be a JSON array of strings"],
+])("CLI handles version-files=%s", async (value, updated, error) => {
   const root = await workspace();
   const original = '[package]\nname = "sample"\nversion = "0.1.0"\n';
   try {
     await writeFile(join(root, "Cargo.toml"), original);
-    const env = { ...process.env, INPUT_WORKSPACE: root, INPUT_VERSION: "2.0.0", "INPUT_UPDATE-ROOT-VERSION": value, RUNNER_TEMP: root };
+    const env = { ...process.env, INPUT_WORKSPACE: root, INPUT_VERSION: "2.0.0", "INPUT_VERSION-FILES": value, RUNNER_TEMP: root };
     const result = Bun.spawnSync([process.execPath, "run", await cliEntry(root)], { cwd: process.cwd(), env });
-    expect(result.exitCode).toBe(value === "not-boolean" ? 1 : 0);
-    if (value === "not-boolean") expect(result.stdout.toString() + result.stderr.toString()).toContain('Input does not meet YAML 1.2 "Core Schema" specification: update-root-version');
-    expect(await readFile(join(root, "Cargo.toml"), "utf8")).toBe(value === "true" ? original.replace("0.1.0", "2.0.0") : original);
+    expect(result.exitCode).toBe(error ? 1 : 0);
+    if (error) expect(result.stdout.toString()).toContain(`::error::${error}`);
+    expect(await readFile(join(root, "Cargo.toml"), "utf8")).toBe(updated ? original.replace("0.1.0", "2.0.0") : original);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

@@ -1,8 +1,8 @@
 # csm-ci release PR preparation
 
-Generate release changes for a client repository, package them as a securefix request, and ask the server to update the `release/next` branch and pull request. The action generates `.release-version` and `CHANGELOG.md`, then updates supported root manifest versions.
+Generate release changes for a client repository, package them as a securefix request, and ask the server to update the `release/next` branch and pull request. The action generates `.release-version` and `CHANGELOG.md`, then updates the root versions of the selected version files.
 
-Supported manifests include `package.json`, `Cargo.toml` with its root `Cargo.lock` entry, `pyproject.toml`, and the root version in `dbt_project.yml`. Existing manifests are validated before writes; their unrelated content is preserved. Include every generated manifest in the server's version-only release route.
+Supported files are `package.json`, `Cargo.toml`, its root `Cargo.lock` entry, `pyproject.toml`, the root version in `dbt_project.yml`, and the root version in `herdr-plugin.toml`. Files are validated before writes; their unrelated content is preserved. Include every generated file in the server's version-only release route.
 
 Call it through the reusable [client-release-prepare workflow](../../../.github/workflows/client-release-prepare.yml), which runs on pushes and manual dispatches from the default branch. Its `version` workflow input is optional. See [release PR behavior](../../../docs/release-pr.md), [securefix behavior](../../../docs/securefix.md), and [setup](../../../docs/setup.md).
 
@@ -15,7 +15,7 @@ Call it through the reusable [client-release-prepare workflow](../../../.github/
 | `server-repository` | Yes | Server repository as `owner/repo`, normally `vars.CSM_CI_SERVER_REPOSITORY`. |
 | `workspace` | Yes | Path to the checked-out client repository root. |
 | `version` | No | Explicit semantic version without `v`. If empty, git-cliff selects the next version from Git history. |
-| `update-root-version` | No | Boolean, defaults to `true`. Set `false` to preserve all manifests and lockfiles and generate only `.release-version` and `CHANGELOG.md`. |
+| `version-files` | No | JSON array of root version files, such as `["Cargo.toml","Cargo.lock","herdr-plugin.toml"]`. Empty updates every existing supported file except `herdr-plugin.toml`. `[]` updates only `.release-version` and `CHANGELOG.md`. See [generated files](../../../docs/release-pr.md#generated-files). |
 
 ## Outputs
 

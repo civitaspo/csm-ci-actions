@@ -30633,6 +30633,9 @@ function legacyRestEndpointMethods(octokit) {
 }
 legacyRestEndpointMethods.VERSION = VERSION6;
 
+// src/lib/config.ts
+var import_picomatch = __toESM(require_picomatch2(), 1);
+
 // node_modules/yaml/dist/index.js
 var composer = require_composer();
 var Document = require_Document();
@@ -36588,6 +36591,21 @@ function preprocess(fn, schema) {
     out: schema
   });
 }
+// src/release/version-files.ts
+var VERSION_FILES = ["package.json", "Cargo.toml", "Cargo.lock", "pyproject.toml", "dbt_project.yml", "herdr-plugin.toml"];
+var isVersionFile = (path) => VERSION_FILES.includes(path);
+function versionFilesError(files) {
+  for (const [index, path] of files.entries()) {
+    if (!isVersionFile(path))
+      return `version file ${JSON.stringify(path)} is not supported`;
+    if (files.indexOf(path) !== index)
+      return `version file ${JSON.stringify(path)} is listed more than once`;
+  }
+  if (files.includes("Cargo.lock") && !files.includes("Cargo.toml"))
+    return 'version file "Cargo.lock" requires "Cargo.toml"';
+  return;
+}
+
 // src/lib/config.ts
 var Id = number2().int().positive();
 var Login = string2().min(1);
@@ -36639,6 +36657,9 @@ var SecurefixRoute = strictObject({
   workflow: string2().min(1),
   paths: record(string2(), SecurefixPathRule).refine((paths) => Object.keys(paths).length > 0, "must include at least one path")
 });
+function securefixPathRule(route, path) {
+  return Object.entries(route.paths).find(([pattern]) => import_picomatch.default.isMatch(path, pattern, { dot: true }))?.[1];
+}
 var SecurefixSchema = strictObject({
   allow_workflow_changes: boolean2(),
   routes: array(SecurefixRoute).refine((routes) => new Set(routes.map((route) => route.name)).size === routes.length, "duplicate route name")
@@ -36700,7 +36721,13 @@ var RepositoryEntry = strictObject({
   name: string2().min(1).transform((s) => s.toLowerCase()),
   ops: array(_enum(OPS)).refine((ops) => new Set(ops).size === ops.length, "duplicate op"),
   release: ReleaseSchema.optional(),
-  release_prepare: strictObject({ update_root_version: boolean2().optional() }).optional(),
+  release_prepare: strictObject({
+    version_files: array(string2()).superRefine((files, ctx) => {
+      const error = versionFilesError(files);
+      if (error)
+        ctx.addIssue({ code: "custom", message: error });
+    }).optional()
+  }).optional(),
   sensitive_paths: strictObject({ paths: array(string2().min(1)).optional(), exempt: array(Principal).optional() }).optional(),
   merge: strictObject({ allow_bot_requests: boolean2().optional() }).optional()
 }).superRefine((entry, ctx) => {
@@ -36743,6 +36770,12 @@ var ConfigSchema = strictObject({
     }
     if (entry.release_prepare !== undefined && !preparation)
       ctx.addIssue({ code: "custom", path: ["repositories", index, "release_prepare"], message: "release_prepare requires selected release preparation" });
+    if (preparation)
+      for (const path of entry.release_prepare?.version_files ?? []) {
+        if (securefixPathRule(route, path) !== "version-only") {
+          ctx.addIssue({ code: "custom", path: ["repositories", index, "release_prepare", "version_files"], message: `version file ${JSON.stringify(path)} must be version-only in the release-pr route` });
+        }
+      }
   }
   for (const [index, route] of (c.securefix?.routes ?? []).entries()) {
     if (!isSafeSecurefixPath(route.workflow) || !route.workflow.startsWith(".github/workflows/")) {
@@ -36886,7 +36919,6 @@ async function loadConfig(gh, repository, ref, path) {
 import { createHash } from "node:crypto";
 import { lstat as lstat2, mkdir as mkdir2, mkdtemp, readFile, readdir as readdir2, writeFile as writeFile2 } from "node:fs/promises";
 import { join } from "node:path";
-var import_picomatch = __toESM(require_picomatch2(), 1);
 var SECUREFIX_ARTIFACT = "securefix";
 var MAX_SECUREFIX_FILES = 512;
 var MAX_SECUREFIX_FILE_SIZE = 8 * 1024 * 1024;
@@ -37090,7 +37122,7 @@ function validateSecurefixRouteHead(run, route, defaultBranch, currentDefaultSha
 function validateRouteChanges(route, changes, original) {
   for (const change of changes) {
     validateSecurefixPath(change.path);
-    const rule = Object.entries(route.paths).find(([pattern]) => import_picomatch.default.isMatch(change.path, pattern, { dot: true }))?.[1];
+    const rule = securefixPathRule(route, change.path);
     if (!rule)
       throw new Rejection(`securefix route does not allow path ${JSON.stringify(change.path)}`);
     if (rule === "semver") {

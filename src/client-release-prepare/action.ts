@@ -12,11 +12,19 @@ export async function runReleasePrepare(install: Install = installGitCliff): Pro
     const version = await prepareRelease({
       workspace: core.getInput("workspace", { required: true }),
       gitCliff,
-      updateRootVersion: core.getInput("update-root-version") === "" ? true : core.getBooleanInput("update-root-version"),
+      ...(core.getInput("version-files") ? { versionFiles: parseVersionFiles(core.getInput("version-files")) } : {}),
       ...(core.getInput("version") ? { version: core.getInput("version") } : {}),
     });
     core.setOutput("version", version);
   } catch (error) {
     core.setFailed(error instanceof Error ? error.message : String(error));
   }
+}
+
+// The input is a JSON array of root-relative paths; an empty input keeps the default file set.
+export function parseVersionFiles(input: string): string[] {
+  let parsed: unknown;
+  try { parsed = JSON.parse(input); } catch { parsed = undefined; }
+  if (!Array.isArray(parsed) || !parsed.every((path) => typeof path === "string")) throw new Error("version-files must be a JSON array of strings");
+  return parsed;
 }

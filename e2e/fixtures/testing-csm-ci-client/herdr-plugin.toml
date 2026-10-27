@@ -1,0 +1,7 @@
+id = "release-fixture"
+version = "0.1.0" # root
+platforms = ["macos", "linux"]
+
+[[actions]]
+id = "status"
+version = "9.0.0"
