@@ -8,7 +8,7 @@ import { parseSemVer } from "../release/semver.ts";
 const execFile = promisify(callbackExecFile);
 const VERSION_LINE = /^\s*"?version"?\s*[=:]/u;
 
-export async function prepareRelease(input: { workspace: string; version?: string; gitCliff?: string; updateRootVersion?: boolean }): Promise<string> {
+export async function prepareRelease(input: { workspace: string; version?: string; gitCliff: string; updateRootVersion?: boolean }): Promise<string> {
   const workspaceInfo = await lstat(input.workspace).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return undefined;
     throw error;
@@ -17,7 +17,7 @@ export async function prepareRelease(input: { workspace: string; version?: strin
 
   let version = input.version;
   if (version === undefined) {
-    const result = await execFile(input.gitCliff ?? "git-cliff", ["--bumped-version", "--no-exec"], { cwd: input.workspace });
+    const result = await execFile(input.gitCliff, ["--bumped-version", "--no-exec"], { cwd: input.workspace });
     version = result.stdout.trim();
     if (version.startsWith("v")) version = version.slice(1);
   }
@@ -51,7 +51,7 @@ export async function prepareRelease(input: { workspace: string; version?: strin
 
   for (const [path, text] of changes) await writeFile(join(input.workspace, path), text);
   await writeFile(join(input.workspace, ".release-version"), `${version}\n`);
-  await execFile(input.gitCliff ?? "git-cliff", ["--no-exec", "--tag", `v${version}`, "--output", "CHANGELOG.md"], { cwd: input.workspace });
+  await execFile(input.gitCliff, ["--no-exec", "--tag", `v${version}`, "--output", "CHANGELOG.md"], { cwd: input.workspace });
   return version;
 }
 

@@ -30,6 +30,14 @@
         "major"
       ],
       "automerge": false
+    },
+    {
+      "description": "git-cliff's version and release digests are updated together by hand; see docs/release-pr.md",
+      "matchPackageNames": [
+        "git-cliff",
+        "orhun/git-cliff"
+      ],
+      "enabled": false
     }
   ]
 }

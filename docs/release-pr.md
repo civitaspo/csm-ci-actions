@@ -1,8 +1,45 @@
 # Release pull requests
 
-`client-release-prepare.yml` generates a release pull request from the client's default branch. It uses git-cliff 2.14.2 to infer a version from Git history and generate `CHANGELOG.md`. A manual dispatch can instead supply an explicit semantic version without the `v` prefix.
+`client-release-prepare.yml` generates a release pull request from the client's default branch. It uses a [pinned and verified](#git-cliff-installation) git-cliff 2.14.2 to infer a version from Git history and generate `CHANGELOG.md`. A manual dispatch can instead supply an explicit semantic version without the `v` prefix.
 
 The generation job checks out the triggering commit with full history and a read-only workflow token. git-cliff runs with `--no-exec`; package-manager scripts and client build scripts are not run. The release-prepare action then uses the shared [securefix client](securefix.md#client-workflow) implementation to package the edits, mint its Client App token through the official action and request the existing securefix operation. It has no environment secrets.
+
+## git-cliff installation
+
+The release-prepare action installs git-cliff itself. It uses no third-party installer action and does not run a downloaded install script. [`git-cliff.ts`](../src/client-release-prepare/git-cliff.ts) pins the version and, for each supported runner platform, the SHA-256 of the exact `orhun/git-cliff` release asset:
+
+| `RUNNER_OS`/`RUNNER_ARCH` | Release asset | SHA-256 |
+|---|---|---|
+| `Linux`/`X64` | `git-cliff-2.14.2-x86_64-unknown-linux-musl.tar.gz` | `fa21e2fc70046fcfd0e43e5e4613873ab799aff3d9dc8559c00d31b270e417d0` |
+| `Linux`/`ARM64` | `git-cliff-2.14.2-aarch64-unknown-linux-musl.tar.gz` | `4be21b21ec9699af4d330b224aeba8a41d41d8f5b351ca2da8a9ea2bdc36380f` |
+| `macOS`/`X64` | `git-cliff-2.14.2-x86_64-apple-darwin.tar.gz` | `4e647d2deb152aca1e987f225cf42b080b991dd98f3bce4027ef95446d982ac3` |
+| `macOS`/`ARM64` | `git-cliff-2.14.2-aarch64-apple-darwin.tar.gz` | `a0be97e237d440d34c5e508ec21d070b2c85cbb8be48a46a56f9a4e8bd247f05` |
+
+The reusable workflow runs on `ubuntu-24.04`. The direct action also supports the other three platforms. Windows and 32-bit runners are unsupported. Windows was never documented or verified for this action, and upstream publishes no checksum or signature for its Windows archives.
+
+The action downloads only the selected asset from the pinned release tag URL into memory. The download is limited to 64 MiB and two minutes per attempt, with at most three attempts. Like the [shared GitHub client](github-api.md), it waits 250 milliseconds and then one second before retrying. It retries only when the request fails before a response arrives, including a timeout, or when the response is HTTP 502, 503 or 504. An error while reading the response body fails without retry. The action then compares the SHA-256 to the pinned value before it writes, extracts or executes anything. The pinned digest in reviewed repository source is the trust anchor. The action never fetches an expected checksum from the release. After a match, it extracts only `git-cliff-<version>/git-cliff` into a fresh `RUNNER_TEMP` directory. That member must be a regular file, and `--version` must report exactly `git-cliff <version>`. Preparation then runs that binary by absolute path. The action does not add git-cliff to `PATH` for later steps. Extraction uses the runner's `tar`, so a direct caller must not alter `PATH` with untrusted earlier steps.
+
+Preparation fails before generating files when the platform is unsupported, the pinned digest is missing or malformed, the download fails or returns a non-success status, the body exceeds the limit, the digest differs, the member is not a regular file, or the reported version differs.
+
+### Update the pinned version
+
+Renovate does not update this pin. No Renovate manager reads `git-cliff.ts`, and `renovate.json` disables `git-cliff` and `orhun/git-cliff` so the non-major automerge rule cannot apply. Update the pin by hand:
+
+1. Wait until the GitHub release is at least 7 days old, measured from its `published_at`.
+2. Review the release notes, the upstream security advisories and issues for that version, and the release workflow changes since the pinned version.
+3. Download every supported asset, with its `.sha512` and `.sig` files, from the release tag. For each asset, record the following and confirm they agree:
+   - the local SHA-256 and SHA-512 of the downloaded bytes;
+   - the upstream `.sha512` file;
+   - the asset `digest` field from the GitHub releases API;
+   - a good `gpg --verify` of the `.sig` file by key `1D2D410A741137EBC544826F4A92FA17B6619297`, the key named in upstream's binary release documentation.
+4. Check for GitHub artifact attestations with `gh attestation verify --repo orhun/git-cliff` or the attestations API, and check the release's `immutable` field. Verify any provenance that exists. Do not describe a release as immutable or attested without that evidence.
+5. Extract each binary and confirm the reported version. Change the version and every digest in one PR. Update the table above, the tests and `docs/handoff.md` with the evidence. A human reviewer approves the PR after checking the evidence.
+
+If release age or integrity cannot be established, do not update. An urgent update to fix a published git-cliff vulnerability may skip only the 7-day wait. It still requires every integrity step above. The PR must state the advisory and the skipped wait, and the reviewer must acknowledge both.
+
+### Remaining risk
+
+A pinned digest proves that the job runs the bytes reviewers pinned. It does not prove those bytes were benign. A compromised upstream build or signing key could produce a malicious asset with a valid signature and matching published checksums. The 7-day wait gives time for such a compromise to be found, but it does not guarantee detection. git-cliff 2.14.2 was not an immutable release when it was pinned and has no GitHub artifact attestation. Upstream immutable releases and build provenance are tracked in [orhun/git-cliff#1653](https://github.com/orhun/git-cliff/issues/1653). Add verification when they become available.
 
 ## Generated files
 

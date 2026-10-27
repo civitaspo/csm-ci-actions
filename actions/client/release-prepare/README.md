@@ -63,6 +63,8 @@ To use the action directly, first check out the client at `github.sha` into `cli
     server-repository: ${{ vars.CSM_CI_SERVER_REPOSITORY }}
 ```
 
+The action installs a pinned git-cliff release asset and verifies its SHA-256 before extracting or running it. It supports Linux and macOS runners on X64 or ARM64; Windows is unsupported. See [git-cliff installation](../../../docs/release-pr.md#git-cliff-installation) for the trust anchor and the update procedure.
+
 The server must enable securefix and configure a matching `release-pr` route for `.github/workflows/csm-ci-release-pr.yml`. The Client App needs issues write access on the server repository. Generation does not run package-manager lifecycle scripts or client build scripts. No request is sent when generated files match the checkout.
 
 Replace `<reviewed-commit-sha>` with the full SHA of the csm-ci-actions revision you reviewed.

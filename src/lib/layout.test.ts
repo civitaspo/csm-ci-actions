@@ -43,6 +43,15 @@ describe("published action layout", () => {
   });
 });
 
+describe("release-prepare dependencies", () => {
+  test("uses only official GitHub actions and installs git-cliff itself", () => {
+    const prepare = actionSchema.parse(readYaml("actions/client/release-prepare/action.yml"));
+    const external = (prepare.runs.steps ?? []).flatMap((step) => (step.uses ? [step.uses.split("@")[0]] : []));
+    expect(external).toEqual(["actions/upload-artifact", "actions/create-github-app-token"]);
+    expect(readFileSync("actions/client/release-prepare/action.yml", "utf8")).not.toMatch(/install-action|curl|wget/u);
+  });
+});
+
 const build = actionSchema.parse(readYaml("actions/server/release-build/action.yml"));
 const buildSteps = build.runs.steps ?? [];
 
