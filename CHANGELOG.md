@@ -1,3 +1,20 @@
+## [0.3.0] - 2026-10-27
+
+### 🚀 Features
+
+- *(repo-settings)* Generate standard client workflows from enabled ops
+- *(e2e)* Explain test PR intent with descriptions and case labels
+- *(release-pr)* Replace update-root-version with explicit version files
+
+### 🐛 Bug Fixes
+
+- *(repo-settings)* Keep generated callers stable under client autofix
+- *(repo-settings)* Annotate generated callers for jactionlint
+- *(repo-settings)* Regenerate standard callers on every run
+
+### 🚜 Refactor
+
+- *(repo-settings)* Select reconciliation targets explicitly instead of modes
 ## [0.2.0] - 2026-10-27
 
 ### 🚀 Features
@@ -62,6 +79,7 @@
 
 - *(merge)* Update the actions caller and Renovate requests
 - *(renovate)* Disable Dependency Dashboard
+- *(release)* V0.2.0
 
 ### 💼 Other
 
