@@ -40,7 +40,7 @@ paths:
 
 The policy fails closed at 3,000 changed files. Exemptions apply only when the pull request author and every commit have the same user identity.
 
-Sensitive changes require a current approval by the configured approver App, pinned to the head, with an `approve:command` marker. The marker points to the source `/approve` comment, which must still exist, remain unedited, and have been written by a configured trusted approver. Ordinary GitHub UI approvals do not authorize sensitive paths. Protection of the server and actions repositories comes from explicit [repository policy overrides](first-release-plan.md#repository-policy-overrides-and-staged-migration); the runtime has no fixed repository rule.
+Sensitive changes require a current approval by the configured approver App, pinned to the head, with an `approve:command` marker. The marker points to the source `/approve` comment, which must still exist, remain unedited, and have been written by a configured trusted approver. Ordinary GitHub UI approvals do not authorize sensitive paths. Protection of the server and actions repositories comes from explicit [repository policy overrides](#effective-repository-policy-resolution); the runtime has no fixed repository rule.
 
 The `/approve` command first validates all trust and configured policies other than `sensitive-paths`, then writes its marked approval, and finally refreshes `csm-ci/policy`. This provides the approval evidence required by `sensitive-paths` without creating an approval cycle. Automatic approval and `/recheck` refresh the same check after their evaluation.
 

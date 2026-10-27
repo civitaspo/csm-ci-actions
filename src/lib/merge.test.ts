@@ -344,13 +344,13 @@ describe("runMerge", () => {
     expect(body.split("<sub>")[0]).toContain("repository owner/repo is no longer managed by this server");
     expect(write.calls).toEqual([]);
   });
-  test("passes the pull request title and body with duplicate coauthor lines removed", async () => {
+  test("passes the pull request title with its number and the body with duplicate coauthor lines removed", async () => {
     const { ctx, write } = writableContext(200);
     await runMerge(ctx, { pull_number: 12, comment_id: 9 }, { head: HEAD });
     const request = write.requests.find((item) => item.method === "PUT" && item.path === `${P}/pulls/12/merge`);
     expect(request?.body).toBeDefined();
     const payload = JSON.parse(request?.body ?? "{}");
-    expect(payload.commit_title).toBe("Example title");
+    expect(payload.commit_title).toBe("Example title (#12)");
     expect(payload.commit_message).toBe("Description\nCo-authored-by: Alice <alice@example.com>\nCo-authored-by: Bob <bob@example.com>");
   });
 

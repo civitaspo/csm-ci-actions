@@ -45,7 +45,7 @@ A pinned digest proves that the job runs the bytes reviewers pinned. It does not
 
 ## Generated files
 
-The preparation action writes `.release-version` and `CHANGELOG.md`. It updates the root version fields of the selected version files:
+The preparation action writes `.release-version` and `CHANGELOG.md`. git-cliff regenerates the whole `CHANGELOG.md` from Git history on every run, using the configuration file git-cliff discovers in the client workspace, such as a root `cliff.toml` or `.cliff.toml`, and its built-in default when there is none. A client that wants a stable changelog format should commit a `cliff.toml`; this repository's own [`cliff.toml`](../cliff.toml) is an example. Edits made by hand to `CHANGELOG.md` are overwritten. The action updates the root version fields of the selected version files:
 
 | File | Updated version |
 |---|---|

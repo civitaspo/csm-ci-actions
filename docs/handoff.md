@@ -1,7 +1,7 @@
 # Handoff: implementing csm-ci-actions from Phase 2
 
 This document is written so that you can continue the implementation from Phase 2 onward with this document alone.
-[docs/first-release-plan.md](first-release-plan.md) is the source of truth for the specification. This document supplements it.
+[design.md](design.md) and the operation pages define supported behavior. This document supplements them. The original implementation plan it refers to is kept at a [fixed commit](https://github.com/civitaspo/csm-ci-actions/blob/8b6fc9b1323796d0cdebc14ee4d27e06dbaa8949/docs/first-release-plan.md).
 This document records four things.
 
 - Decisions made during implementation
@@ -9,7 +9,7 @@ This document records four things.
 - Details of the testing environment
 - Working procedures
 
-If first-release-plan.md and this document disagree, first-release-plan.md wins. Fix the disagreement in a PR.
+If the design or an operation page disagrees with this document, the design or operation page wins. Fix the disagreement in a PR.
 
 - Written on: 2026-10-25 (JST)
 - `main` at the time of writing: `7d51bc9` (Phase 1 done)
@@ -90,7 +90,7 @@ The local clone is at `~/src/github.com/civitaspo/csm-ci-actions`.
 
 ### 2.3 Environments, variables and secrets
 
-Follow the naming rules in the plan's "Naming list".
+Follow the naming rules in the [Naming list](design.md#naming-list).
 
 - Store each App credential as a pair: `CSM_CI_<ROLE>_APP_CLIENT_ID` (variable) and `CSM_CI_<ROLE>_APP_PRIVATE_KEY` (secret).
 - `<ROLE>` is the App name with `testing-csm-ci-` or `csm-ci-` removed, in upper snake case.
@@ -339,8 +339,8 @@ The label name is `csm-ci-<kind>-<16 hex>` (50 characters or fewer). The descrip
 
 We did Phases 0 and 1 with this procedure. Follow the same procedure.
 
-1. **Check the specification.** Read the relevant phase in first-release-plan.md, and S1 to S7. Do not add features that first-release-plan.md does not have (ponytail). If you decide a feature should be added, send the first-release-plan.md update as a PR first.
-2. **Verify assumptions about external behavior against real runs.** Put a temporary workflow in a testing repo, try it, and delete it afterward. Record the URL of the resulting run in the decision log and in first-release-plan.md.
+1. **Check the specification.** Read the relevant operation page and S1 to S7 in design.md. Do not add features that they do not describe (ponytail). If you decide a feature should be added, send the design or operation page update as a PR first.
+2. **Verify assumptions about external behavior against real runs.** Put a temporary workflow in a testing repo, try it, and delete it afterward. Record the URL of the resulting run in the decision log and in the operation page.
 3. **Decide the data shape first.** Separate pure functions (decisions) from functions that call APIs (fact collection). Test decisions with table-driven tests.
 4. **Cover every rejection condition with table-driven tests, one case per row.** Also assert the wording of the rejection reason.
 5. **Verify with mutation.** Remove one rejection condition at a time and confirm that a test fails. If a mutation survives, add a test.
@@ -364,7 +364,7 @@ We did Phases 0 and 1 with this procedure. Follow the same procedure.
 
 8. **Run the e2e.** See section 7.
 9. **Before you open a PR, ask a fresh subagent for an independent review.**
-   - Give it the specification (the relevant section of first-release-plan.md) and the diff. Ask it, as an attacker, to look for places weaker than the specification, changes the tests cannot catch, and code outside the plan.
+   - Give it the specification (the relevant operation page and design.md) and the diff. Ask it, as an attacker, to look for places weaker than the specification, changes the tests cannot catch, and code outside the plan.
    - Do not give it your conclusions.
    - Check each finding yourself before you fix it. In Phases 0 and 1, every review found real holes.
      - S3 could be disabled through config.
@@ -383,13 +383,13 @@ We did Phases 0 and 1 with this procedure. Follow the same procedure.
     - When you merge stacked PRs, retarget the base of the child PR.
 12. **Decision log.**
     - `decisions.tsv` (columns: ts, phase, decision, why, evidence, result) records decisions. It sits at the repo root. Git does not track it. It is listed in `.git/info/exclude`.
-    - The key decisions so far are copied into this document and first-release-plan.md.
+    - The key decisions so far are copied into this document and design.md or the operation page.
 
 ---
 
 ## 6. Implementation instructions for the remaining phases
 
-first-release-plan.md is the source of truth for each phase's specification. This section adds only implementation notes. The DoD (first-release-plan.md "DoD (all phases)") is as follows.
+This section records the original per-phase implementation notes. The DoD (first-release-plan.md "DoD (all phases)") is as follows.
 
 - Unit tests, table-driven tests, mutation
 - e2e in the testing environment
@@ -1058,7 +1058,7 @@ The README requires human review before merge. Phase 7 and the final report rema
 
 The human reviewed the reader-facing README and authorized PR #33, the production target-plan PR #34, and production server bootstrap PR #1. Those PRs were merged. The plan now explicitly includes the installed, configured actions repository as a repo-settings client, retains its fixed all-paths-sensitive policy, and requires preserving existing release contracts during migration.
 
-The production server is [civitaspo/csm-ci-server](https://github.com/civitaspo/csm-ci-server). The owner created and installed the production Apps and registered their keys. Server App ID is `5467106`; bot user IDs are Client `347822659`, Server `347821498`, and Approver `347823687`. Strong keys are restricted to the server's `csm-ci` environment, whose deployment policy allows only `main`. Only the server is initially enrolled; the ten planned targets and release migration gates are recorded in its `migration-targets.md`.
+The production server is [civitaspo/csm-ci-server](https://github.com/civitaspo/csm-ci-server). The owner created and installed the production Apps and registered their keys. Server App ID is `5467106`; bot user IDs are Client `347822659`, Server `347821498`, and Approver `347823687`. Strong keys are restricted to the server's `csm-ci` environment, whose deployment policy allows only `main`. Only the server is initially enrolled; the ten planned targets and release migration gates are recorded in its [`migration-targets.md`](https://github.com/civitaspo/csm-ci-server/blob/7092b668ee56828cc077f6651f77a23f7c965daf/migration-targets.md).
 
 Production [Renovate PR #2](https://github.com/civitaspo/csm-ci-server/pull/2) verified the actual request path at signed head `80c59d74b7be68b3f37ccfb5bd5eb71e926957b5`. [CI](https://github.com/civitaspo/csm-ci-server/actions/runs/40200040619) passed. Automatic approval produced no review, and `csm-ci/policy` failed until the owner explicitly requested `/approve`. The [approval run](https://github.com/civitaspo/csm-ci-server/actions/runs/40200120806) created an exact-head review by `csm-ci-approver[bot]`, with the command marker for comment `6398562732`; the policy check owned by App `5467106` then passed. The owner requested `/merge`, and the [merge run](https://github.com/civitaspo/csm-ci-server/actions/runs/40200231900) squash-merged it as `d2a2cf619d04fa201de51abee18d71e5fb5b16e5`, with `merged_by` equal to `csm-ci-server[bot]`. [Post-merge CI](https://github.com/civitaspo/csm-ci-server/actions/runs/40200284559) passed. Production rulesets were not yet active, so a separate merge under managed protection remains required before client enrollment.
 
@@ -1088,7 +1088,7 @@ At signed implementation head `74ca322dacf22f5d9b0bad8c6a75bf103e90d121`, releas
 
 ## 27. dbt package release compatibility
 
-The actions client completed its protected production merge and immutable `v0.1.0` publication; the production server's [verification record](https://github.com/civitaspo/csm-ci-server/blob/main/verification.md) contains the release and attestation evidence. Dotfiles then completed its caller cutover, four managed rulesets and protected [PR #266](https://github.com/civitaspo/dotfiles/pull/266), merged by the new Server App. [Main CI](https://github.com/civitaspo/dotfiles/actions/runs/40209284971) passed. Its unrelated default-branch ruleset remains active; the two old service rulesets were removed only after the new protections were verified.
+The actions client completed its protected production merge and immutable `v0.1.0` publication; the production server's [verification record](https://github.com/civitaspo/csm-ci-server/blob/7092b668ee56828cc077f6651f77a23f7c965daf/verification.md) contains the release and attestation evidence. Dotfiles then completed its caller cutover, four managed rulesets and protected [PR #266](https://github.com/civitaspo/dotfiles/pull/266), merged by the new Server App. [Main CI](https://github.com/civitaspo/dotfiles/actions/runs/40209284971) passed. Its unrelated default-branch ruleset remains active; the two old service rulesets were removed only after the new protections were verified.
 
 The next client, `dbt-authorized-models`, requires its root `dbt_project.yml` version to match `pyproject.toml` and `.release-version`. Specification [PR #40](https://github.com/civitaspo/csm-ci-actions/pull/40) was merged before implementing that compatibility. Release preparation now uses the existing YAML dependency to validate the root version, preserves unrelated bytes, and rejects unsupported metadata before writing any release files. Typecheck, all 935 tests, build with committed bundles, and jactionlint passed. Seven isolated mutation checks failed as expected. Independent review found no remaining issue.
 
@@ -1179,13 +1179,13 @@ All ten selected repositories completed their sequential migration and applicabl
 
 Local verification checked every asset digest, archive contract, manifest, checksum, public GPG signature and strict attestation against the client, merge, tag and reusable signer `82917b4c3a28e5ff4023991ed355b40081d650fb`, denying self-hosted runners. The production primary fingerprint remains `12D7B26BEB5394D7AA579FB300F0D373EFFA1DC6`. Five fixed source manifests stayed byte-identical. Final [main CI](https://github.com/civitaspo/terraform-provider-sigma/actions/runs/40252063971) passed every job.
 
-The actual Terraform Registry discovered version 0.2.4. Terraform 1.17 installed it in a clean project and loaded the provider schema with 29 resources and 34 data sources without Sigma credentials. The final snapshot confirmed all six provider rulesets, preserved unrelated protection and Actions settings, and only the reviewed installer allowlist addition. The server's [verification record](https://github.com/civitaspo/csm-ci-server/blob/main/verification.md) contains the complete production sequence.
+The actual Terraform Registry discovered version 0.2.4. Terraform 1.17 installed it in a clean project and loaded the provider schema with 29 resources and 34 data sources without Sigma credentials. The final snapshot confirmed all six provider rulesets, preserved unrelated protection and Actions settings, and only the reviewed installer allowlist addition. The server's [verification record](https://github.com/civitaspo/csm-ci-server/blob/7092b668ee56828cc077f6651f77a23f7c965daf/verification.md) contains the complete production sequence.
 
 The owner subsequently requested eligible Renovate auto-merges and `/merge` comment configuration in every repository. The read-only ten-repository audit found eight existing comment configurations and two missing configurations, on the server and this actions repository. The server rollout and this caller change add those missing non-major comment requests with platform automerge disabled. The fixed prohibition on Bot mergers in both privileged repositories remains; their Renovate requests still require an operator. The remaining eight client caller updates, native production Renovate merge proof, final reference audit and three legacy repository archives remain required before the rollout is complete. No agent handled private credentials or App permissions.
 
 ## Explicit secret contract probe
 
-Issue [#76](https://github.com/civitaspo/csm-ci-actions/issues/76) now has a separate [specification](first-release-plan.md#explicit-secret-contract-and-staged-migration). It is not a completed runtime migration.
+Issue [#76](https://github.com/civitaspo/csm-ci-actions/issues/76) now has a separate [specification](https://github.com/civitaspo/csm-ci-actions/blob/8b6fc9b1323796d0cdebc14ee4d27e06dbaa8949/docs/first-release-plan.md#explicit-secret-contract-and-staged-migration). It is not a completed runtime migration.
 
 The [positive run](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40303489939), attempt 1, used testing-server caller `1ebcba6b0054f0ab352610318cd9a5dc6035d6e4`, reusable candidate `b99d243b4f07a56a9b85f87b254ae4555c8610b9`, and nested leaves `75b1a47c2b78dbf1cfe04785e8cb96f931ec2d77`. All four expected Boolean availability assertions completed successfully, with none skipped. These were the direct environment job, nested discovery, nested client target, and nested server-after-clients target. The direct job checked all four configured names. Nested discovery checked the Server App key only. Each nested target checked the Server App and approver App keys. The nested wrapper declared and forwarded only those two names, never provider signing credentials. All checks used Boolean availability expressions without printing values or lengths.
 
@@ -1485,6 +1485,24 @@ Independent review against issue #97, the governing specification, and the stage
 The reviewed issue #97 metadata delta is integrated on signed issue #71 candidate `5168471e2d3c404a34c07055c82fbde0e0ca45c1`. Every non-handoff added and deleted line matches reviewed metadata candidate `66ff9bccf8fa3a3f4922afd965f269434b8d573b`. The preceding handoff is preserved as a complete prefix. Production source, bundles, actions, workflows and fixtures remain byte-identical to the base, including the final managed-branch cleanup correction and policy-report implementation. Existing policy-report lifecycle assertions are preserved in the metadata-annotated repository-sensitivity scenario.
 
 All required local gates pass with the pinned tools, including full tests, build with unchanged `dist/`, root jactionlint, and action-lock generation and verification with no lock delta. All 12 metadata rejection mutations were rerun separately in isolated copies, bounded to 20 seconds each, restored after each attempt, and detected. Live approve, merge, policy-check, securefix, release, release-pr and repo-settings suites, then smoke, remain pending at the final signed full SHA. Rendered PR descriptions and labels, second-identity cases, trust restoration and post-merge CI require the parent integration run. Compatible stable publication and operator-owned App capabilities remain separate gates. No live e2e, PR opening, merge or testing/production write is claimed by this integration.
+
+## 46. Stacked verification, v0.2.0 and production rollout
+
+Issues #74, #76, #77, #71 and #97 were verified as one stack before ordered squash merges, by maintainer decision. At stack head `3fae8cb6f597c2c4f54d688ccc3768f084db60ae`, local approve passed 8/12, policy-check 5/9, merge 8/10, release 14/14 and securefix 14/14. All skips were second-identity scenarios. Repo-settings and smoke failed there because the testing server's schedule caller omitted #77's new required `workflow-release` input; #77 now passes it through an optional dispatch input resolved by the harness. A single release-pr push denial (HTTP 403) at that head did not reproduce at #77's final head. Each PR's own head then ran its affected suites: #76 repo-settings 4/4 at `a6e3d77`; #74 stage 3 approve 8/12, policy-check 5/9, merge 7/10 plus a targeted 1/1 rerun after accepting GraphQL's deleted-comment message, and smoke 5/5 at `5e3977d`/`3cf494f`; #77 repo-settings 4/4, smoke 5/5 and release-pr 5/5 against the published v0.2.0 at `1d0e8e7`. The harness also tolerates merged head branches that `delete_branch_on_merge` already removed.
+
+Production rollout of the #74 repository policy contract: csm-ci-server [#23](https://github.com/civitaspo/csm-ci-server/pull/23) added explicit `sensitive_paths` and `merge.allow_bot_requests: false` entries for the server and actions repositories with parser pins at `53a1bc9`; [#24](https://github.com/civitaspo/csm-ci-server/pull/24) moved the pins to `8220823`, which has no repository-name protection. csm-ci-actions release PR #135 then still required `/approve` for its sensitive paths.
+
+Incident: #24 also brought #76's required named secrets, while the server callers still used `secrets: inherit`. Environment-only secrets cannot satisfy a required declaration through inheritance, so every label request failed at startup from 09:17 to about 10:00 UTC ([run](https://github.com/civitaspo/csm-ci-server/actions/runs/40482293335)). Client pins were unaffected. [#25](https://github.com/civitaspo/csm-ci-server/pull/25) mapped the names explicitly. Because the Server App merge path was down, the maintainer authorized a recovery: rulesets `controlled-merges` (25823867) and `review-and-checks` (25823866) were snapshotted, disabled only for the squash merge `d4252c8` (signed, tree equal to the reviewed head), and restored; both full configurations matched the snapshots. A following `/approve` succeeded ([run](https://github.com/civitaspo/csm-ci-server/actions/runs/40485001339)). Lesson: a pin that changes a reusable workflow's secret declarations must ship with the caller mapping in the same PR.
+
+v0.2.0 was published from release PR #135 as immutable release `v0.2.0` on `91edfd92ce50e606cd6a9405cbfe958a94ff0692`. `SHA256SUMS` (`sha256:01ba4719…a546b`) verifies with the documented `gh attestation verify` command and predicate checks. In production, #71's failure report appeared on PR #137 and was minimized as `RESOLVED` after `/approve`.
+
+Standard client workflow rollout: csm-ci-server [#26](https://github.com/civitaspo/csm-ci-server/pull/26) pinned the generator runtime, adopted each repository's current caller bytes through `workflow_adoption`, set `release_prepare.update_root_version: false` where callers already disabled root versions, and stopped distributing the colliding literal callers. Seven Server-owned managed PRs that changed the old caller paths were closed; their stale branches did not need deletion because the generator reset and regenerated them. Three problems appeared during rollout and were fixed in the runtime:
+
+- Client `wc-autofix` (pinact) appends `# <version>` to pinned SHAs, which moved merged callers away from their ownership digest. [#142](https://github.com/civitaspo/csm-ci-actions/pull/142) emits that comment itself (byte-identical to the autofixed files) and accepts owned files that already equal the desired output.
+- csm-ci-server's config check and csm-ci-actions CI lint their own workflows; generated callers lacked the jactionlint ignore annotation. [#144](https://github.com/civitaspo/csm-ci-actions/pull/144) adds it before `on:`.
+- Dispatching repo-settings for all ten repositories in parallel exhausted the Server App installation's hourly API limit at about 12:57 UTC. Ownership recovery paginates merged managed PRs per repository, so roll out sequentially.
+
+The ownership-record design was then replaced: [#148](https://github.com/civitaspo/csm-ci-actions/pull/148) regenerates selected callers on every run and deletes only files whose first line is the generated header, because autofix commits and GitHub's auto-merge of a reset managed PR (head equal to the merge commit) both broke ownership proof. [#152](https://github.com/civitaspo/csm-ci-actions/pull/152) replaced the repo-settings `mode` with explicit `targets`, and [#153](https://github.com/civitaspo/csm-ci-actions/pull/153) replaced `update_root_version` with `version_files`. v0.3.0 was published from #151 on `a8645b8` and its attestation verifies. A `/merge` that was accepted before `/approve` on the same pull request held the shared per-PR concurrency group until its deadline; [#158](https://github.com/civitaspo/csm-ci-actions/pull/158) keys the group by operation kind, verified live by `merge.concurrent-approve`. csm-ci-server pins `24b3a75` with explicit `targets` and `version_files`, and all ten client repositories carry v0.3.0 generated callers with no `secrets: inherit`.
 
 ## Issue 155: one lock for several e2e features
 

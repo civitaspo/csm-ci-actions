@@ -67,8 +67,8 @@ Automatic approval, `/recheck`, and the final `/approve` refresh update `csm-ci/
 
 ## Not done here
 
-- `/merge` (Phase 2).
-- Forcing an approval of untrusted commits. See the approve section of docs/first-release-plan.md for why.
+- `/merge`. See [merge](merge.md).
+- Forcing an approval of untrusted commits. Without an argument, the server cannot bind such an approval to the commits the approver reviewed.
 
 ## Permissions
 
@@ -96,7 +96,7 @@ The 60-minute limit and a push that lands while approving are covered by unit te
 
 ## Repository policy overrides
 
-The runtime implements the [repository policy contract](first-release-plan.md#repository-policy-overrides-and-staged-migration) with no repository-name exceptions. Automatic approval, `/approve`, and `/recheck` use the same effective sensitive paths and exemptions as policy-check and merge. An omitted repository list inherits its global value. An explicit list replaces it, including an empty list.
+The runtime implements the [repository policy contract](policy-check.md#effective-repository-policy-resolution) with no repository-name exceptions. Automatic approval, `/approve`, and `/recheck` use the same effective sensitive paths and exemptions as policy-check and merge. An omitted repository list inherits its global value. An explicit list replaces it, including an empty list.
 
 An exemption requires the PR author and every commit to have the same effective identity. It does not bypass signature verification or trusted-committer checks. `/approve` retains its trusted human command and current-head evidence requirements. Permission for a Bot to request a merge remains a separate repository setting.
 

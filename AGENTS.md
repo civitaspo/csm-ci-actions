@@ -5,9 +5,9 @@ Follow this workflow for changes to csm-ci-actions and its live testing environm
 ## Start with the current state
 
 1. Inspect the working tree, branch, remote `main`, and related pull requests. Preserve unrelated work and start each new PR from the intended base.
-2. Read the relevant sections of [docs/first-release-plan.md](docs/first-release-plan.md), including the security design and Naming list. The plan defines supported behavior. Change it in a separate PR before adding behavior outside it.
-3. Read [docs/handoff.md](docs/handoff.md) for verified GitHub behavior and testing constraints. Use the current code and live GitHub state to check whether an older status or open item still applies. The plan wins if documents disagree.
-4. Read the affected operation's page in `docs/` and trace its callers, implementation, tests, fixtures, and generated files. For setup or production administration, also read [docs/setup.md](docs/setup.md) and [docs/cutover.md](docs/cutover.md).
+2. Read [docs/design.md](docs/design.md), including the security design and Naming list, and the affected operation's page in `docs/`. Together they define supported behavior. Change them in a separate PR before adding behavior outside them.
+3. Read [docs/handoff.md](docs/handoff.md) for verified GitHub behavior and testing constraints. Use the current code and live GitHub state to check whether an older status or open item still applies. The design and operation pages win if documents disagree.
+4. Trace the affected operation's callers, implementation, tests, fixtures, and generated files. For setup or production administration, also read [docs/setup.md](docs/setup.md) and [docs/cutover.md](docs/cutover.md).
 
 ## Develop one complete change
 
@@ -90,6 +90,6 @@ For workflow failures, also check these repository-specific constraints:
 
 ## Keep credentials with the operator
 
-- Names of Apps, environments, variables, and secrets come only from the plan's Naming list.
+- Names of Apps, environments, variables, and secrets come only from the [Naming list](docs/design.md#naming-list).
 - Keep strong runtime credentials in the server's `csm-ci` environment. Client repositories hold only the Client App key. Use the separate `csm-ci-e2e` environment for privileged test credentials.
 - Agents never create, read, register, revoke, or change private keys, PATs, or GitHub App permissions. Ask the user to handle those operations. Metadata-only checks may confirm secret names and placement. Never print credential values in commands, logs, review evidence, or chat.

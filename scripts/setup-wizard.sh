@@ -200,7 +200,7 @@ finish() {
 
 # Usage: scripts/setup-wizard.sh
 # Registers the csm-ci GitHub Apps for one server repository and its client repositories,
-# installs them, and stores their credentials under the names in docs/first-release-plan.md "Naming list".
+# installs them, and stores their credentials under the names in docs/design.md "Naming list".
 
 app_url() { # app_url NAME HOMEPAGE PERMISSION=LEVEL...
   local name="$1" homepage="$2" url; shift 2

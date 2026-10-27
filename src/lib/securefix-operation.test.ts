@@ -142,6 +142,8 @@ type RouteOptions = {
   message?: string;
   alreadyApplied?: boolean;
   pullWrites?: Array<{ title: string; body: string; pull_number?: number }>;
+  commitBranches?: Array<{ branch: string; expectedHeadOid: string }>;
+  deletedRefs?: string[];
 };
 
 async function inspectNewRouteFile(path: string, options: RouteOptions = {}) {
@@ -207,6 +209,10 @@ async function inspectNewRouteFile(path: string, options: RouteOptions = {}) {
           if (ref === "heads/release/next" && options.targetSha) return { data: { object: { sha: options.targetSha } } };
           throw missing;
         },
+        deleteRef: async ({ ref }: { ref: string }) => {
+          options.deletedRefs?.push(ref);
+          return { data: {} };
+        },
       },
       pulls: {
         list: listPulls,
@@ -221,9 +227,11 @@ async function inspectNewRouteFile(path: string, options: RouteOptions = {}) {
       },
     },
     paginate: async (method: unknown) => method === listArtifacts ? [artifact] : method === listPulls ? options.routePulls ?? [] : [],
-    graphql: async (query: string) => query.startsWith("mutation")
-      ? { createCommitOnBranch: { commit: { oid: appliedSha } } }
-      : { repository: { commit: { signature: { isValid: true, wasSignedByGitHub: true } } } },
+    graphql: async (query: string, variables?: { input?: { branch: { branchName: string }; expectedHeadOid: string } }) => {
+      if (!query.startsWith("mutation")) return { repository: { commit: { signature: { isValid: true, wasSignedByGitHub: true } } } };
+      if (variables?.input) options.commitBranches?.push({ branch: variables.input.branch.branchName, expectedHeadOid: variables.input.expectedHeadOid });
+      return { createCommitOnBranch: { commit: { oid: appliedSha } } };
+    },
   } as unknown as GitHub;
   const yaml = CONFIG_YAML
     .replace("repositories:", options.configMissing ? "repositories:" : `securefix:\n  allow_workflow_changes: false\n  routes:\n    - name: ${options.routeName ?? "release-pr"}\n      from: default\n      to: ${options.routeTargetBranch ?? "release/next"}\n      workflow: .github/workflows/release.yml\n      paths: { new-file.txt: any, package.json: version-only }\nrepositories:`)
@@ -458,6 +466,62 @@ describe("securefix retry inspection", () => {
 
   test("rejects a route whose target is its source/default branch", async () => {
     await expect(inspectNewRouteFile("new-file.txt", { routeTargetBranch: "main" })).rejects.toThrow("securefix route cannot write to its source or default branch");
+  });
+
+  test("rebuilds an existing route branch through a temporary branch and moves it with a lease on the observed head", async () => {
+    const observedSha = "d".repeat(40);
+    const commitBranches: NonNullable<RouteOptions["commitBranches"]> = [];
+    const deletedRefs: string[] = [];
+    const pullWrites: NonNullable<RouteOptions["pullWrites"]> = [];
+    const reset = spyOn(gitRef, "resetBranchWithLease").mockResolvedValue(undefined);
+    try {
+      const result = await inspectNewRouteFile("new-file.txt", {
+        apply: true,
+        targetSha: observedSha,
+        comparison: { ahead_by: 1, commits: [{ sha: observedSha }] },
+        historyCommit: { parents: [{ sha: runSha }], files: [] },
+        routePulls: [{ number: 70 }],
+        commitBranches,
+        deletedRefs,
+        pullWrites,
+      });
+      expect(result).toEqual({ status: "applied", commit: appliedSha, pullRequest: 70 });
+      const temporaryBranch = reset.mock.calls[0]?.[0].targetBranch ?? "";
+      expect(temporaryBranch).toMatch(/^csm-ci\/tmp\/route-[a-f0-9]{16}$/u);
+      expect(reset.mock.calls.map(([call]) => call)).toEqual([
+        { remote: `https://github.com/${repository}.git`, sourceBranch: "main", targetBranch: temporaryBranch, sourceSha: runSha, expectedTargetSha: null, token: "test-token" },
+        { remote: `https://github.com/${repository}.git`, sourceBranch: temporaryBranch, targetBranch: "release/next", sourceSha: appliedSha, expectedTargetSha: observedSha, token: "test-token" },
+      ]);
+      expect(commitBranches).toEqual([{ branch: temporaryBranch, expectedHeadOid: runSha }]);
+      expect(deletedRefs).toEqual([`heads/${temporaryBranch}`]);
+      expect(pullWrites.map((write) => write.pull_number)).toEqual([70]);
+    } finally {
+      reset.mockRestore();
+    }
+  });
+
+  test("commits directly when the route branch already points at the default head", async () => {
+    const commitBranches: NonNullable<RouteOptions["commitBranches"]> = [];
+    const reset = spyOn(gitRef, "resetBranchWithLease").mockRejectedValue(new Error("unexpected reset"));
+    try {
+      await inspectNewRouteFile("new-file.txt", { apply: true, targetSha: runSha, commitBranches });
+      expect(reset).not.toHaveBeenCalled();
+      expect(commitBranches).toEqual([{ branch: "release/next", expectedHeadOid: runSha }]);
+    } finally {
+      reset.mockRestore();
+    }
+  });
+
+  test("deletes the temporary route branch when the final move loses its lease", async () => {
+    const deletedRefs: string[] = [];
+    const reset = spyOn(gitRef, "resetBranchWithLease").mockImplementation(async ({ targetBranch }) => { if (targetBranch === "release/next") throw new gitRef.GitRefChanged(); });
+    try {
+      await expect(inspectNewRouteFile("new-file.txt", { apply: true, deletedRefs })).rejects.toThrow("securefix route branch or source moved before the conditional reset");
+      expect(deletedRefs).toHaveLength(1);
+      expect(deletedRefs[0]).toMatch(/^heads\/csm-ci\/tmp\/route-/u);
+    } finally {
+      reset.mockRestore();
+    }
   });
 
   test.each([

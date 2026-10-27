@@ -14,7 +14,7 @@ Before enabling any unattended production workflow, validate the chosen agent an
 
 Run the affected approve, merge, and policy-check suites and smoke sequentially at the candidate revision. Run credentialed scenarios through `e2e.yml` with the trusted runner checkout on `main`. Record any skipped cases and complete them before treating the gate as passed. A successful server suite alone cannot verify the external agent's behavior.
 
-After the pilot, the operator must review the evidence, decide the allowed repositories and change classes, verify costs and data handling, and explicitly authorize any unattended rollout. The current recommendation leaves unattended mode disabled. A proposal that adds server behavior or changes protected-repository rules needs a separate first-release-plan amendment before implementation.
+After the pilot, the operator must review the evidence, decide the allowed repositories and change classes, verify costs and data handling, and explicitly authorize any unattended rollout. The current recommendation leaves unattended mode disabled. A proposal that adds server behavior or changes protected-repository rules needs a separate design or operation-page amendment before implementation.
 
 ## Review-only exercise on 2026-10-26
 
