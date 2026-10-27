@@ -20,10 +20,10 @@ on:
         description: schedule or dispatch, derived by the trusted server workflow.
         type: string
         required: true
-      mode:
-        description: reconcile or managed-files-only.
+      targets:
+        description: Comma-separated settings, rulesets, releases, managed-files, or all, validated by the server workflow.
         type: string
-        default: reconcile
+        default: all
       config-path:
         description: Path of csm-ci.yaml in the server repository.
         type: string
@@ -53,7 +53,7 @@ jobs:
         uses: ./.csm-ci-actions/actions/server/repo-settings
         with:
           mode: validate-target
-          operation-mode: ${{ inputs.mode }}
+          targets: ${{ inputs.targets }}
           event-mode: ${{ inputs.event-mode }}
           github-token: ${{ github.token }}
           config-path: ${{ inputs.config-path }}
@@ -73,7 +73,7 @@ jobs:
       # the apply stage, which reruns the activation preflight first.
       - id: admin-token
         name: Mint administration write token
-        if: steps.target.outputs.operation-mode == 'reconcile'
+        if: steps.target.outputs.selects-administration == 'true'
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
@@ -82,11 +82,11 @@ jobs:
           repositories: ${{ steps.target.outputs.target-name }}
           permission-administration: write
       - id: inspect
-        if: steps.target.outputs.operation-mode == 'reconcile'
+        if: steps.target.outputs.selects-administration == 'true'
         uses: ./.csm-ci-actions/actions/server/repo-settings
         with:
           mode: inspect
-          operation-mode: ${{ steps.target.outputs.operation-mode }}
+          targets: ${{ steps.target.outputs.targets }}
           github-token: ${{ github.token }}
           config-path: ${{ inputs.config-path }}
           repository: ${{ inputs.repository }}
@@ -94,11 +94,11 @@ jobs:
           admin-token: ${{ steps.admin-token.outputs.token }}
           actions-repository: ${{ job.workflow_repository }}
       - id: preflight
-        if: steps.target.outputs.operation-mode == 'reconcile' && inputs.event-mode == 'dispatch' && steps.inspect.outputs.activation-required == 'true'
+        if: steps.target.outputs.selects-rulesets == 'true' && inputs.event-mode == 'dispatch' && steps.inspect.outputs.activation-required == 'true'
         uses: ./.csm-ci-actions/actions/server/repo-settings
         with:
           mode: preflight
-          operation-mode: ${{ steps.target.outputs.operation-mode }}
+          targets: ${{ steps.target.outputs.targets }}
           github-token: ${{ github.token }}
           config-path: ${{ inputs.config-path }}
           repository: ${{ inputs.repository }}
@@ -109,7 +109,7 @@ jobs:
       - id: approver-token
         name: Mint approver contents token
         if: >-
-          steps.target.outputs.operation-mode == 'reconcile' &&
+          steps.target.outputs.selects-rulesets == 'true' &&
           inputs.event-mode == 'dispatch' &&
           steps.inspect.outputs.activation-required == 'true' &&
           steps.preflight.outputs.caller-distributed == 'true' &&
@@ -122,11 +122,11 @@ jobs:
           repositories: ${{ steps.target.outputs.target-name }}
           permission-contents: write
       - name: Apply repository settings
-        if: steps.target.outputs.operation-mode == 'reconcile' && steps.inspect.outputs.has-changes == 'true'
+        if: steps.target.outputs.selects-administration == 'true' && steps.inspect.outputs.has-changes == 'true'
         uses: ./.csm-ci-actions/actions/server/repo-settings
         with:
           mode: apply
-          operation-mode: ${{ steps.target.outputs.operation-mode }}
+          targets: ${{ steps.target.outputs.targets }}
           github-token: ${{ github.token }}
           config-path: ${{ inputs.config-path }}
           repository: ${{ inputs.repository }}
@@ -136,11 +136,12 @@ jobs:
           actions-repository: ${{ job.workflow_repository }}
           approver-app-slug: ${{ steps.approver-token.outputs.app-slug }}
       - id: managed-inspect
+        if: steps.target.outputs.selects-managed-files == 'true'
         uses: ./.csm-ci-actions/actions/server/repo-settings
         with:
           mode: managed-inspect
           workflow-release: ${{ inputs.workflow-release }}
-          operation-mode: ${{ steps.target.outputs.operation-mode }}
+          targets: ${{ steps.target.outputs.targets }}
           github-token: ${{ github.token }}
           config-path: ${{ inputs.config-path }}
           repository: ${{ inputs.repository }}
@@ -175,7 +176,7 @@ jobs:
         with:
           mode: managed-apply
           workflow-release: ${{ inputs.workflow-release }}
-          operation-mode: ${{ steps.target.outputs.operation-mode }}
+          targets: ${{ steps.target.outputs.targets }}
           github-token: ${{ github.token }}
           config-path: ${{ inputs.config-path }}
           repository: ${{ inputs.repository }}

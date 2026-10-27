@@ -32,24 +32,38 @@ export function repoSettingsEventMode(value: string, eventName: string): "schedu
   return value;
 }
 
-export type RepoSettingsOperationMode = "reconcile" | "managed-files-only";
+export const REPO_SETTINGS_TARGETS = ["settings", "rulesets", "releases", "managed-files"] as const;
+export type RepoSettingsTargetName = (typeof REPO_SETTINGS_TARGETS)[number];
+export type RepoSettingsSelection = ReadonlySet<RepoSettingsTargetName>;
 
-export function repoSettingsOperationMode(value: string | undefined, eventName: string, eventMode?: string): RepoSettingsOperationMode {
-  const operationMode = value || "reconcile";
-  if (operationMode !== "reconcile" && operationMode !== "managed-files-only") {
-    throw new Error(`unknown repo-settings operation mode ${operationMode}`);
+// Parses the comma-separated targets input. The result keeps the canonical processing order.
+export function repoSettingsSelection(value: string, eventName: string, eventMode?: string): RepoSettingsSelection {
+  const entries = value.split(",").map((entry) => entry.trim());
+  if (entries.some((entry) => entry === "")) throw new Error(`repo-settings targets must be a comma-separated list of ${[...REPO_SETTINGS_TARGETS, "all"].join(", ")}: ${JSON.stringify(value)}`);
+  const selected = new Set<RepoSettingsTargetName>();
+  for (const entry of entries) {
+    if (entry === "all") REPO_SETTINGS_TARGETS.forEach((target) => selected.add(target));
+    else if ((REPO_SETTINGS_TARGETS as readonly string[]).includes(entry)) selected.add(entry as RepoSettingsTargetName);
+    else throw new Error(`unknown repo-settings target ${entry}; use ${[...REPO_SETTINGS_TARGETS, "all"].join(", ")}`);
   }
-  if (operationMode === "managed-files-only" && (eventName === "schedule" || eventMode === "schedule")) {
-    throw new Error("a scheduled run cannot use managed-files-only mode");
-  }
-  if (operationMode === "managed-files-only" && eventName !== "workflow_dispatch") {
-    throw new Error("managed-files-only mode requires a workflow_dispatch event");
-  }
-  return operationMode;
+  const all = selected.size === REPO_SETTINGS_TARGETS.length;
+  if (!all && (eventName === "schedule" || eventMode === "schedule")) throw new Error("a scheduled run must select all repo-settings targets");
+  if (!all && eventName !== "workflow_dispatch") throw new Error("selecting repo-settings targets other than all requires a workflow_dispatch event");
+  return new Set(REPO_SETTINGS_TARGETS.filter((target) => selected.has(target)));
 }
 
-export function validateRepoSettingsStage(stage: string, operationMode: RepoSettingsOperationMode): void {
-  if (operationMode === "managed-files-only" && ["inspect", "preflight", "apply"].includes(stage)) {
-    throw new Error(`repo-settings stage ${stage} is unavailable in managed-files-only mode`);
-  }
+export function formatRepoSettingsSelection(selection: RepoSettingsSelection): string {
+  return REPO_SETTINGS_TARGETS.filter((target) => selection.has(target)).join(",");
+}
+
+export function selectsAdministration(selection: RepoSettingsSelection): boolean {
+  return selection.has("settings") || selection.has("rulesets") || selection.has("releases");
+}
+
+export function validateRepoSettingsStage(stage: string, selection: RepoSettingsSelection): void {
+  const allowed = ["inspect", "apply"].includes(stage) ? selectsAdministration(selection)
+    : stage === "preflight" ? selection.has("rulesets")
+      : ["managed-inspect", "managed-apply"].includes(stage) ? selection.has("managed-files")
+        : true;
+  if (!allowed) throw new Error(`repo-settings stage ${stage} is unavailable for targets ${formatRepoSettingsSelection(selection)}`);
 }

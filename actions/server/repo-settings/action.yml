@@ -2,7 +2,7 @@ name: csm-ci repository settings
 description: Discover configured repositories and reconcile settings, rulesets, and managed files.
 inputs:
   mode:
-    description: validate-mode, validate-target, discover, preflight, inspect, apply, managed-inspect, or managed-apply.
+    description: validate-targets, validate-target, discover, preflight, inspect, apply, managed-inspect, or managed-apply.
     required: true
   github-token:
     description: GITHUB_TOKEN with contents:read on the server repository to read the pinned config.
@@ -24,9 +24,9 @@ inputs:
     description: Optional owner/repo selection for discovery.
   event-mode:
     description: schedule or dispatch, derived by the trusted caller workflow.
-  operation-mode:
-    description: reconcile or managed-files-only, selected by the server workflow.
-    default: reconcile
+  targets:
+    description: Comma-separated settings, rulesets, releases, managed-files, or all, selected by the server workflow.
+    default: all
   actions-repository:
     description: owner/repo where the reusable caller workflows are distributed.
     required: true
@@ -37,8 +37,14 @@ inputs:
 outputs:
   workflow-release:
     description: Stable release revision resolved and validated once for all targets.
-  operation-mode:
-    description: Validated operation mode, with an omitted or empty value normalized to reconcile.
+  targets:
+    description: Validated targets as a canonical comma-separated list.
+  selects-administration:
+    description: true when settings, rulesets, or releases is selected.
+  selects-rulesets:
+    description: true when rulesets is selected.
+  selects-managed-files:
+    description: true when managed-files is selected.
   clients:
     description: JSON array of selected client repository targets.
   client-count:

@@ -295,6 +295,10 @@ on:
         description: Optional configured owner/repo target.
         type: string
         required: false
+      targets:
+        description: Comma-separated settings, rulesets, releases, managed-files, or all.
+        type: string
+        default: all
 permissions: {}
 jobs:
   settings:
@@ -303,12 +307,13 @@ jobs:
     uses: civitaspo/csm-ci-actions/.github/workflows/server-repo-settings.yml@<sha>
     with:
       repository: ${{ inputs.repository || '' }}
+      targets: ${{ inputs.targets || 'all' }}
     secrets:
       CSM_CI_SERVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
       CSM_CI_APPROVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_APPROVER_APP_PRIVATE_KEY }}
 ```
 
-Pin `<sha>` to the reviewed actions commit. The schedule repairs drift without creating or re-enabling `controlled-merges`. To activate it, first distribute the merge caller and clear the auto-merge queue, then dispatch for that repository. The server verifies these prerequisites before it changes anything, whenever a dispatch would activate the ruleset.
+Pin `<sha>` to the reviewed actions commit. `targets` selects what a dispatch changes; see [targets](repo-settings.md#targets). A schedule has no inputs and always uses `all`. The schedule repairs drift without creating or re-enabling `controlled-merges`. To activate it, first distribute the merge caller and clear the auto-merge queue, then dispatch for that repository. The server verifies these prerequisites before it changes anything, whenever a dispatch would activate the ruleset.
 
 Review managed-file pull requests from `csm-ci/repo-settings` and request `/merge` through the normal approval process. To stop controlled merging, set the ruleset's enforcement to `disabled`; the schedule preserves that state.
 

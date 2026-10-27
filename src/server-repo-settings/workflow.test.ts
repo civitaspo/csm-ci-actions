@@ -17,7 +17,8 @@ describe("repo-settings reusable workflows", () => {
     const workflowCall = record(triggers.workflow_call);
     const inputs = record(workflowCall.inputs);
     expect(inputs.repository).toBeDefined();
-    expect(record(inputs.mode)).toHaveProperty("default", "reconcile");
+    expect(record(inputs.targets)).toHaveProperty("default", "all");
+    expect(inputs).not.toHaveProperty("mode");
     expect(inputs).not.toHaveProperty("event-mode");
   });
 
@@ -35,23 +36,25 @@ describe("repo-settings reusable workflows", () => {
     expect(server.if).toContain("needs.discover.outputs.has-server == 'true'");
   });
 
-  test("propagates the validated mode rather than a possibly empty raw input", () => {
+  test("propagates the validated targets rather than the raw input", () => {
     const jobs = record(outer.jobs);
     const discover = record(jobs.discover);
-    expect(record(discover.outputs)["operation-mode"]).toBe("${{ steps.validate-mode.outputs.operation-mode }}");
+    expect(record(discover.outputs).targets).toBe("${{ steps.validate-targets.outputs.targets }}");
     for (const name of ["clients", "server"]) {
-      expect(record(record(jobs[name]).with).mode).toBe("${{ needs.discover.outputs.operation-mode }}");
+      expect(record(record(jobs[name]).with).targets).toBe("${{ needs.discover.outputs.targets }}");
+      expect(record(record(jobs[name]).with)).not.toHaveProperty("mode");
     }
   });
 
   test("discovery token is metadata-only and mutations use separate least-privilege target tokens", () => {
     const discover = record(record(outer.jobs).discover);
     const discoverSteps = discover.steps as Record<string, unknown>[];
-    const validateMode = discoverSteps.find((step) => step.id === "validate-mode");
+    const validateMode = discoverSteps.find((step) => step.id === "validate-targets");
     const discoveryToken = discoverSteps.find((step) => step.id === "discovery-token");
     expect(validateMode).toBeDefined();
     expect(discoverSteps.indexOf(validateMode!)).toBeLessThan(discoverSteps.indexOf(discoveryToken!));
-    expect(record(validateMode?.with)).toHaveProperty("operation-mode", "${{ inputs.mode }}");
+    // A schedule always selects all targets, whatever the caller passes.
+    expect(record(validateMode?.with)).toHaveProperty("targets", "${{ github.event_name == 'schedule' && 'all' || inputs.targets }}");
     expect(discoveryToken).toBeDefined();
     const discoveryInputs = record(discoveryToken?.with);
     expect(discoveryInputs["permission-metadata"]).toBe("read");
@@ -65,10 +68,11 @@ describe("repo-settings reusable workflows", () => {
     const workflow = steps.find((step) => step.id === "workflow-token");
     expect(record(admin?.with)).toEqual(expect.objectContaining({ "permission-administration": "write" }));
     const guardedAdministrativeSteps = [
-      ["admin-token", "steps.target.outputs.operation-mode == 'reconcile'"],
-      ["inspect", "steps.target.outputs.operation-mode == 'reconcile'"],
-      ["preflight", "steps.target.outputs.operation-mode == 'reconcile'"],
-      ["approver-token", "steps.target.outputs.operation-mode == 'reconcile'"],
+      ["admin-token", "steps.target.outputs.selects-administration == 'true'"],
+      ["inspect", "steps.target.outputs.selects-administration == 'true'"],
+      ["preflight", "steps.target.outputs.selects-rulesets == 'true'"],
+      ["approver-token", "steps.target.outputs.selects-rulesets == 'true'"],
+      ["managed-inspect", "steps.target.outputs.selects-managed-files == 'true'"],
     ] as const;
     for (const [id, guard] of guardedAdministrativeSteps) {
       expect(steps.find((step) => step.id === id)?.if).toContain(guard);
@@ -94,7 +98,9 @@ describe("repo-settings reusable workflows", () => {
     // Settings apply before managed files, so a rejected managed branch cannot block them.
     expect(steps.findIndex((step) => step.name === "Apply repository settings")).toBeLessThan(names.indexOf("managed-inspect"));
     const apply = steps.find((step) => step.name === "Apply repository settings");
-    expect(apply?.if).toContain("steps.target.outputs.operation-mode == 'reconcile'");
+    expect(apply?.if).toContain("steps.target.outputs.selects-administration == 'true'");
+    for (const id of ["contents-token", "workflow-token"]) expect(steps.find((step) => step.id === id)?.if).toContain("steps.managed-inspect.outputs.has-changes == 'true'");
+    expect(steps.find((step) => step.name === "Apply managed files")?.if).toContain("steps.managed-inspect.outputs.has-changes == 'true'");
     expect(record(apply?.with)["approver-app-slug"]).toBe("${{ steps.approver-token.outputs.app-slug }}");
   });
 
@@ -109,16 +115,18 @@ describe("repo-settings reusable workflows", () => {
       const inputs = record(step.with);
       expect(inputs["github-token"]).toBe("${{ github.token }}");
       expect(inputs["actions-repository"]).toBe("${{ job.workflow_repository }}");
-      expect(inputs["operation-mode"]).toBeDefined();
+      expect(inputs).not.toHaveProperty("operation-mode");
+      expect(inputs.targets).toBeDefined();
     }
   });
 
-  test("the target helper receives mode as an internal input and has no public event trigger", () => {
+  test("the target helper receives targets as an internal input and has no public event trigger", () => {
     const triggers = record(target.on);
     expect(Object.keys(triggers)).toEqual(["workflow_call"]);
     const inputs = record(record(triggers.workflow_call).inputs);
     expect(inputs["event-mode"]).toBeDefined();
-    expect(record(inputs.mode)).toHaveProperty("default", "reconcile");
+    expect(record(inputs.targets)).toHaveProperty("default", "all");
+    expect(inputs).not.toHaveProperty("mode");
   });
 });
 
