@@ -15,6 +15,10 @@
 ### 🚜 Refactor
 
 - *(repo-settings)* Select reconciliation targets explicitly instead of modes
+
+### ⚙️ Miscellaneous Tasks
+
+- *(release)* V0.3.0
 ## [0.2.0] - 2026-10-27
 
 ### 🚀 Features
