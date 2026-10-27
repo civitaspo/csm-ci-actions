@@ -1485,3 +1485,26 @@ Independent review against issue #97, the governing specification, and the stage
 The reviewed issue #97 metadata delta is integrated on signed issue #71 candidate `5168471e2d3c404a34c07055c82fbde0e0ca45c1`. Every non-handoff added and deleted line matches reviewed metadata candidate `66ff9bccf8fa3a3f4922afd965f269434b8d573b`. The preceding handoff is preserved as a complete prefix. Production source, bundles, actions, workflows and fixtures remain byte-identical to the base, including the final managed-branch cleanup correction and policy-report implementation. Existing policy-report lifecycle assertions are preserved in the metadata-annotated repository-sensitivity scenario.
 
 All required local gates pass with the pinned tools, including full tests, build with unchanged `dist/`, root jactionlint, and action-lock generation and verification with no lock delta. All 12 metadata rejection mutations were rerun separately in isolated copies, bounded to 20 seconds each, restored after each attempt, and detected. Live approve, merge, policy-check, securefix, release, release-pr and repo-settings suites, then smoke, remain pending at the final signed full SHA. Rendered PR descriptions and labels, second-identity cases, trust restoration and post-merge CI require the parent integration run. Compatible stable publication and operator-owned App capabilities remain separate gates. No live e2e, PR opening, merge or testing/production write is claimed by this integration.
+
+## Issue 155: one lock for several e2e features
+
+`e2e/run.ts` accepts `--feature a,b,...`. One invocation takes the lock once, moves `e2e` and syncs fixtures once, runs the concurrent scenarios of every selected feature together, then runs serial scenarios one at a time. It prints each scenario's duration and the total wall time, lock wait included. The lock holder refreshes the lock timestamp every 5 minutes, and `e2e.yml` allows 120 minutes, because a combined invocation can exceed the 60 minute stale-lock TTL. Separate invocations still serialize; sharing the lock across processes for one SHA was not needed for the measured gain.
+
+Merge readiness polls every twelfth of `merge.deadline_minutes`, capped at 30 seconds, so the testing fixture's 1 minute deadline polls every 5 seconds and the deployed 60 minute default is unchanged. The approve scenario no longer sleeps 15 seconds before checking for an absent server run; the preceding client check already proves that every request job was skipped.
+
+Measured locally on 2026-10-28, one run per side, second-identity scenarios skipped on both sides:
+
+| | Candidate | Shape | Wall time | Result |
+|---|---|---|---|---|
+| Before | `2f07fd858e1d090269618beb68155fc78b572480` (main) | approve, merge, policy-check, smoke as four sequential invocations | 3804 s (488 + 2262 + 924 + 130) | 25/37 passed, 10 skipped, 2 failed |
+| After | `6cd63e33b51f088bcd6f777b9cc675980c3ffdc5` | one invocation `--feature approve,merge,policy-check,smoke` | 2009 s | 25/37 passed, 10 skipped, 2 failed |
+
+After the change, the serial scenarios account for 1597 s of the 2009 s. The concurrent phase took about 412 s and was bounded by `merge.approval-timeout` (394 s). The serial chain is now the limiter, and 785 s of it is the failing `policy-check.repository-sensitivity` run, which ended at the harness timeout. No API rate-limit errors or lock refresh failures occurred.
+
+Failures:
+
+- `policy-check.repository-sensitivity` failed on both sides, so it is independent of this change. Before: [PR 1102](https://github.com/civitaspo/testing-csm-ci-client/pull/1102), [server run](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40539706528), timed out waiting for one active policy failure report. After: [PR 1124](https://github.com/civitaspo/testing-csm-ci-client/pull/1124), [server run](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40545273645), timed out waiting for the superseded report to become outdated.
+- `merge.deleted-command` failed before the change only ([PR 1091](https://github.com/civitaspo/testing-csm-ci-client/pull/1091), [server run](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40533039444)): timed out waiting for the Server App rocket. It passed after the change.
+- `merge.changed-head` failed after the change ([server run](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40542367255)). With a 5 second poll, the next readiness check saw the pushed commit in the pull request commit list before the pull request head moved, so the trust check rejected it with `last listed commit ... is not the pinned head`. The merge was still refused. The scenario now accepts this rejection reason. At `d9ecdcd1608a28c3dad8b5972f2e22e8090d02ec` it passed 1/1 ([server run](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40547683167)), and smoke passed 5/5.
+
+Not yet run: the second-identity scenarios and the combined suite through `e2e.yml` on `main`, which require an authorized merge.
