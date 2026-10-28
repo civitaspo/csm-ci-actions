@@ -23,7 +23,7 @@ repo_settings:
 
 Omitted repository settings remain unchanged. The merge-method settings accept only the values shown above.
 
-`has_wiki`, `has_projects`, and `allow_update_branch` are optional booleans. Each accepts `true` or `false`. The example disables Wiki and Projects and enables GitHub's suggestion to update pull request branches. `allow_update_branch` does not update branches or require branches to be up to date before merging. Existing merge, approval, required-check, and ruleset behavior remains unchanged.
+`has_wiki`, `has_projects`, and `allow_update_branch` are optional booleans. Each accepts `true` or `false`. `/merge` uses platform auto-merge only when `allow_auto_merge` is `true`; see [Merge](merge.md#platform-auto-merge). The example disables Wiki and Projects and enables GitHub's suggestion to update pull request branches. `allow_update_branch` does not update branches or require branches to be up to date before merging. Existing merge, approval, required-check, and ruleset behavior remains unchanged.
 
 The three feature fields use the repository REST API with the existing target-scoped administration token. Upgrade all server configuration parser pins to a compatible runtime before adding these fields to deployed configuration.
 
@@ -217,7 +217,7 @@ A scheduled run does not create `controlled-merges` or activate a disabled rules
 
 - The default branch contains a merge caller for newly created issue comments, with an explicit same-name `CSM_CI_CLIENT_APP_PRIVATE_KEY` mapping and no job-level `if:`. The server also needs its label caller with a same-name `CSM_CI_SERVER_APP_PRIVATE_KEY` mapping. Any present approval or provider signing names must also map to their identical secret expressions. Optional feature presence is checked when that feature runs. Preflight rejects inheritance, missing required names, renamed names, literals, wrong secret references, and undeclared extra names. Whitespace inside the expression is allowed. See the [explicit secret contract](setup.md#explicit-secret-contract-migration). Caller triggers, unconditional jobs, referenced repository checks, and activation rejection messages are unchanged, including `caller workflow has not been distributed` and `caller workflow is not distributed on <repository>`. Upgrade old caller pins and mappings together before selecting this preflight revision.
 - The configured approver App can obtain a repository-scoped contents-write token, and its bot identity matches configuration.
-- No open pull request has auto-merge queued.
+- No open pull request has auto-merge queued by an actor other than the Server bot.
 - An existing `controlled-merges` ruleset has only the Server App's `pull_request` bypass.
 
 The checks run only when a dispatch would activate the ruleset. A dispatch for a repository whose `controlled-merges` is already active repairs drift without them. A failed preflight fails the run before administrative changes. App permission proof uses the official token action. The collaborator-permission endpoint does not reliably describe whether an App's approval counts.

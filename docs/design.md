@@ -119,7 +119,7 @@ docs/, e2e/
 - An accepted comment gets 🚀. For `/approve` and `/merge`, on success and failure alike, the server posts a receipt with the marker `<!-- csm-ci:<op>:<comment_id> -->`.
 - **Replay**: a request is rejected if a marker authored by the Server bot already exists. A collaborator who deletes the marker can only retry the same command against the same head, which does no harm.
 - **Head pinning**: commands take no argument. The server pins the head it observed and rejects the request when a `head_ref_force_pushed` event follows the comment or the head's committer date is newer than the comment. A short SHA argument could be brute-forced and a full one is impractical to type. `/approve` requires every commit to come from a trusted committer, so a swapped commit can only come from one.
-- **Kill switch**: while waiting, the server re-reads the comment on every poll and aborts if it was edited or deleted.
+- **Kill switch**: while a self-merge request waits, the server re-reads the comment on every poll and aborts if it was edited or deleted. A `/merge` that enabled platform auto-merge checks the comment only at acceptance; see [Merge](merge.md#platform-auto-merge).
 - **`/recheck`** re-runs the policy check and the automatic approval decision for the current head after a transient GitHub failure. Its result depends only on current API state, so it is idempotent. It skips the edit, 60-minute and replay checks, posts no receipt, and never forces an approval.
 
 ### S6. Placement of secrets and permissions

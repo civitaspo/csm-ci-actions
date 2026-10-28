@@ -49,7 +49,6 @@ trust:
 merge:
   required_checks:
     - { name: status-check, app_id: 15368 }
-  deadline_minutes: 60
 policies:
   - { type: signed-commits }
   - { type: trusted-committers }
