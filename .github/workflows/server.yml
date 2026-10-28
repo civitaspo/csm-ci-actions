@@ -506,7 +506,7 @@ jobs:
           MERGE_SHA: ${{ needs.release-plan.outputs.merge-sha }}
           TAG: ${{ needs.release-plan.outputs.tag }}
         run: jq -cn --arg repository "$CLIENT_REPOSITORY" --arg sha "$MERGE_SHA" --arg tag "$TAG" '{client_repository:$repository,merge_sha:$sha,tag:$tag}' > "$RUNNER_TEMP/release-predicate.json"
-      - uses: actions/attest@f057fd524d485ac48d9b534c235aad15b5bb303f # v3.0.0
+      - uses: actions/attest@e59cbc1ad1ac2d59339667419eb8cdde6eb61e3d # v3.2.0
         with:
           subject-path: ${{ steps.assets.outputs.subject-path }}
           predicate-type: https://github.com/civitaspo/csm-ci-actions/attestation/release/v1
