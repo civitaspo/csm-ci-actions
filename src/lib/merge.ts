@@ -161,7 +161,7 @@ async function platformFallbackReason(ctx: MergeContext, pull: PullFacts): Promi
   const checks = rules.flatMap((r) => r.type === "required_status_checks" ? r.parameters?.required_status_checks ?? [] : []);
   const missing = [{ name: "csm-ci/policy", app_id: ctx.config.apps.server_app_id }, ...ctx.config.merge.required_checks]
     .filter((required) => !checks.some((c) => c.context === required.name && c.integration_id === required.app_id));
-  if (missing.length) return `${pull.defaultBranch} does not require ${missing.map((m) => m.name).join(", ")}`;
+  if (missing.length) return `${pull.defaultBranch} does not require ${[...new Set(missing.map((m) => m.name))].join(", ")}`;
   return undefined;
 }
 

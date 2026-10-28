@@ -499,6 +499,13 @@ describe("platform auto-merge", () => {
     expect(notice).toContain("ready by 2026-10-24T12:30:00.000Z");
   });
 
+  test("names each missing check once when the configuration also lists csm-ci/policy", async () => {
+    const { ctx, notify } = context({ autoMergeAllowed: true, rules: RULES.slice(0, 1) });
+    ctx.config.merge.required_checks = [{ name: "csm-ci/policy", app_id: 1 }];
+    await waitForMerge(ctx, { pull_number: 12, comment_id: 9 });
+    expect(posts(notify)[0]).toContain("because main does not require csm-ci/policy. ");
+  });
+
   test("a replayed fallback does not post a second notice", async () => {
     const { ctx, notify } = context({ notifyComments: [{ body: marker("merge-wait", 9), user: { id: SERVER_BOT_ID, type: "Bot" } }] });
     await waitForMerge(ctx, { pull_number: 12, comment_id: 9 });

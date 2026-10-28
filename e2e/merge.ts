@@ -8,6 +8,7 @@ import { splitRepository } from "../src/lib/github.ts";
 import { approverReviews, assert, CLIENT, closePr, dispatch, expectOp, openPr, type Pr, postComment, type Scenario, SERVER, SERVER_BOT_ID, serverComments, until, withServerConfig } from "./harness.ts";
 
 const RULESET_ID = 25785295;
+const SERVER_APP_ID = 5455185;
 const TEST_BOT_ID = 347402450;
 const TEST_BOT_LOGIN = "testing-csm-ci-untrusted-committer[bot]";
 const SERVER_CONFIG = "csm-ci.yaml";
@@ -137,6 +138,23 @@ async function withReviewRulesetDisabled(ctx: Parameters<Scenario["run"]>[0], ru
   }
 }
 
+// Platform auto-merge requires the branch rules to enforce csm-ci/policy; the shared fixture ruleset may lack it.
+async function withPolicyCheckRequired(ctx: Parameters<Scenario["run"]>[0], run: () => Promise<void>): Promise<void> {
+  const repo = { owner: "civitaspo", repo: "testing-csm-ci-client", ruleset_id: RULESET_ID };
+  const { data } = await ctx.gh.rest.repos.getRepoRuleset(repo);
+  const refName = data.conditions?.ref_name;
+  assert(data.target === "branch" && refName, `ruleset ${RULESET_ID} is not the expected default-branch rule`);
+  const rules = data.rules ?? [];
+  if (rules.some((rule) => rule.type === "required_status_checks")) return run();
+  const update = (next: typeof rules) => ctx.gh.rest.repos.updateRepoRuleset({ ...repo, name: data.name, target: "branch", enforcement: data.enforcement, conditions: { ref_name: refName }, rules: next, bypass_actors: data.bypass_actors ?? [] });
+  try {
+    await update([...rules, { type: "required_status_checks", parameters: { strict_required_status_checks_policy: false, do_not_enforce_on_create: false, required_status_checks: [{ context: "csm-ci/policy", integration_id: SERVER_APP_ID }] } }]);
+    await run();
+  } finally {
+    await update(rules);
+  }
+}
+
 export const merge: Scenario[] = [
   {
     id: "merge.authorized",
@@ -200,7 +218,7 @@ export const merge: Scenario[] = [
       const exemption = 'exempt: [{ id: 4525500, login: civitaspo }]';
       assert(text.includes(exemption) && text.includes(SELF_MERGE), "could not find the expected exemption and self-merge entry");
       return text.replace(exemption, "exempt: []").replace(SELF_MERGE, "");
-    }, async () => {
+    }, () => withPolicyCheckRequired(ctx, async () => {
       const since = new Date(Date.now() - 2_000);
       const path = `.github/e2e-concurrent-${crypto.randomUUID()}.txt`;
       const pr = await openPr(ctx, { intent: prCase(ctx, "fixture"), kind: "signed", filePath: path, fileContent: "concurrent approve and merge\n" });
@@ -222,7 +240,7 @@ export const merge: Scenario[] = [
       } finally {
         await closePr(ctx, pr);
       }
-    }),
+    })),
   },
   {
     id: "merge.workflow-change",
@@ -521,7 +539,7 @@ export const merge: Scenario[] = [
       assert(receipts.length === 1, `expected one failure receipt, found ${receipts.length}`);
       await verifyReceipt(ctx, pr, comment, "merge", /is closed[\s\S]*post a new exact `\/merge` comment/u);
       const replay = await request(ctx, pr, comment.id);
-      await expectOp(ctx, replay.match, replay.since, "failure", /already handled/);
+      await expectOp(ctx, replay.match, replay.since, "failure", /is closed/);
       const replayReceipts = (await serverComments(ctx, pr)).filter((body) => body.includes(marker("merge", comment.id)));
       assert(replayReceipts.length === 1, `replay changed the receipt count to ${replayReceipts.length}`);
     }),
