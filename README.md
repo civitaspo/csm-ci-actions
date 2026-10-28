@@ -50,6 +50,8 @@ A minimal request receiver is `.github/workflows/csm-ci.yml`:
 
 ```yaml
 name: csm-ci
+# The run title is the request label (csm-ci-<op>-<rand>) and its description (<repository>/<numbers>); run-name is set before intake runs.
+run-name: ${{ github.event.label.name }} ${{ github.event.label.description }}
 on:
   label:
     types: [created]
