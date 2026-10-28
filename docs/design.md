@@ -147,6 +147,7 @@ docs/, e2e/
 - Fork PRs are out of scope for securefix. approve and policy-check run on `pull_request_target` but never check out PR code.
 - Head pinning cannot detect a push by a trusted committer that forged `committedDate`.
 - The final merge token carries `workflows: write` for every ready PR, to avoid a separate path decision before minting it. It is used only to merge the pinned head after final revalidation, or to enable platform auto-merge for it after acceptance, and does not allow securefix workflow changes when `allow_workflow_changes` is false.
+- The `/e2e` comment command ([testing](testing.md#running-e2e)) can run the pull request's own `e2e/` harness with the `csm-ci-e2e` credentials. That is the one place candidate code receives them. It is allowed only when the commenter is the repository owner, the head branch is in this repository, and every PR commit is GitHub-verified and authored by the owner. Otherwise the harness comes from `main`. The workflow file always comes from `main`.
 - **All server jobs share the Server App key**, so a compromise of any job can mint an `administration: write` token. Narrowing token permissions per job is operational discipline, not a boundary. Separating it would need a third App and environment.
 
 ## Naming list
