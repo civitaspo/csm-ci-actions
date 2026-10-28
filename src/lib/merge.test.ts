@@ -502,7 +502,7 @@ describe("platform auto-merge", () => {
   test("names each missing check once when the configuration also lists csm-ci/policy", async () => {
     const { ctx, notify } = context({ autoMergeAllowed: true, rules: RULES.slice(0, 1) });
     ctx.config.merge.required_checks = [{ name: "csm-ci/policy", app_id: 1 }];
-    await waitForMerge(ctx, { pull_number: 12, comment_id: 9 });
+    await expect(waitForMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow("merge readiness deadline passed");
     expect(posts(notify)[0]).toContain("because main does not require csm-ci/policy. ");
   });
 
