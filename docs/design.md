@@ -152,7 +152,7 @@ docs/, e2e/
 
 ## Naming list
 
-This is the single source for names. The implementation, docs and setup wizard use these names.
+This is the single source for names. The implementation, docs and setup skill use these names.
 
 - The namespace is `csm-ci` for Apps and environments, and `CSM_CI_` for secrets and variables.
 - App credentials are a pair of `CSM_CI_<ROLE>_APP_CLIENT_ID` (a variable, passed to `client-id` of `actions/create-github-app-token`) and `CSM_CI_<ROLE>_APP_PRIVATE_KEY` (a secret). A PAT is `CSM_CI_<ROLE>_TOKEN`.
