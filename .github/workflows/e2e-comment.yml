@@ -3,7 +3,7 @@ name: e2e-comment
 # `/e2e <features>` on a pull request runs the live e2e of its head commit. issue_comment workflows
 # run from the default branch, so the privileged e2e job, its harness and its environment come from
 # main. The pull request's code is never checked out here; it only reaches the testing repositories
-# through the harness's e2e branch.
+# through the harness's e2e branch. The command logic is in e2e/e2e-comment.ts, run from main.
 # Commands must not cancel each other, and e2e.yml serializes the runs.
 # jactionlint ignore=concurrency-limits
 on:
@@ -30,81 +30,76 @@ jobs:
       harness-ref: ${{ steps.check.outputs.harness-ref }}
       harness: ${{ steps.check.outputs.harness }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@82a612c5ab8bcda7cc5db6b7e81a8e7584c3dc6e # v5.2.3
+        with:
+          cache: false
+      - run: bun install --frozen-lockfile --ignore-scripts
       - id: check
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.issue.number }}
           COMMENT_ID: ${{ github.event.comment.id }}
-          BODY: ${{ github.event.comment.body }}
-          OWNER_ID: "4525500"
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           COMMENTER_ID: ${{ github.event.comment.user.id }}
-          # Immutable IDs allowed to run live e2e: the repository owner civitaspo.
-          ALLOWED_IDS: "4525500"
-          # Keep in sync with FEATURES in e2e/pr-metadata.ts; e2e/e2e-comment.test.ts checks it.
-          KNOWN_FEATURES: "smoke approve merge policy-check securefix release release-pr repo-settings"
-        run: |
-          set -euo pipefail
-          reply() { gh api "/repos/$REPO/issues/$PR/comments" -f body="$1" > /dev/null; }
-          case " $ALLOWED_IDS " in
-            *" $COMMENTER_ID "*) ;;
-            *) echo "commenter $COMMENTER_ID is not allowed to run e2e"; echo ok=false >> "$GITHUB_OUTPUT"; exit 0 ;;
-          esac
-          re='^/e2e --feature ([a-z-]+(,[a-z-]+)*)( --scenario ([^[:cntrl:]]{1,200}))?[[:space:]]*$'
-          if [[ ! "$BODY" =~ $re ]]; then
-            reply "e2e rejected: the comment must be exactly \`/e2e --feature <feature>[,<feature>...] [--scenario <name substring>]\`."
-            echo ok=false >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          feature="${BASH_REMATCH[1]}"
-          scenario="${BASH_REMATCH[4]-}"
-          scenario="${scenario%"${scenario##*[![:space:]]}"}"
-          IFS=, read -ra names <<< "$feature"
-          for name in "${names[@]}"; do
-            case " $KNOWN_FEATURES " in
-              *" $name "*) ;;
-              *) reply "e2e rejected: unknown feature \`$name\`. Known: $KNOWN_FEATURES."; echo ok=false >> "$GITHUB_OUTPUT"; exit 0 ;;
-            esac
-          done
-          read -r state sha head_repo < <(gh api "/repos/$REPO/pulls/$PR" --jq '[.state, .head.sha, .head.repo.full_name] | @tsv')
-          if [ "$state" != open ]; then
-            reply "e2e rejected: the pull request is not open."
-            echo ok=false >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          # The PR's harness gets the e2e credentials only for the owner's own verified commits.
-          harness_ref=""; harness="main"
-          if [ "$head_repo" = "$REPO" ]; then
-            bad=$(gh api --paginate "/repos/$REPO/pulls/$PR/commits" --jq ".[] | select(.commit.verification.verified != true or .author.id != $OWNER_ID) | .sha" | wc -l)
-            if [ "$bad" -eq 0 ]; then harness_ref=$sha; harness="pr"; fi
-          fi
-          gh api "/repos/$REPO/issues/comments/$COMMENT_ID/reactions" -f content=eyes > /dev/null
-          scope="\`$feature\`"
-          if [ -n "$scenario" ]; then scope="$scope, scenarios containing \`$scenario\`"; fi
-          reply "e2e started for $scope at \`$sha\` (harness: $harness). Run: $RUN_URL"
-          {
-            echo ok=true
-            echo "ref=$sha"
-            echo "feature=$feature"
-            echo "scenario=$scenario"
-            echo "harness-ref=$harness_ref"
-            echo "harness=$harness"
-          } >> "$GITHUB_OUTPUT"
+          BODY: ${{ github.event.comment.body }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: bun e2e/e2e-comment.ts authorize
 
-  run:
+  # A reusable workflow cannot read the csm-ci-e2e environment's secrets, so this job mirrors e2e.yml.
+  # It checks out the PR head only when authorize chose the PR's harness.
+  e2e:
     needs: authorize
     if: ${{ needs.authorize.outputs.ok == 'true' }}
-    uses: ./.github/workflows/e2e.yml
-    with:
-      ref: ${{ needs.authorize.outputs.ref }}
-      feature: ${{ needs.authorize.outputs.feature }}
-      scenario: ${{ needs.authorize.outputs.scenario }}
-      harness-ref: ${{ needs.authorize.outputs.harness-ref }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    environment: csm-ci-e2e
+    concurrency:
+      group: e2e
+      cancel-in-progress: false
     permissions:
       contents: write
       issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.authorize.outputs.harness-ref }}
+          persist-credentials: false
+      - uses: jdx/mise-action@82a612c5ab8bcda7cc5db6b7e81a8e7584c3dc6e # v5.2.3
+        with:
+          cache: false
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - id: untrusted-committer
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_UNTRUSTED_COMMITTER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_UNTRUSTED_COMMITTER_APP_PRIVATE_KEY }}
+          # The token must cover every installed repository so the next step can compare the set.
+          # jactionlint ignore=github-app
+          owner: ${{ github.repository_owner }}
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Untrusted committer app is installed only on the testing client
+        env:
+          GH_TOKEN: ${{ steps.untrusted-committer.outputs.token }}
+        run: test "$(gh api /installation/repositories --jq '[.repositories[].name] | sort | join(",")')" = "testing-csm-ci-client"
+      - name: Run scenarios
+        env:
+          GH_TOKEN: ${{ secrets.CSM_CI_OWNER_TOKEN }}
+          CSM_CI_ACTIONS_TOKEN: ${{ github.token }}
+          CSM_CI_UNTRUSTED_COMMITTER_TOKEN: ${{ steps.untrusted-committer.outputs.token }}
+          REF: ${{ needs.authorize.outputs.ref }}
+          FEATURE: ${{ needs.authorize.outputs.feature }}
+          SCENARIO: ${{ needs.authorize.outputs.scenario }}
+        run: |
+          args=(--ref "$REF" --feature "$FEATURE")
+          if [ -n "$SCENARIO" ]; then args+=(--scenario "$SCENARIO"); fi
+          bun e2e/run.ts "${args[@]}"
 
   report:
-    needs: [authorize, run]
+    needs: [authorize, e2e]
     if: ${{ always() && needs.authorize.outputs.ok == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -112,21 +107,22 @@ jobs:
       issues: write
       pull-requests: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@82a612c5ab8bcda7cc5db6b7e81a8e7584c3dc6e # v5.2.3
+        with:
+          cache: false
+      - run: bun install --frozen-lockfile --ignore-scripts
       - env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.issue.number }}
           COMMENT_ID: ${{ github.event.comment.id }}
-          RESULT: ${{ needs.run.result }}
+          RESULT: ${{ needs.e2e.result }}
           REF: ${{ needs.authorize.outputs.ref }}
           FEATURE: ${{ needs.authorize.outputs.feature }}
           SCENARIO: ${{ needs.authorize.outputs.scenario }}
           HARNESS: ${{ needs.authorize.outputs.harness }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          if [ "$RESULT" = success ]; then mark=pass; reaction=rocket; else mark="fail ($RESULT)"; reaction=-1; fi
-          gh api "/repos/$REPO/issues/comments/$COMMENT_ID/reactions" -f content="$reaction" > /dev/null
-          scope="\`$FEATURE\`"
-          if [ -n "$SCENARIO" ]; then scope="$scope, scenarios containing \`$SCENARIO\`"; fi
-          gh api "/repos/$REPO/issues/$PR/comments" -f body="e2e $scope at \`$REF\` (harness: $HARNESS): **$mark**. Run: $RUN_URL" > /dev/null
+        run: bun e2e/e2e-comment.ts report
