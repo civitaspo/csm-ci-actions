@@ -26,7 +26,7 @@ jobs:
     if: >-
       github.event_name == 'label' && github.event.action == 'created' &&
       startsWith(github.event.label.name, 'csm-ci-') && github.event.sender.type == 'Bot'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -54,7 +54,7 @@ jobs:
   op:
     needs: [intake]
     if: needs.intake.outputs.kind != 'release'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 70
     environment: csm-ci
     # Keyed on the normalized repository and number from intake, so spelling variants share a group. /approve and policy-check
@@ -319,7 +319,7 @@ jobs:
   release-plan:
     needs: [intake]
     if: needs.intake.outputs.kind == 'release'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     environment: csm-ci
     permissions:
@@ -456,7 +456,7 @@ jobs:
   release-publish:
     needs: [intake, release-plan, release-build]
     if: needs.intake.outputs.kind == 'release'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     environment: csm-ci
     permissions:
@@ -534,7 +534,7 @@ jobs:
     if: >-
       always() && github.event_name == 'label' && github.event.action == 'created' &&
       startsWith(github.event.label.name, 'csm-ci-')
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       issues: write
