@@ -17,7 +17,7 @@ jobs:
   authorize:
     # Prefilter only. The step below validates the command and the commenter.
     if: ${{ github.event.issue.pull_request && startsWith(github.event.comment.body, '/e2e') }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       issues: write
@@ -53,7 +53,7 @@ jobs:
   e2e:
     needs: authorize
     if: ${{ needs.authorize.outputs.ok == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     environment: csm-ci-e2e
     concurrency:
@@ -101,7 +101,7 @@ jobs:
   report:
     needs: [authorize, e2e]
     if: ${{ always() && needs.authorize.outputs.ok == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       issues: write

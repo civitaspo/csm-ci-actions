@@ -30,7 +30,7 @@ permissions: {}
 jobs:
   discover:
     if: contains(fromJSON('["schedule", "workflow_dispatch"]'), github.event_name)
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     environment: csm-ci
     permissions:

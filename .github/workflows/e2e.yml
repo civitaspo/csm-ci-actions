@@ -20,7 +20,7 @@ permissions: {}
 
 jobs:
   e2e:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     # Several features can run in one invocation.
     timeout-minutes: 120
     environment: csm-ci-e2e
