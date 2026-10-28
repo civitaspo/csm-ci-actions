@@ -2,6 +2,55 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.4.0] - 2026-10-28
+
+### 🚀 Features
+
+- *(e2e)* Run live e2e from a /e2e pull request comment
+- *(merge)* Prefer platform auto-merge with a self-merge fallback
+- *(e2e)* Run the PR's own harness for the owner's verified commits
+- *(github)* Log rate-limit usage per client when each job exits
+- *(setup)* Title server runs with the request label and description
+
+### 🐛 Bug Fixes
+
+- *(policy)* Serialize approve and policy-check publication per pull request
+- *(e2e)* Grant PR write and comment the run URL when /e2e starts
+- *(e2e)* Run /e2e logic in TypeScript and give its job the e2e environment
+
+### 🚜 Refactor
+
+- *(release)* Replace the Python release helpers with TypeScript
+
+### 📚 Documentation
+
+- Replace the first-release plan with a design document
+- Link csm-ci-server migration records at a fixed commit
+- *(agents)* Record lessons from the issue batch rollout
+- Drop the cutover runbook and handoff log
+- *(merge)* Derive the readiness poll interval from the deadline
+- Fold production recovery into break glass
+- *(merge)* Prefer platform auto-merge with a self-merge fallback
+- *(e2e)* Allow the /e2e command to run the PR's harness
+
+### ⚡ Performance
+
+- *(e2e)* Run several features under one lock and derive the merge poll interval
+
+### ⚙️ Miscellaneous Tasks
+
+- *(scripts)* Replace the setup wizard with a skill and port the e2e mutation script to TypeScript
+- *(dist)* Mark dist as generated in pull request diffs
+- *(deps)* Update jdx/mise-action action to v5.2.4
+- *(deps)* Update actions/attest action to v3.2.0
+- *(deps)* Update actions/download-artifact action to v8.0.2
+- *(deps)* Update dependency bun to v1.4.4
+- *(deps)* Update dependency go to v1.27.3
+- *(deps)* Update github artifact actions (major)
+- *(deps)* Update actions/attest action to v4
+- *(deps)* Update dependency ubuntu to v26
+- *(deps)* Update civitaspo/csm-ci-actions action to v0.3.1
+
 ## [0.3.1] - 2026-10-27
 
 ### 🐛 Bug Fixes
