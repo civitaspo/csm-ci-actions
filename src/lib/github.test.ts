@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { type GitHub, createRequestLabel, github, requestLogLine, loadConfig, loadCurrentServerConfig, splitRepository, verifyLiveLabel } from "./github.ts";
+import { type GitHub, createRequestLabel, github, rateLimitLines, requestLogLine, loadConfig, loadCurrentServerConfig, splitRepository, verifyLiveLabel } from "./github.ts";
 import { hasServerMarker, marker } from "./notify.ts";
 import { CONFIG_YAML, fakeFetch, SERVER_BOT_ID } from "./testing.ts";
 import { fetchCommitFacts } from "./trust.ts";
@@ -294,5 +294,18 @@ describe("createRequestLabel", () => {
   test("propagates a failed label creation", async () => {
     const fetch = fakeFetch([{ method: "POST", path: "/repos/owner/server/labels", status: 403, body: { message: "Resource not accessible by integration" } }]);
     await expect(createRequestLabel(github("token", fetch), "owner/server", "securefix", "owner/client", [42])).rejects.toThrow("Resource not accessible by integration");
+  });
+});
+
+describe("rate-limit log lines", () => {
+  test("report each used client's request count and last headers", () => {
+    expect(rateLimitLines([
+      { requests: 0, headers: {} },
+      { requests: 7, headers: { resource: "core", used: "4990", remaining: "10", limit: "5000", reset: "1793165812" } },
+      { requests: 1, headers: {} },
+    ])).toEqual([
+      "rate-limit: client=2 requests=7 resource=core used=4990 remaining=10 limit=5000 reset=2026-10-28T05:36:52.000Z",
+      "rate-limit: client=3 requests=1 resource=unknown used=unknown remaining=unknown limit=unknown reset=unknown",
+    ]);
   });
 });

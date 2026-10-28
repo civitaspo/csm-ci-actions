@@ -36882,6 +36882,7 @@ function github(token, fetch, retryOptions = {}) {
   const octokit = new Octokit2({ auth: token, userAgent: "csm-ci-actions", ...fetch ? { request: { fetch } } : {} });
   const timeoutMs = retryOptions.timeoutMs ?? 30000;
   const backoffMs = retryOptions.backoffMs ?? [250, 1000];
+  const usage = trackRateLimit();
   octokit.hook.wrap("request", async (request, options) => {
     const endpoint = octokit.request.endpoint.parse(options);
     const retryable = isReadOnly(endpoint.method, endpoint.url, endpoint.body);
@@ -36908,8 +36909,10 @@ function github(token, fetch, retryOptions = {}) {
         });
         const call = request(options);
         const result = await Promise.race([call, aborted]);
+        usage.record(result.headers);
         return result;
       } catch (error) {
+        usage.record(responseHeaders(error));
         clearTimeout(timer);
         callerSignal?.removeEventListener("abort", abortFromCaller);
         if (callerSignal?.aborted || !retryable || attempt >= backoffMs.length || !isRetryableError(error, timedOut))
@@ -36923,6 +36926,42 @@ function github(token, fetch, retryOptions = {}) {
     }
   });
   return octokit;
+}
+var usages = [];
+function trackRateLimit() {
+  const usage = { requests: 0, headers: {} };
+  if (usages.length === 0)
+    process.once("exit", () => {
+      for (const line of rateLimitLines(usages))
+        console.log(line);
+    });
+  usages.push(usage);
+  return {
+    record: (headers) => {
+      usage.requests++;
+      if (typeof headers !== "object" || headers === null)
+        return;
+      for (const [key, value] of Object.entries(headers)) {
+        if (key.toLowerCase().startsWith("x-ratelimit-") && value !== undefined)
+          usage.headers[key.toLowerCase().slice("x-ratelimit-".length)] = String(value);
+      }
+    }
+  };
+}
+function rateLimitLines(list) {
+  return list.flatMap((u, i) => {
+    if (u.requests === 0)
+      return [];
+    const h = u.headers;
+    const reset = h.reset && /^\d+$/.test(h.reset) ? new Date(Number(h.reset) * 1000).toISOString() : "unknown";
+    return [`rate-limit: client=${i + 1} requests=${u.requests} resource=${h.resource ?? "unknown"} used=${h.used ?? "unknown"} remaining=${h.remaining ?? "unknown"} limit=${h.limit ?? "unknown"} reset=${reset}`];
+  });
+}
+function responseHeaders(error) {
+  if (typeof error !== "object" || error === null || !("response" in error))
+    return;
+  const response = error.response;
+  return typeof response === "object" && response !== null && "headers" in response ? response.headers : undefined;
 }
 function isReadOnly(method, url, body) {
   if (method === "GET" || method === "HEAD")
