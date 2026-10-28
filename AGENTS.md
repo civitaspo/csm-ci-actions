@@ -11,6 +11,7 @@ Follow this workflow for changes to csm-ci-actions and its live testing environm
 
 ## Develop one complete change
 
+- Write code and tooling in TypeScript run by bun. Do not add Python or shell scripts; keep a few lines of shell only where a workflow step needs them.
 - Choose the smallest change that satisfies the specification. Reuse existing helpers and remove superseded callers in the same change. Add abstractions or dependencies only for a concrete need.
 - Define the data shape and trust boundary before writing logic. Keep decisions in pure functions and collect GitHub facts through the shared API helpers.
 - Treat client events, labels, comments, artifacts, and checked-out client files as untrusted. Keep authorization and privileged writes on the server. Preserve final revalidation before writes.

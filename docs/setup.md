@@ -8,24 +8,18 @@ Create the server repository, for example `csm-ci-server`. The client repositori
 
 ## 2. Register and install the GitHub Apps
 
-Run the wizard. It opens each page with the permissions filled in, installs the Apps on the right repositories, and stores their credentials.
+Follow the [`csm-ci-setup` skill](../.agents/skills/csm-ci-setup/SKILL.md). It lists the Apps, their permissions and installation targets, and the credentials to store. These steps happen:
 
-```sh
-scripts/setup-wizard.sh
-```
-
-The wizard does these steps:
-
-1. Creates the environment `csm-ci` in the server repository. Only `main` can deploy to it.
-2. Registers `csm-ci-server` and installs it on the server and every client repository.
-3. Registers `csm-ci-client` and installs it on the server repository only.
-4. Registers `csm-ci-approver` and installs it on every client repository.
-5. Stores the client IDs as variables and the private keys as secrets:
+1. Create the environment `csm-ci` in the server repository. Only `main` can deploy to it.
+2. Register `csm-ci-server` and install it on the server and every client repository.
+3. Register `csm-ci-client` and install it on the server repository only.
+4. Register `csm-ci-approver` and install it on every client repository.
+5. Store the client IDs as variables and the private keys as secrets:
    - In the server repository, environment `csm-ci`: `CSM_CI_SERVER_APP_CLIENT_ID`, `CSM_CI_SERVER_APP_PRIVATE_KEY`, `CSM_CI_APPROVER_APP_CLIENT_ID` and `CSM_CI_APPROVER_APP_PRIVATE_KEY`.
    - In each client repository: `CSM_CI_CLIENT_APP_CLIENT_ID`, `CSM_CI_CLIENT_APP_PRIVATE_KEY` and `CSM_CI_SERVER_REPOSITORY`.
-6. Prints the bot user IDs for `csm-ci.yaml`.
+6. Look up the bot user IDs for `csm-ci.yaml`.
 
-Delete the downloaded `.pem` files after the wizard finishes.
+Delete the downloaded `.pem` files afterwards.
 
 ## 3. Write csm-ci.yaml
 
