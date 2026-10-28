@@ -26678,9 +26678,9 @@ function info(message) {
 }
 
 // src/release/assets.ts
-import { createHash } from "node:crypto";
+import { createHash as createHash2 } from "node:crypto";
 import { lstat as lstat2, mkdir as mkdir2, readFile, readdir as readdir2, writeFile as writeFile2 } from "node:fs/promises";
-import { join } from "node:path";
+import { join as join2 } from "node:path";
 
 // node_modules/zod/v4/core/util.js
 function getEnumValues(entries) {
@@ -32870,38 +32870,411 @@ var LabelEventSchema = object({
 var PUBLISHING_KINDS = new Set(["approve", "policy-check"]);
 
 // src/release/terraform.ts
-import { spawn } from "node:child_process";
 import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-async function terraformAssets(input) {
-  const root = import.meta.url.endsWith(".ts") ? "../../" : "../";
-  const helper = fileURLToPath(new URL(`${root}actions/server/release-assets/terraform.py`, import.meta.url));
-  const credentials = input.credentials.mode === "prepare" ? { key: input.credentials.privateKey, passphrase: input.credentials.passphrase } : { key: input.credentials.publicKey };
-  const output = await new Promise((accept, reject) => {
-    const child = spawn("python3", [
-      "-B",
-      helper,
-      input.credentials.mode,
-      resolve(input.directory),
-      input.providerName,
-      input.version,
-      input.sourceDateEpoch,
-      input.fingerprint
-    ], { env: { PATH: process.env.PATH, LANG: "C.UTF-8" } });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8").on("data", (data) => {
-      stdout += data;
+
+// src/release/terraform-assets.ts
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { closeSync, constants as constants3, fsyncSync, linkSync, lstatSync, mkdtempSync, openSync, readFileSync as readFileSync2, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, dirname, join } from "node:path";
+
+// src/release/ensure.ts
+function ensure(condition, message) {
+  if (!condition)
+    throw new Rejection(message);
+}
+
+// src/release/strict-json.ts
+var NUMBER = /-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|NaN|-?Infinity/uy;
+var STRING = /"(?:[^"\\\u0000-\u001f]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*"/uy;
+var SPACE = /[ \t\n\r]*/uy;
+
+class StrictJsonError extends Error {
+}
+function parseStrictJson(text, onDuplicate) {
+  let position = 0;
+  const skip = () => {
+    SPACE.lastIndex = position;
+    SPACE.test(text);
+    position = SPACE.lastIndex;
+  };
+  const match = (pattern) => {
+    pattern.lastIndex = position;
+    const found = pattern.exec(text)?.[0];
+    if (found !== undefined)
+      position += found.length;
+    return found;
+  };
+  const value = () => {
+    skip();
+    const char = text[position];
+    if (char === "{") {
+      position += 1;
+      const result = new Map;
+      skip();
+      if (text[position] === "}") {
+        position += 1;
+        return result;
+      }
+      for (;; ) {
+        skip();
+        const key = match(STRING);
+        if (key === undefined)
+          throw new StrictJsonError("expected a string key");
+        skip();
+        if (text[position++] !== ":")
+          throw new StrictJsonError("expected a colon");
+        const name = JSON.parse(key);
+        if (result.has(name))
+          onDuplicate();
+        result.set(name, value());
+        skip();
+        const next = text[position++];
+        if (next === "}")
+          return result;
+        if (next !== ",")
+          throw new StrictJsonError("expected a comma");
+      }
+    }
+    if (char === "[") {
+      position += 1;
+      const result = [];
+      skip();
+      if (text[position] === "]") {
+        position += 1;
+        return result;
+      }
+      for (;; ) {
+        result.push(value());
+        skip();
+        const next = text[position++];
+        if (next === "]")
+          return result;
+        if (next !== ",")
+          throw new StrictJsonError("expected a comma");
+      }
+    }
+    const string = match(STRING);
+    if (string !== undefined)
+      return JSON.parse(string);
+    for (const [word, parsed] of [["true", true], ["false", false], ["null", null]]) {
+      if (text.startsWith(word, position)) {
+        position += word.length;
+        return parsed;
+      }
+    }
+    const number = match(NUMBER);
+    if (number !== undefined)
+      return { number };
+    throw new StrictJsonError("unexpected token");
+  };
+  const result = value();
+  skip();
+  if (position !== text.length)
+    throw new StrictJsonError("unexpected trailing data");
+  return result;
+}
+
+// src/release/zip-reader.ts
+import { readFileSync } from "node:fs";
+import { crc32, inflateRawSync } from "node:zlib";
+var END = 101010256;
+var CENTRAL = 33639248;
+var LOCAL = 67324752;
+function openZip(path) {
+  const data = readFileSync(path);
+  let end = -1;
+  for (let offset = data.length - 22;offset >= Math.max(0, data.length - 22 - 65535); offset -= 1) {
+    if (data.readUInt32LE(offset) === END) {
+      end = offset;
+      break;
+    }
+  }
+  ensure(!(end < 0), "not a ZIP file");
+  const count = data.readUInt16LE(end + 10);
+  const centralSize = data.readUInt32LE(end + 12);
+  const centralOffset = data.readUInt32LE(end + 16);
+  ensure(!(count === 65535 || centralSize === 4294967295 || centralOffset === 4294967295), "ZIP64 is not supported");
+  ensure(!(centralOffset + centralSize > end), "bad central directory");
+  const entries = [];
+  let offset = centralOffset;
+  for (let index = 0;index < count; index += 1) {
+    ensure(!(offset + 46 > data.length || data.readUInt32LE(offset) !== CENTRAL), "bad central directory entry");
+    const flags = data.readUInt16LE(offset + 8);
+    const method = data.readUInt16LE(offset + 10);
+    const crc = data.readUInt32LE(offset + 16);
+    const compressed = data.readUInt32LE(offset + 20);
+    const size = data.readUInt32LE(offset + 24);
+    const nameLength = data.readUInt16LE(offset + 28);
+    const extraLength = data.readUInt16LE(offset + 30);
+    const commentLength = data.readUInt16LE(offset + 32);
+    const externalAttributes = data.readUInt32LE(offset + 38);
+    const local = data.readUInt32LE(offset + 42);
+    ensure(!(compressed === 4294967295 || size === 4294967295 || local === 4294967295), "ZIP64 is not supported");
+    const rawName = data.subarray(offset + 46, offset + 46 + nameLength);
+    const originalName = rawName.toString(flags & 2048 ? "utf8" : "latin1");
+    const nul = originalName.indexOf("\x00");
+    offset += 46 + nameLength + extraLength + commentLength;
+    entries.push({
+      name: nul >= 0 ? originalName.slice(0, nul) : originalName,
+      originalName,
+      flags,
+      externalAttributes,
+      size,
+      read: () => {
+        ensure(!(flags & 96), "unsupported ZIP flags");
+        ensure(!(local + 30 > data.length || data.readUInt32LE(local) !== LOCAL), "bad local header");
+        const localName = data.subarray(local + 30, local + 30 + data.readUInt16LE(local + 26));
+        ensure(!!localName.equals(rawName), "local header name differs");
+        const start = local + 30 + data.readUInt16LE(local + 26) + data.readUInt16LE(local + 28);
+        const body = data.subarray(start, start + compressed);
+        ensure(!(body.length !== compressed), "truncated entry");
+        ensure(method === 0 || method === 8, "unsupported compression method");
+        const content = method === 0 ? body : inflateRawSync(body, { maxOutputLength: Math.max(size, 1) });
+        ensure(!(content.length !== size || crc32(content) !== crc), "bad entry content");
+        return content;
+      }
     });
-    child.stderr.setEncoding("utf8").on("data", (data) => {
-      stderr += data;
+  }
+  ensure(offset === centralOffset + centralSize, "central directory size does not match its entries");
+  return entries;
+}
+
+// src/release/terraform-assets.ts
+var TARGETS = [
+  "darwin_amd64",
+  "darwin_arm64",
+  "freebsd_386",
+  "freebsd_amd64",
+  "freebsd_arm",
+  "freebsd_arm64",
+  "linux_386",
+  "linux_amd64",
+  "linux_arm",
+  "linux_arm64",
+  "windows_386",
+  "windows_amd64",
+  "windows_arm64"
+];
+var VERSION = String.raw`(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?`;
+var regular = (path) => ensure(lstatSync(path).isFile(), `Terraform asset ${quote(basename(path))} is not a regular file`);
+var sorted = (names) => [...names].sort();
+var quote = (name) => `'${name}'`;
+
+class DuplicateKeys extends Rejection {
+  constructor() {
+    super("Terraform manifest has duplicate keys");
+  }
+}
+function parseManifest(path) {
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(readFileSync2(path));
+    return parseStrictJson(text, () => {
+      throw new DuplicateKeys;
     });
-    child.on("error", reject);
-    child.on("close", (code) => code === 0 ? accept(stdout) : reject(new Rejection(stderr.trim() || "Terraform asset validation failed")));
-    child.stdin.on("error", () => {});
-    child.stdin.end(JSON.stringify(credentials));
+  } catch (error) {
+    ensure(error instanceof DuplicateKeys, "Terraform manifest is not valid JSON");
+    throw error;
+  }
+}
+function exactManifest(metadata) {
+  if (!(metadata instanceof Map) || metadata.size !== 2)
+    return false;
+  const version = metadata.get("version");
+  const inner = metadata.get("metadata");
+  if (typeof version !== "object" || version === null || Array.isArray(version) || version instanceof Map || version.number !== "1")
+    return false;
+  if (!(inner instanceof Map) || inner.size !== 1)
+    return false;
+  const protocols = inner.get("protocol_versions");
+  return Array.isArray(protocols) && protocols.length === 1 && protocols[0] === "6.0";
+}
+function validate2(directory, name, version, signed) {
+  ensure(/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(name) && name.length <= 64, "invalid Terraform provider name");
+  ensure(new RegExp(`^${VERSION}$`, "u").test(version), "invalid Terraform provider version or build metadata");
+  const prefix = `terraform-provider-${name}_${version}`;
+  const archives = TARGETS.map((target) => `${prefix}_${target}.zip`);
+  const manifestName = `${prefix}_manifest.json`;
+  const sumsName = `${prefix}_SHA256SUMS`;
+  const sourceManifest = "terraform-registry-manifest.json";
+  const actual = new Set(readdirSync(directory));
+  actual.delete("SHA256SUMS");
+  const manifests = [sourceManifest, manifestName].filter((candidate) => actual.has(candidate));
+  ensure(manifests.length === 1, "Terraform assets must contain exactly one Registry manifest");
+  const selectedManifest = signed ? manifestName : manifests[0];
+  const expected = new Set([...archives, selectedManifest]);
+  const allowed = new Set([...expected, sumsName, `${sumsName}.sig`]);
+  if (signed)
+    for (const name of [sumsName, `${sumsName}.sig`])
+      expected.add(name);
+  const missing = sorted([...expected].filter((candidate) => !actual.has(candidate)));
+  const unexpected = sorted([...actual].filter((candidate) => !allowed.has(candidate)));
+  ensure(missing.length === 0 && unexpected.length === 0, `Terraform asset set differs: missing=[${missing.map(quote).join(", ")}], unexpected=[${unexpected.map(quote).join(", ")}]`);
+  for (const filename of actual)
+    regular(join(directory, filename));
+  const manifest = join(directory, selectedManifest);
+  ensure(exactManifest(parseManifest(manifest)), "Terraform manifest must declare exactly version 1 and protocol 6.0");
+  archives.forEach((filename, index) => {
+    const target = TARGETS[index];
+    const binary = `terraform-provider-${name}_v${version}${target.startsWith("windows_") ? ".exe" : ""}`;
+    const permitted = new Set([binary, "LICENSE", "README.md", "CHANGELOG.md"]);
+    const label = quote(filename);
+    let entries;
+    try {
+      entries = openZip(join(directory, filename));
+    } catch {
+      return ensure(false, `Terraform archive ${label} is invalid`);
+    }
+    const names = entries.map((entry) => entry.name);
+    ensure(names.length === new Set(names).size, `Terraform archive ${label} has duplicate entries`);
+    ensure(names.includes(binary), `Terraform archive ${label} is missing its binary`);
+    for (const entry of entries) {
+      ensure(!entry.name.endsWith("/") && !(entry.externalAttributes & 16) && !entry.name.includes("/") && !entry.name.includes("\\"), `Terraform archive ${label} has a path or directory entry`);
+      ensure(entry.originalName === entry.name && permitted.has(entry.name), `Terraform archive ${label} has an unexpected entry`);
+      ensure(!(entry.flags & 1), `Terraform archive ${label} has an encrypted entry`);
+      const format = entry.externalAttributes >>> 16 & 61440;
+      ensure(format === 0 || format === 32768, `Terraform archive ${label} has a non-regular entry`);
+      ensure(entry.name !== binary || entry.size > 0, `Terraform archive ${label} has an empty binary`);
+      try {
+        entry.read();
+      } catch {
+        ensure(false, `Terraform archive ${label} is invalid`);
+      }
+    }
   });
-  return strictObject({ publicKey: string2().min(1) }).parse(JSON.parse(output)).publicKey;
+  return { archives, manifestName, sumsName, manifest };
+}
+function checksumContent(directory, names) {
+  const lines = sorted(names).map((name) => `${createHash("sha256").update(readFileSync2(join(directory, name))).digest("hex")}  ${name}
+`);
+  return Buffer.from(lines.join(""));
+}
+function writeMatching(path, content) {
+  let exists = true;
+  try {
+    lstatSync(path);
+  } catch {
+    exists = false;
+  }
+  if (exists) {
+    regular(path);
+    ensure(readFileSync2(path).equals(content), `Terraform asset ${quote(basename(path))} does not match its expected content`);
+    return;
+  }
+  const temporary = join(dirname(dirname(path)), `.${basename(path)}.${process.pid}.${Date.now().toString(36)}`);
+  const file = openSync(temporary, constants3.O_WRONLY | constants3.O_CREAT | constants3.O_EXCL, 384);
+  try {
+    writeFileSync(file, content);
+    fsyncSync(file);
+    linkSync(temporary, path);
+  } finally {
+    closeSync(file);
+    unlinkSync(temporary);
+  }
+}
+var gpg = (home, args, data) => {
+  const env = {};
+  for (const key of ["PATH", "LANG", "SYSTEMROOT"])
+    if (process.env[key] !== undefined)
+      env[key] = process.env[key];
+  const result = spawnSync("gpg", [
+    "--no-options",
+    "--homedir",
+    home,
+    "--batch",
+    "--no-tty",
+    "--no-auto-key-retrieve",
+    "--no-auto-check-trustdb",
+    ...args
+  ], { input: data ?? Buffer.alloc(0), env, stdio: ["pipe", "pipe", "pipe"] });
+  ensure(result.status === 0, "Terraform GPG operation failed");
+  return result.stdout;
+};
+function primaryKey(home, fingerprint, secret = false, run = gpg) {
+  const listing = run(home, ["--with-colons", "--fixed-list-mode", "--fingerprint", secret ? "--list-secret-keys" : "--list-keys"]).toString().split(/\r?\n/u);
+  const primary = [];
+  let pending;
+  for (const row of listing) {
+    const fields = row.split(":");
+    if (fields[0] === "pub" || fields[0] === "sec")
+      pending = fields;
+    else if (fields[0] === "sub" || fields[0] === "ssb")
+      pending = undefined;
+    else if (fields[0] === "fpr" && pending !== undefined) {
+      primary.push([fields[9] ?? "", pending]);
+      pending = undefined;
+    }
+  }
+  ensure(primary.length === 1 && primary[0][0] === fingerprint, "Terraform imported key set does not match the configured primary fingerprint");
+  const fields = primary[0][1];
+  ensure(["1", "3"].includes(fields[3] ?? "") && (fields[11] ?? "").includes("s") && !["r", "e", "d"].includes(fields[1] ?? ""), "Terraform signing key must be an active primary RSA signing key");
+}
+function verifySignature(home, directory, sumsName, fingerprint, epoch, run = gpg) {
+  const output = run(home, ["--status-fd", "1", "--verify", join(directory, `${sumsName}.sig`), join(directory, sumsName)]).toString().split(/\r?\n/u);
+  const prefix = "[GNUPG:] ";
+  const signatures = output.filter((row) => row.startsWith(`${prefix}VALIDSIG `)).map((row) => row.slice(prefix.length).split(/\s+/u).filter(Boolean));
+  const [signature] = signatures;
+  ensure(signatures.length === 1 && signature !== undefined && signature.length >= 10 && signature[1] === fingerprint && signature[3] === epoch && ["1", "3"].includes(signature[7]) && signature[8] === "8", "Terraform detached signature does not match the primary fingerprint, source timestamp and SHA256");
+}
+function processAssets(mode, directory, name, version, epoch, fingerprint, credentials, run = gpg) {
+  ensure(mode === "prepare" || mode === "verify", "invalid Terraform asset mode");
+  ensure(/^[A-F0-9]{40}$/u.test(fingerprint), "Terraform GPG fingerprint must be 40 uppercase hexadecimal characters");
+  ensure(/^[1-9][0-9]{0,10}$/u.test(epoch), "invalid Terraform source timestamp");
+  ensure(credentials.key, "Terraform GPG key is required");
+  if (mode === "prepare")
+    ensure(credentials.passphrase, "Terraform GPG passphrase is required");
+  const { archives, manifestName, sumsName, manifest } = validate2(directory, name, version, mode === "verify");
+  const home = mkdtempSync(join(tmpdir(), "csm-ci-terraform-gpg-"));
+  try {
+    run(home, ["--import"], Buffer.from(credentials.key));
+    primaryKey(home, fingerprint, false, run);
+    if (mode === "prepare")
+      primaryKey(home, fingerprint, true, run);
+    if (basename(manifest) !== manifestName)
+      renameSync(manifest, join(directory, manifestName));
+    const expectedSums = checksumContent(directory, [...archives, manifestName]);
+    if (mode === "prepare") {
+      writeMatching(join(directory, sumsName), expectedSums);
+      const signature = join(home, "signature");
+      run(home, [
+        "--pinentry-mode",
+        "loopback",
+        "--passphrase-fd",
+        "0",
+        "--faked-system-time",
+        `${epoch}!`,
+        "--digest-algo",
+        "SHA256",
+        "--local-user",
+        `${fingerprint}!`,
+        "--output",
+        signature,
+        "--detach-sign",
+        join(directory, sumsName)
+      ], Buffer.from(credentials.passphrase));
+      writeMatching(join(directory, `${sumsName}.sig`), readFileSync2(signature));
+    }
+    ensure(readFileSync2(join(directory, sumsName)).equals(expectedSums), "Terraform Registry checksums do not match the assets");
+    verifySignature(home, directory, sumsName, fingerprint, epoch, run);
+    return run(home, ["--armor", "--export", fingerprint]).toString();
+  } finally {
+    spawnSync("gpgconf", ["--homedir", home, "--kill", "gpg-agent"], { stdio: "ignore" });
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
+// src/release/terraform.ts
+async function terraformAssets(input) {
+  const credentials = input.credentials.mode === "prepare" ? { key: input.credentials.privateKey, passphrase: input.credentials.passphrase } : { key: input.credentials.publicKey };
+  try {
+    const publicKey = processAssets(input.credentials.mode, resolve(input.directory), input.providerName, input.version, input.sourceDateEpoch, input.fingerprint, credentials);
+    return string2().min(1).parse(publicKey);
+  } catch (error) {
+    if (error instanceof Rejection)
+      throw error;
+    throw new Rejection(error instanceof Error && error.message ? error.message : "Terraform asset validation failed");
+  }
 }
 
 // src/release/assets.ts
@@ -32916,7 +33289,7 @@ async function prepareAssets(directory, release) {
     });
   }
   const names = (await readdir2(directory)).sort();
-  const sumsPath = join(directory, "SHA256SUMS");
+  const sumsPath = join2(directory, "SHA256SUMS");
   const sumsInfo = names.includes("SHA256SUMS") ? await lstat2(sumsPath) : undefined;
   if (sumsInfo && !sumsInfo.isFile())
     throw new Rejection('asset "SHA256SUMS" is not a regular file');
@@ -32927,12 +33300,12 @@ async function prepareAssets(directory, release) {
       continue;
     if (!/^[A-Za-z0-9][A-Za-z0-9._+-]{0,254}$/.test(name))
       throw new Rejection(`asset name ${JSON.stringify(name)} is not a safe filename`);
-    const path = join(directory, name);
+    const path = join2(directory, name);
     const info = await lstat2(path);
     if (!info.isFile())
       throw new Rejection(`asset ${JSON.stringify(name)} is not a regular file`);
     const content = await readFile(path);
-    assets.push({ name, path, sha256: createHash("sha256").update(content).digest("hex") });
+    assets.push({ name, path, sha256: createHash2("sha256").update(content).digest("hex") });
   }
   if (release?.build_type === "cargo-raw") {
     const binaries = release.targets.map((target) => `${release.binary}-${target}`);
@@ -32950,16 +33323,16 @@ async function prepareAssets(directory, release) {
       const content = `${binary.sha256}  ${name}
 `;
       if (assets.some((asset) => asset.name === sidecar)) {
-        if (await readFile(join(directory, sidecar), "utf8") !== content) {
+        if (await readFile(join2(directory, sidecar), "utf8") !== content) {
           throw new Rejection(`cargo-raw checksum ${JSON.stringify(sidecar)} does not match its binary`);
         }
       } else
         sidecars.push({ name: sidecar, content });
     }
     for (const { name, content } of sidecars) {
-      const path = join(directory, name);
+      const path = join2(directory, name);
       await writeFile2(path, content, { flag: "wx" });
-      assets.push({ name, path, sha256: createHash("sha256").update(content).digest("hex") });
+      assets.push({ name, path, sha256: createHash2("sha256").update(content).digest("hex") });
     }
     assets.sort((a, b) => a.name.localeCompare(b.name, "en"));
   }
@@ -32972,15 +33345,15 @@ async function prepareAssets(directory, release) {
   if (existingSums === undefined)
     await writeFile2(sumsPath, content, { flag: "wx" });
   const checksums = await readFile(sumsPath);
-  assets.push({ name: "SHA256SUMS", path: sumsPath, sha256: createHash("sha256").update(checksums).digest("hex") });
+  assets.push({ name: "SHA256SUMS", path: sumsPath, sha256: createHash2("sha256").update(checksums).digest("hex") });
   return assets;
 }
 
 // src/release/semver.ts
 var IDENTIFIER = "(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)";
-var VERSION = new RegExp(`^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(${IDENTIFIER}(?:\\.${IDENTIFIER})*))?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$`);
+var VERSION2 = new RegExp(`^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(${IDENTIFIER}(?:\\.${IDENTIFIER})*))?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$`);
 function parseSemVer(value) {
-  const match = VERSION.exec(value);
+  const match = VERSION2.exec(value);
   if (!match)
     return;
   return { major: match[1] ?? "", minor: match[2] ?? "", patch: match[3] ?? "", prerelease: match[4]?.split(".") ?? [] };

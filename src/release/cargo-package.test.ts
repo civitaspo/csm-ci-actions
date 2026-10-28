@@ -2,10 +2,10 @@ import { mkdtemp, mkdir, readFile, rm, symlink, utimes, writeFile } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
+import { packageCargo } from "./cargo-package.ts";
+import { releaseBuild } from "./release-build.ts";
 import { describe, expect, test } from "bun:test";
 
-const packageScript = join(import.meta.dir, "package.py");
-const python = Bun.which("python3") ?? Bun.which("python");
 
 const rejectionCases = [
   {
@@ -28,26 +28,22 @@ const rejectionCases = [
     name: "an invalid argument count",
     args: () => [],
     setup: () => Promise.resolve(),
-    message: "usage: package.py SOURCE_DIRECTORY DESTINATION",
+    message: "usage: release-build package SOURCE_DIRECTORY DESTINATION",
   },
 ];
 
 describe("Cargo release packaging", () => {
   test.each(rejectionCases)("rejects $name with its documented error", async ({ args, setup, message }) => {
-    if (!python) throw new Error("Python 3 is required to test Cargo release packaging");
     const root = await mkdtemp(join(tmpdir(), "cargo-release-package-reject-"));
     try {
       await setup(root);
-      const result = Bun.spawnSync([python, packageScript, ...args(root)]);
-      expect(result.exitCode).toBe(1);
-      expect(new TextDecoder().decode(result.stderr)).toContain(message);
+      expect(() => releaseBuild(["package", ...args(root)]), message).toThrow(message);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
 
   test("identical binaries produce byte-identical archives despite input mtimes and creation order", async () => {
-    if (!python) throw new Error("Python 3 is required to test Cargo release packaging");
 
     const root = await mkdtemp(join(tmpdir(), "cargo-release-package-"));
     try {
@@ -66,9 +62,8 @@ describe("Cargo release packaging", () => {
 
       const firstArchive = join(root, "first.tar.gz");
       const secondArchive = join(root, "second.tar.gz");
-      for (const [source, destination] of [[first, firstArchive], [second, secondArchive]]) {
-        const result = Bun.spawnSync([python, packageScript, source, destination]);
-        expect(result.exitCode, new TextDecoder().decode(result.stderr)).toBe(0);
+      for (const [source, destination] of [[first, firstArchive], [second, secondArchive]] as const) {
+        packageCargo(source, destination);
       }
 
       const firstBytes = await readFile(firstArchive);
@@ -96,6 +91,24 @@ describe("Cargo release packaging", () => {
         { name: "alpha", mode: 0o755, uid: 0, gid: 0, mtime: 0 },
         { name: "zeta", mode: 0o755, uid: 0, gid: 0, mtime: 0 },
       ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Cargo release archive format", () => {
+  test("names beyond the ustar limit survive extraction by tar", async () => {
+    const root = await mkdtemp(join(tmpdir(), "cargo-release-package-long-"));
+    try {
+      const longName = "b".repeat(120);
+      await mkdir(join(root, "staging"));
+      await writeFile(join(root, "staging", longName), "binary\n");
+      await writeFile(join(root, "staging", "short"), "short\n");
+      packageCargo(join(root, "staging"), join(root, "out", "archive.tar.gz"));
+      const result = Bun.spawnSync(["tar", "-tzf", join(root, "out", "archive.tar.gz")]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.toString().split("\n").filter(Boolean)).toEqual([longName, "short"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

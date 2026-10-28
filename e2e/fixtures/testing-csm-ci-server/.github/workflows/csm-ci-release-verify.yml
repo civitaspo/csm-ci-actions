@@ -90,7 +90,7 @@ jobs:
           committed=$(gh api "repos/$CLIENT_REPOSITORY/commits/$MERGE_SHA" --jq '.commit.committer.date')
           epoch=$(date -d "$committed" +%s)
           jq -n --rawfile key "$RUNNER_TEMP/terraform-public-key/terraform-signing-public-key.asc" '{key:$key}' | \
-            python3 -B actions/server/release-assets/terraform.py verify \
+            node dist/release-assets-verify.js verify \
               "$RELEASE_DIR" csm-ci-test "${TAG#v}" "$epoch" "$FINGERPRINT" >/dev/null
       - name: Verify each signature and release predicate
         env:
