@@ -1,0 +1,107 @@
+name: e2e-comment
+
+# `/e2e <features>` on a pull request runs the live e2e of its head commit. issue_comment workflows
+# run from the default branch, so the privileged e2e job, its harness and its environment come from
+# main. The pull request's code is never checked out here; it only reaches the testing repositories
+# through the harness's e2e branch.
+# Commands must not cancel each other, and e2e.yml serializes the runs.
+# jactionlint ignore=concurrency-limits
+on:
+  # jactionlint ignore=dangerous-triggers
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+jobs:
+  authorize:
+    # Prefilter only. The step below validates the command and the commenter.
+    if: ${{ github.event.issue.pull_request && startsWith(github.event.comment.body, '/e2e') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+      pull-requests: read
+    outputs:
+      ok: ${{ steps.check.outputs.ok }}
+      ref: ${{ steps.check.outputs.ref }}
+      feature: ${{ steps.check.outputs.feature }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.issue.number }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          BODY: ${{ github.event.comment.body }}
+          COMMENTER_ID: ${{ github.event.comment.user.id }}
+          # Immutable IDs allowed to run live e2e: the repository owner civitaspo.
+          ALLOWED_IDS: "4525500"
+          # Keep in sync with FEATURES in e2e/pr-metadata.ts; e2e/e2e-comment.test.ts checks it.
+          KNOWN_FEATURES: "smoke approve merge policy-check securefix release release-pr repo-settings"
+        run: |
+          set -euo pipefail
+          reply() { gh api "/repos/$REPO/issues/$PR/comments" -f body="$1" > /dev/null; }
+          case " $ALLOWED_IDS " in
+            *" $COMMENTER_ID "*) ;;
+            *) echo "commenter $COMMENTER_ID is not allowed to run e2e"; echo ok=false >> "$GITHUB_OUTPUT"; exit 0 ;;
+          esac
+          re='^/e2e ([a-z-]+(,[a-z-]+)*)[[:space:]]*$'
+          if [[ ! "$BODY" =~ $re ]]; then
+            reply "e2e rejected: the comment must be exactly \`/e2e <feature>[,<feature>...]\`."
+            echo ok=false >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          feature="${BASH_REMATCH[1]}"
+          IFS=, read -ra names <<< "$feature"
+          for name in "${names[@]}"; do
+            case " $KNOWN_FEATURES " in
+              *" $name "*) ;;
+              *) reply "e2e rejected: unknown feature \`$name\`. Known: $KNOWN_FEATURES."; echo ok=false >> "$GITHUB_OUTPUT"; exit 0 ;;
+            esac
+          done
+          read -r state sha < <(gh api "/repos/$REPO/pulls/$PR" --jq '[.state, .head.sha] | @tsv')
+          if [ "$state" != open ]; then
+            reply "e2e rejected: the pull request is not open."
+            echo ok=false >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          gh api "/repos/$REPO/issues/comments/$COMMENT_ID/reactions" -f content=eyes > /dev/null
+          {
+            echo ok=true
+            echo "ref=$sha"
+            echo "feature=$feature"
+          } >> "$GITHUB_OUTPUT"
+
+  run:
+    needs: authorize
+    if: ${{ needs.authorize.outputs.ok == 'true' }}
+    uses: ./.github/workflows/e2e.yml
+    with:
+      ref: ${{ needs.authorize.outputs.ref }}
+      feature: ${{ needs.authorize.outputs.feature }}
+    permissions:
+      contents: write
+      issues: write
+
+  report:
+    needs: [authorize, run]
+    if: ${{ always() && needs.authorize.outputs.ok == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+      pull-requests: read
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.issue.number }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          RESULT: ${{ needs.run.result }}
+          REF: ${{ needs.authorize.outputs.ref }}
+          FEATURE: ${{ needs.authorize.outputs.feature }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ "$RESULT" = success ]; then mark=pass; reaction=rocket; else mark="fail ($RESULT)"; reaction=-1; fi
+          gh api "/repos/$REPO/issues/comments/$COMMENT_ID/reactions" -f content="$reaction" > /dev/null
+          gh api "/repos/$REPO/issues/$PR/comments" -f body="e2e \`$FEATURE\` at \`$REF\`: **$mark**. Run: $RUN_URL" > /dev/null
