@@ -21,7 +21,7 @@ Follow this workflow for changes to csm-ci-actions and its live testing environm
 - Remove superseded configuration keys, inputs, and values outright: no aliases and no dedicated removal messages. The strict parser's ordinary unknown-key or invalid-value error is enough.
 - Code that rewrites a pull request's head branch must never leave that branch equal to its base, even briefly: GitHub then closes or auto-merges the open PR asynchronously. Rebuild through `src/lib/branch-rebuild.ts`.
 - Generated client files must already be stable under client tooling. Emit the pin comment that pinact-style autofix adds (`@<sha> # <version>`) and the jactionlint annotations that self-linting repositories need, so neither tool rewrites or rejects them.
-- Server operations on one pull request share a concurrency group only with the same kind. A new operation that waits must not hold a group that `/approve`, `/recheck`, or policy-check needs.
+- Server operations on one pull request share a concurrency group only with the same kind, except that `/approve`, `/recheck`, and policy-check share one group because they publish policy results. A new operation that waits must not hold that group.
 - Continue authorized, reversible work without repeated permission requests. Report concrete blockers and the specific action needed from the user. Keep progress updates focused on findings and remaining work.
 
 ## Verify before opening a pull request
@@ -85,7 +85,7 @@ For workflow failures, also check these repository-specific constraints:
 - Roll out to one repository at a time. Finish its original CI jobs, approval, policy, protected merge, and applicable release checks before starting the next repository.
 - Before moving csm-ci-server pins, diff every called reusable workflow's `on.workflow_call` between the old and new SHA. Change the callers in the same PR. A required secret that exists only in the `csm-ci` environment needs an explicit mapping; `secrets: inherit` cannot satisfy it, and the label workflow then fails for every request.
 - Reconcile many repositories as one repo-settings run without a repository selector. Its matrix runs serially. Parallel per-repository dispatches exhausted the Server App's hourly API limit.
-- If the label workflow is down, the protected merge path is down too. Follow [docs/development/production-recovery.md](docs/development/production-recovery.md).
+- If the label workflow is down, the protected merge path is down too. Follow [Break glass](docs/repo-settings.md#break-glass).
 - Treat client CI and server publication as separate gates. For releases, follow [docs/release.md](docs/release.md) and [docs/release-attestation.md](docs/release-attestation.md). Verify the actual asset set, digests, checksums, attestations, and supported installation path. For Terraform providers, also verify the public GPG signature, Registry discovery, and provider loading.
 - Use intended versions for production releases. Immutable tags and assets are permanent. A docs change alone does not establish runtime or release compatibility.
 - Declare completion only after checking the live result. Report remaining failures, skipped scenarios, and unverified behavior explicitly. Link detailed evidence instead of adding a development narrative to this file.
