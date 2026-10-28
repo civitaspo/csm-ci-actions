@@ -38,6 +38,7 @@ jobs:
           COMMENT_ID: ${{ github.event.comment.id }}
           BODY: ${{ github.event.comment.body }}
           OWNER_ID: "4525500"
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           COMMENTER_ID: ${{ github.event.comment.user.id }}
           # Immutable IDs allowed to run live e2e: the repository owner civitaspo.
           ALLOWED_IDS: "4525500"
@@ -77,6 +78,9 @@ jobs:
             if [ "$bad" -eq 0 ]; then harness_ref=$sha; harness="pr"; fi
           fi
           gh api "/repos/$REPO/issues/comments/$COMMENT_ID/reactions" -f content=eyes > /dev/null
+          scope="\`$feature\`"
+          if [ -n "$scenario" ]; then scope="$scope, scenarios containing \`$scenario\`"; fi
+          reply "e2e started for $scope at \`$sha\` (harness: $harness). Run: $RUN_URL"
           {
             echo ok=true
             echo "ref=$sha"
