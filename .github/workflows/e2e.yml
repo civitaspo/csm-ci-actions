@@ -1,6 +1,17 @@
 name: e2e
 
 on:
+  # Called by e2e-comment.yml for the /e2e command; dispatch is the manual path.
+  workflow_call:
+    inputs:
+      ref:
+        description: Full commit sha of csm-ci-actions to test.
+        required: true
+        type: string
+      feature:
+        description: Comma-separated features whose scenarios run together.
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       ref:
@@ -14,17 +25,16 @@ on:
 
 permissions: {}
 
-# The scenarios share the testing repositories and the e2e branch.
-concurrency:
-  group: e2e
-  cancel-in-progress: false
-
 jobs:
   e2e:
     runs-on: ubuntu-24.04
     # Several features can run in one invocation.
     timeout-minutes: 120
     environment: csm-ci-e2e
+    # The scenarios share the testing repositories and the e2e branch.
+    concurrency:
+      group: e2e
+      cancel-in-progress: false
     permissions:
       contents: write
       issues: write
