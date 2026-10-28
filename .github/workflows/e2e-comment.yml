@@ -21,7 +21,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       issues: write
-      pull-requests: read
+      pull-requests: write
     outputs:
       ok: ${{ steps.check.outputs.ok }}
       ref: ${{ steps.check.outputs.ref }}
@@ -106,7 +106,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       issues: write
-      pull-requests: read
+      pull-requests: write
     steps:
       - env:
           GH_TOKEN: ${{ github.token }}
