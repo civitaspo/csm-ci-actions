@@ -7,13 +7,17 @@ describe("parseConfig", () => {
     const c = config();
     expect(c.owners).toEqual(["owner"]);
     expect(c.server_repository).toBe("owner/server");
-    expect(c.merge.deadline_minutes).toBe(60);
   });
 
   test("accepts global repository settings and defaults managed files", () => {
     const parsed = parseConfig(`${CONFIG_YAML}\nrepo_settings: { settings: { delete_branch_on_merge: true, allow_auto_merge: true, allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false } }\n`);
     expect(parsed.repo_settings?.additional_managed_files).toEqual({});
     expect(parsed.repo_settings?.settings?.allow_squash_merge).toBe(true);
+  });
+
+  test("accepts the per-repository platform auto-merge switch", () => {
+    const parsed = parseConfig(CONFIG_YAML.replace("{ name: owner/*, ops: [approve, merge, policy-check] }", "{ name: owner/*, ops: [approve, merge, policy-check], merge: { use_platform_automerge: false } }"));
+    expect(repositoryEntry(parsed, "owner/repo")?.merge?.use_platform_automerge).toBe(false);
   });
 
   const rejects: [string, string, RegExp][] = [
@@ -31,6 +35,8 @@ describe("parseConfig", () => {
       /safe literal relative file path/,
     ] as [string, string, RegExp]),
     ["managed files reject more than 512 files", `${CONFIG_YAML}\nrepo_settings: { additional_managed_files: ${JSON.stringify(Object.fromEntries(Array.from({ length: 513 }, (_, index) => [`file-${index}`, "source"])))} }\n`, /must contain at most 512 files/],
+    ["the removed merge deadline", CONFIG_YAML.replace("required_checks: [{ name: status-check, app_id: 15368 }]", "required_checks: [{ name: status-check, app_id: 15368 }]\n  deadline_minutes: 60"), /deadline_minutes/],
+    ["a non-boolean platform auto-merge switch", CONFIG_YAML.replace("{ name: owner/*, ops: [approve, merge, policy-check] }", "{ name: owner/*, ops: [approve, merge, policy-check], merge: { use_platform_automerge: yes-please } }"), /use_platform_automerge/],
     ["unknown policy type", CONFIG_YAML.replace("signed-commits", "no-such-policy"), /policies/],
     ["unknown sensitive-paths key", CONFIG_YAML.replace("type: signed-commits", "type: sensitive-paths, paths: [Makefile], extra: true"), /extra/],
     ["server bot as trusted committer", CONFIG_YAML.replace("committers: [{ id: 10, login: alice }", "committers: [{ id: 3000, login: alice }"), /must not be in a trust list/],

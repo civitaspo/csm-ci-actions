@@ -37,6 +37,7 @@ async function main(): Promise<void> {
       const ready = await waitForMerge(ctx, args);
       core.setOutput("ready", "true");
       core.setOutput("head", ready.head);
+      core.setOutput("platform", String(ready.platform === true));
       core.info(`pull request is ready at ${ready.head}`);
     } catch (error) {
       core.setOutput("error", error instanceof Error ? error.message : String(error));
@@ -49,10 +50,10 @@ async function main(): Promise<void> {
     return;
   }
   if (mode !== "merge") throw new Error(`unknown merge action mode: ${mode}`);
-  const outcome = await runMerge(ctx, args, { head: core.getInput("head", { required: true }) });
+  const outcome = await runMerge(ctx, args, { head: core.getInput("head", { required: true }), platform: core.getInput("platform") === "true" });
   core.setOutput("result", outcome.result);
-  core.setOutput("merge-commit", outcome.mergeCommit);
-  core.info(`${outcome.result} at ${outcome.mergeCommit}`);
+  if (outcome.result === "merged") core.setOutput("merge-commit", outcome.mergeCommit);
+  core.info(outcome.result === "merged" ? `merged at ${outcome.mergeCommit}` : `auto-merge enabled at ${outcome.head}`);
 }
 
 main().catch((e: unknown) => core.setFailed(e instanceof Error ? e.message : String(e)));

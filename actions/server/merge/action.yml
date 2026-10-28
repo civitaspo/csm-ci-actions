@@ -1,5 +1,5 @@
 name: csm-ci merge
-description: Wait for a fresh, policy-compliant approval and squash-merge a pull request.
+description: Squash-merge a ready pull request, enable platform auto-merge, or wait for a fresh, policy-compliant approval.
 inputs:
   mode:
     description: wait checks readiness; merge rechecks readiness and performs the merge; failure-receipt posts an accepted wait failure.
@@ -28,6 +28,9 @@ inputs:
   head:
     description: Pinned head SHA from wait mode, required in merge and failure-receipt modes.
     required: false
+  platform:
+    description: true from wait mode when merge mode should enable platform auto-merge unless the pull request is already mergeable.
+    required: false
   failure-message:
     description: Original wait failure to include in the failure receipt.
     required: false
@@ -40,8 +43,10 @@ outputs:
     description: Wait failure message for a fresh-token failure receipt step.
   head:
     description: Pinned pull request head SHA, available after acceptance even if readiness fails.
+  platform:
+    description: true when the request uses platform auto-merge instead of the self-merge wait.
   result:
-    description: merged when the pull request was merged.
+    description: merged when the pull request was merged, or auto-merge when platform auto-merge was enabled.
   merge-commit:
     description: Squash merge commit SHA.
 runs:
