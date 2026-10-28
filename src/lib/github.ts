@@ -13,6 +13,7 @@ export function github(token: string, fetch?: typeof globalThis.fetch, retryOpti
   const octokit = new Octokit({ auth: token, userAgent: "csm-ci-actions", ...(fetch ? { request: { fetch } } : {}) });
   const timeoutMs = retryOptions.timeoutMs ?? 30_000;
   const backoffMs = retryOptions.backoffMs ?? [250, 1_000];
+  const usage = trackRateLimit();
   octokit.hook.wrap("request", async (request, options) => {
     const endpoint = octokit.request.endpoint.parse(options);
     const retryable = isReadOnly(endpoint.method, endpoint.url, endpoint.body);
@@ -36,8 +37,10 @@ export function github(token: string, fetch?: typeof globalThis.fetch, retryOpti
         });
         const call = request(options);
         const result = await Promise.race([call, aborted]);
+        usage.record(result.headers);
         return result;
       } catch (error) {
+        usage.record(responseHeaders(error));
         clearTimeout(timer);
         callerSignal?.removeEventListener("abort", abortFromCaller);
         if (callerSignal?.aborted || !retryable || attempt >= backoffMs.length || !isRetryableError(error, timedOut)) throw error;
@@ -50,6 +53,41 @@ export function github(token: string, fetch?: typeof globalThis.fetch, retryOpti
     }
   });
   return octokit;
+}
+
+// Each client logs its request count and last observed rate-limit headers when the process exits.
+// Clients sharing a token share one bucket, so compare used/reset across lines to attribute consumption.
+type RateLimitUsage = { requests: number; headers: Record<string, string> };
+const usages: RateLimitUsage[] = [];
+
+function trackRateLimit(): { record: (headers: unknown) => void } {
+  const usage: RateLimitUsage = { requests: 0, headers: {} };
+  if (usages.length === 0) process.once("exit", () => { for (const line of rateLimitLines(usages)) console.log(line); });
+  usages.push(usage);
+  return {
+    record: (headers) => {
+      usage.requests++;
+      if (typeof headers !== "object" || headers === null) return;
+      for (const [key, value] of Object.entries(headers)) {
+        if (key.toLowerCase().startsWith("x-ratelimit-") && value !== undefined) usage.headers[key.toLowerCase().slice("x-ratelimit-".length)] = String(value);
+      }
+    },
+  };
+}
+
+export function rateLimitLines(list: readonly RateLimitUsage[]): string[] {
+  return list.flatMap((u, i) => {
+    if (u.requests === 0) return [];
+    const h = u.headers;
+    const reset = h.reset && /^\d+$/.test(h.reset) ? new Date(Number(h.reset) * 1000).toISOString() : "unknown";
+    return [`rate-limit: client=${i + 1} requests=${u.requests} resource=${h.resource ?? "unknown"} used=${h.used ?? "unknown"} remaining=${h.remaining ?? "unknown"} limit=${h.limit ?? "unknown"} reset=${reset}`];
+  });
+}
+
+function responseHeaders(error: unknown): unknown {
+  if (typeof error !== "object" || error === null || !("response" in error)) return undefined;
+  const response = error.response;
+  return typeof response === "object" && response !== null && "headers" in response ? response.headers : undefined;
 }
 
 function isReadOnly(method: string, url: string, body: unknown): boolean {
