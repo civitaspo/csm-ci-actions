@@ -1,4 +1,4 @@
-import { closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeSync } from "node:fs";
+import { closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { crc32, deflateRawSync } from "node:zlib";
 import { ensure } from "./ensure.ts";
@@ -44,7 +44,7 @@ function entry(name: string, content: Buffer): Buffer {
   const parts: Buffer[] = [];
   if (nameBytes.length > 100 || nameBytes.some((byte) => byte > 0x7f)) {
     const record = paxRecord("path", name);
-    parts.push(header(Buffer.from("././@PaxHeader"), record.length, 0o644, "x"), padded(record));
+    parts.push(header(Buffer.from("././@PaxHeader"), record.length, 0, "x"), padded(record));
   }
   parts.push(header(nameBytes, content.length, 0o755, "0"), padded(content));
   return Buffer.concat(parts);
@@ -81,7 +81,7 @@ export function packageCargo(source: string, destination: string): void {
     const tar = Buffer.concat([...files.map((file) => entry(file.relative, readFileSync(file.path))), Buffer.alloc(BLOCK * 2)]);
     const output = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
     try {
-      writeSync(output, gzip(padToRecord(tar)));
+      writeFileSync(output, gzip(padToRecord(tar)));
       fsyncSync(output);
     } finally {
       closeSync(output);
@@ -92,7 +92,7 @@ export function packageCargo(source: string, destination: string): void {
   }
 }
 
-// Python's tarfile pads the archive to a 10240-byte record.
+// Pad to a 10240-byte record, as tar does.
 function padToRecord(tar: Buffer): Buffer {
   const record = BLOCK * 20;
   return Buffer.concat([tar, Buffer.alloc((record - (tar.length % record)) % record)]);

@@ -36884,7 +36884,7 @@ import { resolve } from "node:path";
 // src/release/terraform-assets.ts
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { closeSync, constants as constants3, fsyncSync, linkSync, lstatSync, mkdtempSync, openSync, readFileSync as readFileSync2, readdirSync, renameSync, rmSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, constants as constants3, fsyncSync, linkSync, lstatSync, mkdtempSync, openSync, readFileSync as readFileSync2, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
@@ -36988,15 +36988,9 @@ function parseStrictJson(text, onDuplicate) {
 // src/release/zip-reader.ts
 import { readFileSync } from "node:fs";
 import { crc32, inflateRawSync } from "node:zlib";
-
-class ZipError extends Error {
-}
 var END = 101010256;
 var CENTRAL = 33639248;
 var LOCAL = 67324752;
-function fail(message) {
-  throw new ZipError(message);
-}
 function openZip(path) {
   const data = readFileSync(path);
   let end = -1;
@@ -37006,20 +37000,16 @@ function openZip(path) {
       break;
     }
   }
-  if (end < 0)
-    fail("not a ZIP file");
+  ensure(!(end < 0), "not a ZIP file");
   const count = data.readUInt16LE(end + 10);
   const centralSize = data.readUInt32LE(end + 12);
   const centralOffset = data.readUInt32LE(end + 16);
-  if (count === 65535 || centralSize === 4294967295 || centralOffset === 4294967295)
-    fail("ZIP64 is not supported");
-  if (centralOffset + centralSize > end)
-    fail("bad central directory");
+  ensure(!(count === 65535 || centralSize === 4294967295 || centralOffset === 4294967295), "ZIP64 is not supported");
+  ensure(!(centralOffset + centralSize > end), "bad central directory");
   const entries = [];
   let offset = centralOffset;
   for (let index = 0;index < count; index += 1) {
-    if (offset + 46 > data.length || data.readUInt32LE(offset) !== CENTRAL)
-      fail("bad central directory entry");
+    ensure(!(offset + 46 > data.length || data.readUInt32LE(offset) !== CENTRAL), "bad central directory entry");
     const flags = data.readUInt16LE(offset + 8);
     const method = data.readUInt16LE(offset + 10);
     const crc = data.readUInt32LE(offset + 16);
@@ -37030,8 +37020,7 @@ function openZip(path) {
     const commentLength = data.readUInt16LE(offset + 32);
     const externalAttributes = data.readUInt32LE(offset + 38);
     const local = data.readUInt32LE(offset + 42);
-    if (compressed === 4294967295 || size === 4294967295 || local === 4294967295)
-      fail("ZIP64 is not supported");
+    ensure(!(compressed === 4294967295 || size === 4294967295 || local === 4294967295), "ZIP64 is not supported");
     const rawName = data.subarray(offset + 46, offset + 46 + nameLength);
     const originalName = rawName.toString(flags & 2048 ? "utf8" : "latin1");
     const nul = originalName.indexOf("\x00");
@@ -37043,30 +37032,21 @@ function openZip(path) {
       externalAttributes,
       size,
       read: () => {
-        if (flags & 96)
-          fail("unsupported ZIP flags");
-        if (local + 30 > data.length || data.readUInt32LE(local) !== LOCAL)
-          fail("bad local header");
+        ensure(!(flags & 96), "unsupported ZIP flags");
+        ensure(!(local + 30 > data.length || data.readUInt32LE(local) !== LOCAL), "bad local header");
         const localName = data.subarray(local + 30, local + 30 + data.readUInt16LE(local + 26));
-        if (!localName.equals(rawName))
-          fail("local header name differs");
+        ensure(!!localName.equals(rawName), "local header name differs");
         const start = local + 30 + data.readUInt16LE(local + 26) + data.readUInt16LE(local + 28);
         const body = data.subarray(start, start + compressed);
-        if (body.length !== compressed)
-          fail("truncated entry");
-        let content;
-        if (method === 0)
-          content = body;
-        else if (method === 8)
-          content = inflateRawSync(body, { maxOutputLength: Math.max(size, 1) });
-        else
-          fail("unsupported compression method");
-        if (content.length !== size || crc32(content) !== crc)
-          fail("bad entry content");
+        ensure(!(body.length !== compressed), "truncated entry");
+        ensure(method === 0 || method === 8, "unsupported compression method");
+        const content = method === 0 ? body : inflateRawSync(body, { maxOutputLength: Math.max(size, 1) });
+        ensure(!(content.length !== size || crc32(content) !== crc), "bad entry content");
         return content;
       }
     });
   }
+  ensure(offset === centralOffset + centralSize, "central directory size does not match its entries");
   return entries;
 }
 
@@ -37194,7 +37174,7 @@ function writeMatching(path, content) {
   const temporary = join(dirname(dirname(path)), `.${basename(path)}.${process.pid}.${Date.now().toString(36)}`);
   const file = openSync(temporary, constants3.O_WRONLY | constants3.O_CREAT | constants3.O_EXCL, 384);
   try {
-    writeSync(file, content);
+    writeFileSync(file, content);
     fsyncSync(file);
     linkSync(temporary, path);
   } finally {

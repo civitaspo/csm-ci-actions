@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { closeSync, constants, fsyncSync, linkSync, lstatSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, constants, fsyncSync, linkSync, lstatSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { Rejection } from "../lib/request.ts";
@@ -118,7 +118,7 @@ export function writeMatching(path: string, content: Buffer): void {
   const temporary = join(dirname(dirname(path)), `.${basename(path)}.${process.pid}.${Date.now().toString(36)}`);
   const file = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
   try {
-    writeSync(file, content);
+    writeFileSync(file, content);
     fsyncSync(file);
     linkSync(temporary, path);
   } finally {

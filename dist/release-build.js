@@ -8685,7 +8685,7 @@ var require_public_api = __commonJS(function(exports) {
 import { resolve as resolve2 } from "node:path";
 
 // src/release/cargo-package.ts
-import { closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeSync } from "node:fs";
+import { closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { crc32, deflateRawSync } from "node:zlib";
 
@@ -14920,7 +14920,7 @@ function entry(name, content) {
   const parts = [];
   if (nameBytes.length > 100 || nameBytes.some((byte) => byte > 127)) {
     const record = paxRecord("path", name);
-    parts.push(header(Buffer.from("././@PaxHeader"), record.length, 420, "x"), padded(record));
+    parts.push(header(Buffer.from("././@PaxHeader"), record.length, 0, "x"), padded(record));
   }
   parts.push(header(nameBytes, content.length, 493, "0"), padded(content));
   return Buffer.concat(parts);
@@ -14952,7 +14952,7 @@ function packageCargo(source, destination) {
     const tar = Buffer.concat([...files.map((file) => entry(file.relative, readFileSync(file.path))), Buffer.alloc(BLOCK * 2)]);
     const output = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 384);
     try {
-      writeSync(output, gzip(padToRecord(tar)));
+      writeFileSync(output, gzip(padToRecord(tar)));
       fsyncSync(output);
     } finally {
       closeSync(output);

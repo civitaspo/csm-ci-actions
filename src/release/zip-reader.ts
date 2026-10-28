@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { ensure } from "./ensure.ts";
 import { crc32, inflateRawSync } from "node:zlib";
 
 export type ZipEntry = {
@@ -12,15 +13,9 @@ export type ZipEntry = {
   read: () => Buffer;
 };
 
-export class ZipError extends Error {}
-
 const END = 0x06054b50;
 const CENTRAL = 0x02014b50;
 const LOCAL = 0x04034b50;
-
-function fail(message: string): never {
-  throw new ZipError(message);
-}
 
 /** Parses the central directory; entry contents are decompressed and CRC-checked only when read. */
 export function openZip(path: string): ZipEntry[] {
@@ -29,16 +24,16 @@ export function openZip(path: string): ZipEntry[] {
   for (let offset = data.length - 22; offset >= Math.max(0, data.length - 22 - 0xffff); offset -= 1) {
     if (data.readUInt32LE(offset) === END) { end = offset; break; }
   }
-  if (end < 0) fail("not a ZIP file");
+  ensure(!(end < 0), "not a ZIP file");
   const count = data.readUInt16LE(end + 10);
   const centralSize = data.readUInt32LE(end + 12);
   const centralOffset = data.readUInt32LE(end + 16);
-  if (count === 0xffff || centralSize === 0xffffffff || centralOffset === 0xffffffff) fail("ZIP64 is not supported");
-  if (centralOffset + centralSize > end) fail("bad central directory");
+  ensure(!(count === 0xffff || centralSize === 0xffffffff || centralOffset === 0xffffffff), "ZIP64 is not supported");
+  ensure(!(centralOffset + centralSize > end), "bad central directory");
   const entries: ZipEntry[] = [];
   let offset = centralOffset;
   for (let index = 0; index < count; index += 1) {
-    if (offset + 46 > data.length || data.readUInt32LE(offset) !== CENTRAL) fail("bad central directory entry");
+    ensure(!(offset + 46 > data.length || data.readUInt32LE(offset) !== CENTRAL), "bad central directory entry");
     const flags = data.readUInt16LE(offset + 8);
     const method = data.readUInt16LE(offset + 10);
     const crc = data.readUInt32LE(offset + 16);
@@ -49,7 +44,7 @@ export function openZip(path: string): ZipEntry[] {
     const commentLength = data.readUInt16LE(offset + 32);
     const externalAttributes = data.readUInt32LE(offset + 38);
     const local = data.readUInt32LE(offset + 42);
-    if (compressed === 0xffffffff || size === 0xffffffff || local === 0xffffffff) fail("ZIP64 is not supported");
+    ensure(!(compressed === 0xffffffff || size === 0xffffffff || local === 0xffffffff), "ZIP64 is not supported");
     const rawName = data.subarray(offset + 46, offset + 46 + nameLength);
     const originalName = rawName.toString(flags & 0x800 ? "utf8" : "latin1");
     const nul = originalName.indexOf("\0");
@@ -61,21 +56,20 @@ export function openZip(path: string): ZipEntry[] {
       externalAttributes,
       size,
       read: () => {
-        if (flags & 0x60) fail("unsupported ZIP flags");
-        if (local + 30 > data.length || data.readUInt32LE(local) !== LOCAL) fail("bad local header");
+        ensure(!(flags & 0x60), "unsupported ZIP flags");
+        ensure(!(local + 30 > data.length || data.readUInt32LE(local) !== LOCAL), "bad local header");
         const localName = data.subarray(local + 30, local + 30 + data.readUInt16LE(local + 26));
-        if (!localName.equals(rawName)) fail("local header name differs");
+        ensure(!(!localName.equals(rawName)), "local header name differs");
         const start = local + 30 + data.readUInt16LE(local + 26) + data.readUInt16LE(local + 28);
         const body = data.subarray(start, start + compressed);
-        if (body.length !== compressed) fail("truncated entry");
-        let content: Buffer;
-        if (method === 0) content = body;
-        else if (method === 8) content = inflateRawSync(body, { maxOutputLength: Math.max(size, 1) });
-        else fail("unsupported compression method");
-        if (content.length !== size || crc32(content) !== crc) fail("bad entry content");
+        ensure(!(body.length !== compressed), "truncated entry");
+        ensure(method === 0 || method === 8, "unsupported compression method");
+        const content = method === 0 ? body : inflateRawSync(body, { maxOutputLength: Math.max(size, 1) });
+        ensure(!(content.length !== size || crc32(content) !== crc), "bad entry content");
         return content;
       },
     });
   }
+  ensure(offset === centralOffset + centralSize, "central directory size does not match its entries");
   return entries;
 }

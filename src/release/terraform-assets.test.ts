@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { crc32, deflateRawSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { zip, type Member } from "./zip-fixture.ts";
 import { TARGETS, checksumContent, gpg, primaryKey, processAssets, validate, verifySignature, writeMatching, type Gpg } from "./terraform-assets.ts";
 
 const FINGERPRINT = "A".repeat(40);
@@ -14,47 +15,6 @@ const S_IFREG = 0o100000;
 const S_IFDIR = 0o040000;
 const S_IFLNK = 0o120000;
 const S_IFCHR = 0o020000;
-
-type Member = { name: string; content: Buffer | string; mode: number };
-
-function zip(members: Member[]): Buffer {
-  const locals: Buffer[] = [];
-  const centrals: Buffer[] = [];
-  let offset = 0;
-  for (const { name, content, mode } of members) {
-    const raw = Buffer.from(name, "utf8");
-    const data = Buffer.from(content);
-    const packed = deflateRawSync(data);
-    const local = Buffer.alloc(30);
-    local.writeUInt32LE(0x04034b50, 0);
-    local.writeUInt16LE(20, 4);
-    local.writeUInt16LE(8, 8);
-    local.writeUInt32LE(crc32(data), 14);
-    local.writeUInt32LE(packed.length, 18);
-    local.writeUInt32LE(data.length, 22);
-    local.writeUInt16LE(raw.length, 26);
-    const central = Buffer.alloc(46);
-    central.writeUInt32LE(0x02014b50, 0);
-    central.writeUInt16LE(20, 4);
-    central.writeUInt16LE(20, 6);
-    central.writeUInt16LE(8, 10);
-    local.copy(central, 16, 14, 30);
-    central.writeUInt16LE(raw.length, 28);
-    central.writeUInt32LE((mode << 16) >>> 0, 38);
-    central.writeUInt32LE(offset, 42);
-    locals.push(local, raw, packed);
-    centrals.push(central, raw);
-    offset += local.length + raw.length + packed.length;
-  }
-  const directory = Buffer.concat(centrals);
-  const end = Buffer.alloc(22);
-  end.writeUInt32LE(0x06054b50, 0);
-  end.writeUInt16LE(members.length, 8);
-  end.writeUInt16LE(members.length, 10);
-  end.writeUInt32LE(directory.length, 12);
-  end.writeUInt32LE(offset, 16);
-  return Buffer.concat([...locals, directory, end]);
-}
 
 let temporary: string;
 let directory: string;
@@ -110,12 +70,31 @@ describe("Terraform Registry asset validation", () => {
     ["corrupt checksum", (content: Buffer) => { content[content.indexOf("PK\x01\x02") + 16]! ^= 0xff; }, "is invalid"],
     ["DOS directory", (content: Buffer) => { content[content.indexOf("PK\x01\x02") + 38]! |= 0x10; }, "has a path or directory entry"],
     ["no central directory", (content: Buffer) => { content.fill(0, content.length - 22, content.length - 18); }, "is invalid"],
+    ["central directory size larger than its entries", (content: Buffer) => { content.writeUInt32LE(content.readUInt32LE(content.length - 22 + 12) - 1, content.length - 22 + 12); }, "is invalid"],
+    ["local header name differs", (content: Buffer) => { content[content.indexOf("terraform-provider-test_v1.2.3")] = 0x58; }, "is invalid"],
+    ["unsupported compression method", (content: Buffer) => { content.writeUInt16LE(12, content.indexOf("PK\x01\x02") + 10); }, "is invalid"],
+    ["ZIP64 marker", (content: Buffer) => { content.writeUInt32LE(0xffffffff, content.indexOf("PK\x01\x02") + 24); }, "is invalid"],
+    ["declared size too small", (content: Buffer) => { content.writeUInt32LE(3, content.indexOf("PK\x01\x02") + 24); }, "is invalid"],
   ])("rejects a %s ZIP", (_, mutate, message) => {
     const path = archive();
     const content = readFileSync(path);
     mutate(content);
     writeFileSync(path, content);
     expect(() => check()).toThrow(message);
+  });
+
+  test("rejects central directory entries beyond the declared count", () => {
+    const path = archive("darwin_amd64", [{ name: "../hidden", content: "x", mode: S_IFREG }]);
+    const content = readFileSync(path);
+    content.writeUInt16LE(1, content.length - 22 + 10);
+    writeFileSync(path, content);
+    expect(() => check()).toThrow("is invalid");
+  });
+
+  test.each([0, 10, 21])("rejects an archive truncated to %d bytes", (length) => {
+    const path = archive();
+    writeFileSync(path, readFileSync(path).subarray(0, length));
+    expect(() => check()).toThrow("is invalid");
   });
 
   test.each<[string, Buffer, string]>([

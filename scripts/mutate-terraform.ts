@@ -7,6 +7,7 @@ const root = resolve(import.meta.dir, "..");
 const TIMEOUT_MS = 60_000;
 const guarded = [
   { file: "src/release/terraform-assets.ts", tests: ["src/release/terraform-assets.test.ts"] },
+  { file: "src/release/zip-reader.ts", tests: ["src/release/zip-reader.test.ts"] },
   { file: "src/release/terraform-collect.ts", tests: ["src/release/terraform-collect.test.ts"] },
   { file: "src/release/cargo-package.ts", tests: ["src/release/cargo-package.test.ts"] },
   { file: "src/release/cargo-raw.ts", tests: ["src/release/cargo-raw.test.ts"] },
