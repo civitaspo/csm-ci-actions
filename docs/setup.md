@@ -49,7 +49,6 @@ trust:
 merge:
   required_checks:
     - { name: status-check, app_id: 15368 }
-  deadline_minutes: 60
 policies:
   - { type: signed-commits }
   - { type: trusted-committers }
@@ -233,7 +232,7 @@ jobs:
       CSM_CI_CLIENT_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}
 ```
 
-The command is exactly `/merge`. The server waits for the latest approver review, current policies, and configured checks. After readiness succeeds, the workflow mints fresh read and notification tokens plus a contents, pull-requests and workflows write token, then revalidates and merges. If an accepted wait fails, the workflow mints a fresh notification token for the failure receipt.
+The command is exactly `/merge`. The server merges at once when ready, otherwise enables platform auto-merge, or falls back to waiting for the latest approver review, current policies, and configured checks; see [Merge](merge.md). After readiness succeeds, the workflow mints fresh read and notification tokens plus a contents, pull-requests and workflows write token, then revalidates and merges. If an accepted wait fails, the workflow mints a fresh notification token for the failure receipt.
 
 For releases, enable the `release` op and choose its build type in `csm-ci.yaml`. Add a caller that requests a release when a `release/next` pull request is merged:
 

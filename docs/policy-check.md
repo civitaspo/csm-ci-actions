@@ -6,7 +6,7 @@ The `policy-check` operation evaluates the effective repository policies in `csm
 
 Closed pull requests skip evaluation and publication. Immediately before creating or updating a check, the server rereads the pull request and skips publication if it closed or its head changed. This also protects policy refreshes after approval. Skips leave existing checks untouched and the standalone action reports `result=skipped` with a reason in its log. An open pull request with no commits still fails both trust policies.
 
-The `signed-commits` and `trusted-committers` policies always run, even when omitted from configuration. `sensitive-paths` checks changed and renamed paths against the configured patterns. Include these default paths when you want the standard dependency, build, and workflow coverage:
+The `signed-commits` and `trusted-committers` policies and the built-in `approval` row always run, even when omitted from configuration. `sensitive-paths` checks changed and renamed paths against the configured patterns. Include these default paths when you want the standard dependency, build, and workflow coverage:
 
 ```yaml
 paths:
@@ -42,7 +42,9 @@ The policy fails closed at 3,000 changed files. Exemptions apply only when the p
 
 Sensitive changes require a current approval by the configured approver App, pinned to the head, with an `approve:command` marker. The marker points to the source `/approve` comment, which must still exist, remain unedited, and have been written by a configured trusted approver. Ordinary GitHub UI approvals do not authorize sensitive paths. Protection of the server and actions repositories comes from explicit [repository policy overrides](#effective-repository-policy-resolution); the runtime has no fixed repository rule.
 
-The `/approve` command first validates all trust and configured policies other than `sensitive-paths`, then writes its marked approval, and finally refreshes `csm-ci/policy`. This provides the approval evidence required by `sensitive-paths` without creating an approval cycle. Automatic approval and `/recheck` refresh the same check after their evaluation.
+The built-in `approval` row always runs. It passes only when the latest review by the configured approver is an approval for the current head. GitHub UI approvals by other accounts do not satisfy it, so platform auto-merge, which relies on `csm-ci/policy`, needs the configured approver. A missing approval alone fails the check, but it neither creates a policy failure report nor prevents resolving an existing one.
+
+The `/approve` command first validates all trust and configured policies other than `sensitive-paths` and `approval`, then writes its marked approval, and finally refreshes `csm-ci/policy`. This provides the approval evidence required by `sensitive-paths` and `approval` without creating an approval cycle. Automatic approval and `/recheck` refresh the same check after their evaluation.
 
 The client workflow runs on pull request open, synchronize, reopen, ready-for-review and edited events. It never checks out pull request code. `/recheck` also causes a fresh evaluation through the approve request path.
 

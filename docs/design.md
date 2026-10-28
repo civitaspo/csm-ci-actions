@@ -119,7 +119,8 @@ docs/, e2e/
 - An accepted comment gets 🚀. For `/approve` and `/merge`, on success and failure alike, the server posts a receipt with the marker `<!-- csm-ci:<op>:<comment_id> -->`.
 - **Replay**: a request is rejected if a marker authored by the Server bot already exists. A collaborator who deletes the marker can only retry the same command against the same head, which does no harm.
 - **Head pinning**: commands take no argument. The server pins the head it observed and rejects the request when a `head_ref_force_pushed` event follows the comment or the head's committer date is newer than the comment. A short SHA argument could be brute-forced and a full one is impractical to type. `/approve` requires every commit to come from a trusted committer, so a swapped commit can only come from one.
-- **Kill switch**: while waiting, the server re-reads the comment on every poll and aborts if it was edited or deleted.
+- **Platform auto-merge**: a `/merge` that enables auto-merge delegates the merge-time checks to the default-branch rules and `csm-ci/policy`. Head pinning, the kill switch, merger trust, Bot ownership, and configuration changes are not rechecked after enabling. A later push dismisses the approval, but a fresh approval of the new head lets GitHub merge it without another `/merge`. This tradeoff is accepted so a request survives a late approval.
+- **Kill switch**: while a self-merge request waits, the server re-reads the comment on every poll and aborts if it was edited or deleted. A `/merge` that enabled platform auto-merge checks the comment only at acceptance; see [Merge](merge.md#platform-auto-merge).
 - **`/recheck`** re-runs the policy check and the automatic approval decision for the current head after a transient GitHub failure. Its result depends only on current API state, so it is idempotent. It skips the edit, 60-minute and replay checks, posts no receipt, and never forces an approval.
 
 ### S6. Placement of secrets and permissions
@@ -145,7 +146,7 @@ docs/, e2e/
 - For required checks produced by GitHub Actions, a PR author with write access can modify the workflow. The real gates are the approval and `csm-ci/policy`.
 - Fork PRs are out of scope for securefix. approve and policy-check run on `pull_request_target` but never check out PR code.
 - Head pinning cannot detect a push by a trusted committer that forged `committedDate`.
-- The final merge token carries `workflows: write` for every ready PR, to avoid a separate path decision before minting it. It is used only to merge the pinned head after final revalidation, and does not allow securefix workflow changes when `allow_workflow_changes` is false.
+- The final merge token carries `workflows: write` for every ready PR, to avoid a separate path decision before minting it. It is used only to merge the pinned head after final revalidation, or to enable platform auto-merge for it after acceptance, and does not allow securefix workflow changes when `allow_workflow_changes` is false.
 - **All server jobs share the Server App key**, so a compromise of any job can mint an `administration: write` token. Narrowing token permissions per job is operational discipline, not a boundary. Separating it would need a third App and environment.
 
 ## Naming list
