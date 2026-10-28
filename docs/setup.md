@@ -110,6 +110,8 @@ Pin both calls to a full commit SHA of csm-ci-actions.
 
 ```yaml
 name: csm-ci
+# The run title is the request label (csm-ci-<op>-<rand>) and its description (<repository>/<numbers>); run-name is set before intake runs.
+run-name: ${{ github.event.label.name }} ${{ github.event.label.description }}
 # Label events must never cancel each other; the op job serializes per pull request instead.
 # jactionlint ignore=concurrency-limits
 on:
