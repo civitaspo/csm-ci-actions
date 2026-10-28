@@ -26,6 +26,8 @@ jobs:
       ok: ${{ steps.check.outputs.ok }}
       ref: ${{ steps.check.outputs.ref }}
       feature: ${{ steps.check.outputs.feature }}
+      harness-ref: ${{ steps.check.outputs.harness-ref }}
+      harness: ${{ steps.check.outputs.harness }}
     steps:
       - id: check
         env:
@@ -34,6 +36,7 @@ jobs:
           PR: ${{ github.event.issue.number }}
           COMMENT_ID: ${{ github.event.comment.id }}
           BODY: ${{ github.event.comment.body }}
+          OWNER_ID: "4525500"
           COMMENTER_ID: ${{ github.event.comment.user.id }}
           # Immutable IDs allowed to run live e2e: the repository owner civitaspo.
           ALLOWED_IDS: "4525500"
@@ -59,16 +62,24 @@ jobs:
               *) reply "e2e rejected: unknown feature \`$name\`. Known: $KNOWN_FEATURES."; echo ok=false >> "$GITHUB_OUTPUT"; exit 0 ;;
             esac
           done
-          read -r state sha < <(gh api "/repos/$REPO/pulls/$PR" --jq '[.state, .head.sha] | @tsv')
+          read -r state sha head_repo < <(gh api "/repos/$REPO/pulls/$PR" --jq '[.state, .head.sha, .head.repo.full_name] | @tsv')
           if [ "$state" != open ]; then
             reply "e2e rejected: the pull request is not open."
             echo ok=false >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # The PR's harness gets the e2e credentials only for the owner's own verified commits.
+          harness_ref=""; harness="main"
+          if [ "$head_repo" = "$REPO" ]; then
+            bad=$(gh api --paginate "/repos/$REPO/pulls/$PR/commits" --jq ".[] | select(.commit.verification.verified != true or .author.id != $OWNER_ID) | .sha" | wc -l)
+            if [ "$bad" -eq 0 ]; then harness_ref=$sha; harness="pr"; fi
           fi
           gh api "/repos/$REPO/issues/comments/$COMMENT_ID/reactions" -f content=eyes > /dev/null
           {
             echo ok=true
             echo "ref=$sha"
             echo "feature=$feature"
+            echo "harness-ref=$harness_ref"
+            echo "harness=$harness"
           } >> "$GITHUB_OUTPUT"
 
   run:
@@ -78,6 +89,7 @@ jobs:
     with:
       ref: ${{ needs.authorize.outputs.ref }}
       feature: ${{ needs.authorize.outputs.feature }}
+      harness-ref: ${{ needs.authorize.outputs.harness-ref }}
     permissions:
       contents: write
       issues: write
@@ -99,9 +111,10 @@ jobs:
           RESULT: ${{ needs.run.result }}
           REF: ${{ needs.authorize.outputs.ref }}
           FEATURE: ${{ needs.authorize.outputs.feature }}
+          HARNESS: ${{ needs.authorize.outputs.harness }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
           if [ "$RESULT" = success ]; then mark=pass; reaction=rocket; else mark="fail ($RESULT)"; reaction=-1; fi
           gh api "/repos/$REPO/issues/comments/$COMMENT_ID/reactions" -f content="$reaction" > /dev/null
-          gh api "/repos/$REPO/issues/$PR/comments" -f body="e2e \`$FEATURE\` at \`$REF\`: **$mark**. Run: $RUN_URL" > /dev/null
+          gh api "/repos/$REPO/issues/$PR/comments" -f body="e2e \`$FEATURE\` at \`$REF\` (harness: $HARNESS): **$mark**. Run: $RUN_URL" > /dev/null
