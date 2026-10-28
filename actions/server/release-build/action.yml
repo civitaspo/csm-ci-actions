@@ -73,7 +73,7 @@ runs:
       shell: bash
       env:
         CLIENT_PATH: ${{ inputs.client-path }}
-      run: python3 "$GITHUB_ACTION_PATH/terraform.py" "$CLIENT_PATH" assets
+      run: node "$GITHUB_ACTION_PATH/../../../dist/release-build.js" terraform "$CLIENT_PATH" assets
     - if: inputs.build-type == 'goreleaser'
       shell: bash
       env:
@@ -132,12 +132,7 @@ runs:
           exit 1
         fi
         name="${REPOSITORY##*/}-${VERSION}-${TARGET}.tar.gz"
-        if command -v python3 >/dev/null 2>&1; then
-          python=python3
-        else
-          python=python
-        fi
-        "$python" "$GITHUB_ACTION_PATH/package.py" ../assets/staging "../assets/$name"
+        node "$GITHUB_ACTION_PATH/../../../dist/release-build.js" package ../assets/staging "../assets/$name"
         rm -rf ../assets/staging
     - if: inputs.build-type == 'cargo-raw'
       shell: bash
@@ -147,7 +142,7 @@ runs:
         BINARY: ${{ inputs.binary }}
         VERSION: ${{ inputs.version }}
       run: |
-        python3 "$GITHUB_ACTION_PATH/raw.py" --validate "$TARGET" "$BINARY" "$VERSION"
+        node "$GITHUB_ACTION_PATH/../../../dist/release-build.js" raw --validate "$TARGET" "$BINARY" "$VERSION"
         rustup toolchain install 1.99.1 --profile minimal --no-self-update
         rustup target add --toolchain 1.99.1 "$TARGET"
         if [[ "$TARGET" == *linux-musl ]]; then
@@ -158,4 +153,4 @@ runs:
           export "${linker^^}=musl-gcc"
         fi
         cargo +1.99.1 build --manifest-path "$CLIENT_PATH/Cargo.toml" --locked --release --bin "$BINARY" --target "$TARGET"
-        python3 "$GITHUB_ACTION_PATH/raw.py" "$CLIENT_PATH/target/$TARGET/release/$BINARY" "$TARGET" "$BINARY" "$VERSION" assets
+        node "$GITHUB_ACTION_PATH/../../../dist/release-build.js" raw "$CLIENT_PATH/target/$TARGET/release/$BINARY" "$TARGET" "$BINARY" "$VERSION" assets

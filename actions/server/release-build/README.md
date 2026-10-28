@@ -1,6 +1,6 @@
 # csm-ci release build
 
-Build release assets from an isolated source snapshot. This composite action supports `none`, `js-action`, `goreleaser`, `cargo`, `cargo-raw`, and `terraform-provider`. It does not publish a release or create attestations. The trusted release build job in [server.yml](../../../.github/workflows/server.yml) runs it with no token permissions, secrets, environment, or cache.
+Build release assets from an isolated source snapshot. This composite action supports `none`, `js-action`, `goreleaser`, `cargo`, `cargo-raw`, and `terraform-provider`. It does not publish a release or create attestations. The trusted release build job in [server.yml](../../../.github/workflows/server.yml) runs it with no token permissions, secrets, environment, or cache. The Cargo packaging, raw Cargo verification and Terraform output collection steps run the bundled `dist/release-build.js` with `node`; the action needs no other interpreter.
 
 See [release publishing](../../../docs/release.md) for build behavior, Cargo target restrictions, and the build isolation boundary.
 
