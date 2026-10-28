@@ -131,7 +131,7 @@ jobs:
           sudo mount -t tmpfs -o size=12m,nr_inodes=1024,mode=0700,uid="$(id -u)",gid="$(id -g)" tmpfs "$SECUREFIX_ARTIFACT_PATH"
           mountpoint -q "$SECUREFIX_ARTIFACT_PATH"
       - if: needs.intake.outputs.kind == 'securefix'
-        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         timeout-minutes: 2
         with:
           artifact-ids: ${{ steps.securefix-locate.outputs.artifact-id }}
