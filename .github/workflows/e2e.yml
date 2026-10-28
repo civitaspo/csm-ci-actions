@@ -12,8 +12,22 @@ on:
         description: Comma-separated features whose scenarios run together.
         required: true
         type: string
+      scenario:
+        description: Case-sensitive substring of scenario names to run; empty runs every scenario of the features.
+        required: false
+        default: ""
+        type: string
+      harness-ref:
+        description: Commit whose e2e harness runs; empty means the default branch.
+        required: false
+        default: ""
+        type: string
   workflow_dispatch:
     inputs:
+      scenario:
+        description: Case-sensitive substring of scenario names to run; empty runs every scenario of the features.
+        default: ""
+        type: string
       ref:
         description: Full commit sha of csm-ci-actions to test.
         required: true
@@ -41,6 +55,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.harness-ref }}
           persist-credentials: false
       - uses: jdx/mise-action@82a612c5ab8bcda7cc5db6b7e81a8e7584c3dc6e # v5.2.3
         with:
@@ -67,4 +82,8 @@ jobs:
           CSM_CI_UNTRUSTED_COMMITTER_TOKEN: ${{ steps.untrusted-committer.outputs.token }}
           REF: ${{ inputs.ref }}
           FEATURE: ${{ inputs.feature }}
-        run: bun e2e/run.ts --ref "$REF" --feature "$FEATURE"
+          SCENARIO: ${{ inputs.scenario }}
+        run: |
+          args=(--ref "$REF" --feature "$FEATURE")
+          if [ -n "$SCENARIO" ]; then args+=(--scenario "$SCENARIO"); fi
+          bun e2e/run.ts "${args[@]}"
