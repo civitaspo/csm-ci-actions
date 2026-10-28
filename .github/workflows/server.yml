@@ -386,7 +386,7 @@ jobs:
         env:
           MERGE_SHA: ${{ steps.plan.outputs.merge-sha }}
         run: git -C client archive --format=tar --output="$RUNNER_TEMP/release-source.tar" "$MERGE_SHA"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-source
           path: ${{ runner.temp }}/release-source.tar
@@ -410,7 +410,7 @@ jobs:
           ref: ${{ job.workflow_sha }}
           path: .csm-ci-actions
           persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-source
           path: client
@@ -446,7 +446,7 @@ jobs:
           target: ${{ matrix.target }}
           binary: ${{ fromJSON(needs.release-plan.outputs.plan).release.binary || '' }}
       - if: hashFiles('assets/**') != ''
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-assets-${{ matrix.target || 'default' }}
           path: assets/
@@ -473,7 +473,7 @@ jobs:
           ref: ${{ job.workflow_sha }}
           path: .csm-ci-actions
           persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: contains(fromJSON('["cargo", "cargo-raw", "goreleaser", "terraform-provider"]'), needs.release-plan.outputs.build-type)
         with:
           pattern: release-assets-*
@@ -494,7 +494,7 @@ jobs:
           PUBLIC_KEY: ${{ steps.assets.outputs.gpg-public-key }}
         run: printf '%s\n' "$PUBLIC_KEY" > "$RUNNER_TEMP/terraform-signing-public-key.asc"
       - if: needs.release-plan.outputs.build-type == 'terraform-provider'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: terraform-signing-public-key
           path: ${{ runner.temp }}/terraform-signing-public-key.asc
