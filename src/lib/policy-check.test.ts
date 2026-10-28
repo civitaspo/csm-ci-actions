@@ -10,7 +10,7 @@ const head = "a".repeat(40);
 const pull: PullFacts = { number: 12, state: "open", draft: false, headSha: head, headRepository: "owner/repo", baseRepository: "owner/repo", baseRef: "main", defaultBranch: "main", authorId: 10 };
 const base = "/repos/owner/repo";
 
-function setup(checkRuns: unknown[], current = { state: "open", head: { sha: head } }, commits: unknown[] = [{ sha: head, commit: { verification: { verified: true } }, author: { id: 10, login: "alice" }, committer: { id: 10, login: "alice" } }], pullStatus = 200) {
+function setup(checkRuns: unknown[], current = { state: "open", head: { sha: head } }, commits: unknown[] = [{ sha: head, commit: { verification: { verified: true } }, author: { id: 10, login: "alice" }, committer: { id: 10, login: "alice" } }], pullStatus = 200, reviews?: unknown[]) {
   const sent: { method: string; path: string; body: Record<string, unknown> }[] = [];
   const reads: string[] = [];
   const fetch = (async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
@@ -21,6 +21,7 @@ function setup(checkRuns: unknown[], current = { state: "open", head: { sha: hea
     const routes = [
       { method: "GET", path: `${base}/pulls/12/commits`, body: commits },
       { method: "GET", path: `${base}/pulls/12`, body: current, status: pullStatus },
+      { method: "GET", path: `${base}/pulls/12/reviews`, body: reviews ?? [{ id: 1, user: { id: 4000 }, state: "APPROVED", commit_id: head, submitted_at: "2026-10-24T11:20:00Z" }] },
       { method: "GET", path: `${base}/commits/${head}/check-runs`, body: checkRuns },
       { method: "GET", path: `${base}/issues/12/comments`, body: [] },
       { method: "POST", path: `${base}/issues/12/comments`, status: 201, body: { id: 100 } },
@@ -113,6 +114,7 @@ describe("updatePolicyCheck", () => {
     expect(await updatePolicyCheck({ server, config: config(), repository: "owner/repo", serverRun, pull })).toEqual({ result: "published", results: [
       { type: "signed-commits", ok: false, problems: ["pull request has no commits"] },
       { type: "trusted-committers", ok: false, problems: ["pull request has no commits"] },
+      { type: "approval", ok: true, problems: [] },
     ] });
     expect(sent[0]?.body.conclusion).toBe("failure");
   });
@@ -124,6 +126,21 @@ describe("updatePolicyCheck", () => {
     expect(create?.body).toMatchObject({ name: "csm-ci/policy", external_id: head, head_sha: head, status: "completed", completed_at: expect.any(String), conclusion: "success" });
     expect(create?.body.output).toMatchObject({ title: "Policies passed" });
     expect((create?.body.output as { summary: string }).summary).toContain("| trusted-committers | pass | — |");
+    expect((create?.body.output as { summary: string }).summary).toContain("| approval | pass | — |");
+  });
+
+  const review = (id: number, user: number, state: string, commit: string, at: string) => ({ id, user: { id: user }, state, commit_id: commit, submitted_at: at });
+  test.each([
+    ["only another reviewer approved the head", [review(1, 10, "APPROVED", head, "2026-10-24T11:20:00Z")]],
+    ["the approver approved another head", [review(2, 4000, "APPROVED", "b".repeat(40), "2026-10-24T11:21:00Z")]],
+    ["the approver's latest review requests changes", [review(1, 4000, "APPROVED", head, "2026-10-24T11:20:00Z"), review(2, 4000, "CHANGES_REQUESTED", head, "2026-10-24T11:21:00Z")]],
+  ])("the approval row fails without a policy failure report when %s", async (_name, reviews) => {
+    const { server, sent } = setup([], undefined, undefined, 200, reviews);
+    await updatePolicyCheck({ server, config: config(), repository: "owner/repo", serverRun, pull });
+    const create = sent.find((r) => r.method === "POST" && r.path === `${base}/check-runs`);
+    expect(create?.body.conclusion).toBe("failure");
+    expect((create?.body.output as { summary: string }).summary).toContain(`| approval | fail | approver&#91;bot&#93; has not approved head ${head} |`);
+    expect(sent.some((r) => r.path === `${base}/issues/12/comments`)).toBe(false);
   });
 
   test("updates only a check created by the configured Server App", async () => {
@@ -213,6 +230,7 @@ test("each serialized full refresh reevaluates current facts even when the pinne
     { method: "GET", path: `${base}/pulls/12`, body: { state: "open", head: { sha: head } } },
     { method: "GET", path: `${base}/commits/${head}/check-runs`, body: [] },
     { method: "POST", path: `${base}/check-runs`, body: { id: 99 } },
+    { method: "GET", path: `${base}/pulls/12/reviews`, body: [{ id: 1, user: { id: 4000 }, state: "APPROVED", commit_id: head, submitted_at: "2026-10-24T11:20:00Z" }] },
     { method: "GET", path: `${base}/issues/12/comments`, body: [] },
     { method: "POST", path: `${base}/issues/12/comments`, body: { id: 100 } },
   ]);

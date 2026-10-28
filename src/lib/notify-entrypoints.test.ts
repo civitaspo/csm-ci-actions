@@ -23,7 +23,7 @@ const fetch = fakeFetch([
   { method: "GET", path: "/repos/owner/server", body: { default_branch: "main" } },
   { method: "GET", path: "/repos/owner/repo/pulls/12", body: pull, then: [{ ...pull, state: "closed" }] },
   { method: "GET", path: "/repos/owner/repo/issues/comments/9", body: { id: 9, node_id: "comment-node", body: "/${action}", issue_url: "https://api.github.com/repos/owner/repo/issues/12", created_at: now, updated_at: now, user: { id: 10, login: "alice", type: "User" } } },
-  { method: "POST", path: "/graphql", body: { data: { node: { databaseId: 9, lastEditedAt: null } } } },
+  { method: "POST", path: "/graphql", body: { data: { node: { databaseId: 9, lastEditedAt: null }, repository: { autoMergeAllowed: false } } } },
   { method: "GET", path: "/repos/owner/repo/issues/12/comments", body: [] },
   { method: "POST", path: "/repos/owner/repo/issues/comments/9/reactions", body: {} },
   { method: "GET", path: "/repos/owner/repo/commits/" + head, body: { commit: { committer: { date: now } } } },

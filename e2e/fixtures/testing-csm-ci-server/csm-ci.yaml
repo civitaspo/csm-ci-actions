@@ -16,7 +16,6 @@ trust:
 merge:
   required_checks:
     - { name: csm-ci/policy, app_id: 5455185 }
-  deadline_minutes: 1
 policies:
   - { type: signed-commits }
   - { type: trusted-committers }
@@ -38,6 +37,8 @@ repositories:
   - name: civitaspo/testing-csm-ci-client
     ops: [approve, merge, policy-check, securefix, release]
     release: { build_type: none }
+    # Waiting scenarios need the self-merge path; platform scenarios remove this line.
+    merge: { use_platform_automerge: false }
   - { name: civitaspo/testing-csm-ci-server, ops: [], sensitive_paths: { paths: ["**"], exempt: [] }, merge: { allow_bot_requests: false } }
 repo_settings:
   settings:

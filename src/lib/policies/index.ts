@@ -6,7 +6,7 @@ import { sensitivePaths } from "./sensitive-paths.ts";
 import { trustedCommitters } from "./trusted-committers.ts";
 
 export type PolicyContext = { trust: TrustResult; gh: GitHub; config: Config; repository: string; pullNumber: number; head: string; authorId: number; commandApproval?: { commentId: number; authorId: number; head: string } };
-export type PolicyResult = { type: Policy["type"]; ok: boolean; problems: string[] };
+export type PolicyResult = { type: Policy["type"] | "approval"; ok: boolean; problems: string[] };
 type Evaluator<P extends Policy> = (policy: P, ctx: PolicyContext) => Promise<string[]> | string[];
 
 const EVALUATORS: { [T in Policy["type"]]: Evaluator<Extract<Policy, { type: T }>> } = {

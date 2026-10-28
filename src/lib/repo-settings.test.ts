@@ -538,6 +538,18 @@ describe("auto-merge queue preflight", () => {
     expect(cursors).toEqual([null, "c1", "c2"]);
   });
 
+  test.each([
+    ["the Server bot", { __typename: "Bot", databaseId: 3000 }, 0, 3000],
+    ["another bot", { __typename: "Bot", databaseId: 20 }, 1, 3000],
+    ["a user with the Server bot ID", { __typename: "User", databaseId: 3000 }, 1, 3000],
+    ["a deleted actor", null, 1, 3000],
+    ["the Server bot when its ID is unknown", { __typename: "Bot", databaseId: 3000 }, 1, null],
+  ] satisfies [string, unknown, number, number | null][])("auto-merge enabled by %s counts %i", async (_name, enabledBy, count, serverBotId) => {
+    const fetch = queueFetch([page([{ autoMergeRequest: { enabledBy } }], false, null)]);
+    const result = await inspectRepoSettingsPreflight({ readGH: github("read", fetch), target: client, ...(serverBotId === null ? {} : { serverBotId }) });
+    expect(result.autoMergeQueueCount).toBe(count);
+  });
+
   const unavailable: [string, unknown][] = [
     ["the repository is null", { repository: null }],
     ["the pull request connection is null", { repository: { pullRequests: null } }],

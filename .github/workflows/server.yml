@@ -281,6 +281,7 @@ jobs:
           repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
           args: ${{ needs.intake.outputs.args }}
           head: ${{ steps.merge-ready.outputs.head }}
+          platform: ${{ steps.merge-ready.outputs.platform }}
       - if: needs.intake.outputs.kind == 'policy-check'
         uses: ./.csm-ci-actions/actions/server/policy-check
         with:

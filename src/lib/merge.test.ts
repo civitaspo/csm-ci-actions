@@ -13,7 +13,7 @@ const P = "/repos/owner/repo";
 const alice = { id: 10, login: "alice", type: "User" };
 
 function receiptBody(fetch: ReturnType<typeof fakeFetch>): string {
-  const request = fetch.requests.find((request) => request.method === "POST" && request.path === `${P}/issues/12/comments`);
+  const request = fetch.requests.findLast((request) => request.method === "POST" && request.path === `${P}/issues/12/comments`);
   return z.object({ body: z.string() }).parse(JSON.parse(request?.body ?? "{}")).body;
 }
 function expectReceipt(body: string, operation: string): void {
@@ -32,14 +32,16 @@ function pull(over: Record<string, unknown> = {}, repository = "owner/repo") {
 function comment(over: Record<string, unknown> = {}, repository = "owner/repo") {
   return { id: 9, body: "/merge", issue_url: `https://api.github.com/repos/${repository}/issues/12`, created_at: "2026-10-24T11:30:00Z", updated_at: "2026-10-24T11:30:00Z", node_id: "comment-node", user: alice, ...over };
 }
-type Setup = { repository?: string; policies?: Config["policies"]; files?: unknown[]; pull?: unknown; pullAfter?: unknown; pullThen?: unknown[]; comment?: unknown; commentStatus?: number; commentAfter?: unknown; lastEditedAt?: string | null; comments?: unknown[]; timeline?: unknown[]; headDate?: string; commits?: unknown[]; reviews?: unknown[]; reviewThen?: unknown[]; checks?: unknown[]; receiptStatus?: number };
+type Setup = { repository?: string; policies?: Config["policies"]; files?: unknown[]; pull?: unknown; pullAfter?: unknown; pullThen?: unknown[]; comment?: unknown; commentStatus?: number; commentAfter?: unknown; lastEditedAt?: string | null; comments?: unknown[]; timeline?: unknown[]; headDate?: string; commits?: unknown[]; reviews?: unknown[]; reviewThen?: unknown[]; checks?: unknown[]; receiptStatus?: number; notifyComments?: unknown[]; autoMergeAllowed?: boolean; prState?: unknown; prStateThen?: unknown[]; rules?: unknown[] };
 function context(s: Setup = {}) {
+  const graphql = (pullRequest: unknown) => ({ data: { node: { databaseId: 9, lastEditedAt: s.lastEditedAt ?? null }, repository: { autoMergeAllowed: s.autoMergeAllowed ?? false, pullRequest: pullRequest ?? null } } });
   const repository = s.repository ?? "owner/repo";
   const path = `/repos/${repository}`;
   const server = fakeFetch([
     { method: "GET", path: `${path}/pulls/12`, body: s.pull ?? pull({}, repository), then: s.pullThen ?? [s.pullAfter ?? s.pull ?? pull({}, repository)] },
     { method: "GET", path: `${path}/issues/comments/9`, status: s.commentStatus ?? 200, body: s.comment ?? comment({}, repository), then: [s.commentAfter ?? s.comment ?? comment({}, repository)] },
-    { method: "POST", path: "/graphql", body: { data: { node: { databaseId: 9, lastEditedAt: s.lastEditedAt ?? null } } } },
+    { method: "POST", path: "/graphql", body: graphql(s.prState), ...(s.prStateThen ? { then: s.prStateThen.map(graphql) } : {}) },
+    { method: "GET", path: `${path}/rules/branches/main`, body: s.rules ?? [] },
     { method: "GET", path: `${path}/issues/12/comments`, body: s.comments ?? [] },
     { method: "GET", path: `${path}/commits/${HEAD}`, body: { sha: HEAD, commit: { committer: { date: s.headDate ?? "2026-10-24T11:00:00Z" } } } },
     { method: "GET", path: `${path}/issues/12/timeline`, body: s.timeline ?? [] },
@@ -50,11 +52,10 @@ function context(s: Setup = {}) {
   ]);
   let time = new Date("2026-10-24T11:30:01Z").getTime();
   const cfg = config();
-  cfg.merge.deadline_minutes = 1;
   if (s.policies) cfg.policies = s.policies;
   const notify = fakeFetch([
     { method: "POST", path: `${path}/issues/comments/9/reactions`, status: 201, body: { id: 3 } },
-    { method: "GET", path: `${path}/issues/12/comments`, body: [] },
+    { method: "GET", path: `${path}/issues/12/comments`, body: s.notifyComments ?? [] },
     { method: "POST", path: `${path}/issues/12/comments`, status: s.receiptStatus ?? 201, body: { id: 4 } },
   ]);
   const ctx: MergeContext = { server: github("s", server), notify: github("n", notify), config: cfg, repository, serverRun: { serverUrl: "https://github.com", repository: "owner/server", id: "345", attempt: "2" }, now: () => new Date(time), sleep: async (ms) => { time += ms; } };
@@ -83,19 +84,14 @@ describe("waitForMerge", () => {
     expect(body).not.toContain("rebase");
   });
 
-  test.each([
-    [1, 5_000, 12],
-    [6, 30_000, 12],
-    [30, 30_000, 60],
-  ])("a %i minute deadline polls readiness every %i ms", async (minutes, interval, polls) => {
+  test("the fallback polls every 30 seconds until the comment is 60 minutes old", async () => {
     const { ctx } = context({ reviews: [] });
-    ctx.config.merge.deadline_minutes = minutes;
     const sleeps: number[] = [];
     const sleep = ctx.sleep;
     ctx.sleep = async (ms) => { sleeps.push(ms); await sleep(ms); };
     await expect(waitForMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow(/readiness deadline/);
-    expect(sleeps.filter((ms) => ms === interval)).toHaveLength(polls);
-    expect(sleeps.every((ms) => ms <= interval)).toBe(true);
+    expect(sleeps.filter((ms) => ms === 30_000)).toHaveLength(119);
+    expect(sleeps.every((ms) => ms <= 30_000)).toBe(true);
   });
 
   test("fresh-token failure receipt escapes the reason and preserves the supplied original head without reading client state", async () => {
@@ -177,7 +173,7 @@ describe("waitForMerge", () => {
   });
 
   test("preserves the readiness error when posting its failure receipt also fails", async () => {
-    const { ctx } = context({ pullAfter: pull({ state: "closed" }), receiptStatus: 500 });
+    const { ctx } = context({ pullAfter: pull({ state: "closed" }), receiptStatus: 500, notifyComments: [{ body: marker("merge-wait", 9), user: { id: SERVER_BOT_ID, type: "Bot" } }] });
     await expect(waitForMerge(ctx, { pull_number: 12, comment_id: 9 }))
       .rejects.toThrow(/#12 is closed; additionally failed to post the merge failure receipt/);
   });
@@ -463,5 +459,130 @@ describe("runMerge", () => {
     await expect(runMerge(ctx, { pull_number: 12, comment_id: 9 }, { head: HEAD })).rejects.toThrow();
     expect(write.calls.filter((call) => call === "PUT /repos/owner/repo/pulls/12/merge")).toHaveLength(3);
     expect(notify.calls.filter((call) => call === "POST /repos/owner/repo/issues/12/comments")).toHaveLength(1);
+  });
+});
+
+describe("platform auto-merge", () => {
+  const RULES = [
+    { type: "pull_request", parameters: { required_approving_review_count: 1, dismiss_stale_reviews_on_push: true } },
+    { type: "required_status_checks", parameters: { required_status_checks: [{ context: "csm-ci/policy", integration_id: 1 }, { context: "status-check", integration_id: 15368 }] } },
+  ];
+  const BLOCKED = { id: "PR_node", mergeStateStatus: "BLOCKED", autoMergeRequest: null };
+  const enabled = (typename: string, databaseId: number, mergeMethod = "SQUASH") => ({ ...BLOCKED, autoMergeRequest: { mergeMethod, enabledBy: { __typename: typename, databaseId } } });
+  const posts = (fetch: ReturnType<typeof fakeFetch>) => fetch.requests.filter((r) => r.method === "POST" && r.path === `${P}/issues/12/comments`).map((r) => z.object({ body: z.string() }).parse(JSON.parse(r.body ?? "{}")).body);
+
+  test("returns at acceptance without a notice or polling when the branch rules enforce approval and checks", async () => {
+    const { ctx, notify } = context({ autoMergeAllowed: true, rules: RULES, reviews: [] });
+    let slept = false;
+    ctx.sleep = async () => { slept = true; };
+    expect(await waitForMerge(ctx, { pull_number: 12, comment_id: 9 })).toEqual({ head: HEAD, platform: true });
+    expect(slept).toBe(false);
+    expect(posts(notify)).toEqual([]);
+  });
+
+  test.each([
+    ["use_platform_automerge is false", { autoMergeAllowed: true, rules: RULES }, true, "use_platform_automerge is false for this repository"],
+    ["auto-merge is not allowed", { rules: RULES }, false, "auto-merge is not allowed in this repository"],
+    ["no review rule", { autoMergeAllowed: true, rules: RULES.slice(1) }, false, "main does not require a fresh approval"],
+    ["stale reviews are kept", { autoMergeAllowed: true, rules: [{ type: "pull_request", parameters: { required_approving_review_count: 1, dismiss_stale_reviews_on_push: false } }, RULES[1]] }, false, "main does not require a fresh approval"],
+    ["no required approval", { autoMergeAllowed: true, rules: [{ type: "pull_request", parameters: { required_approving_review_count: 0, dismiss_stale_reviews_on_push: true } }, RULES[1]] }, false, "main does not require a fresh approval"],
+    ["csm-ci/policy is not required", { autoMergeAllowed: true, rules: [RULES[0], { type: "required_status_checks", parameters: { required_status_checks: [{ context: "status-check", integration_id: 15368 }] } }] }, false, "main does not require csm-ci/policy"],
+    ["a required check from any source", { autoMergeAllowed: true, rules: [RULES[0], { type: "required_status_checks", parameters: { required_status_checks: [{ context: "csm-ci/policy", integration_id: 1 }, { context: "status-check" }] } }] }, false, "main does not require status-check"],
+    ["a required check from another app", { autoMergeAllowed: true, rules: [RULES[0], { type: "required_status_checks", parameters: { required_status_checks: [{ context: "csm-ci/policy", integration_id: 1 }, { context: "status-check", integration_id: 999 }] } }] }, false, "main does not require status-check"],
+  ] satisfies [string, Setup, boolean, string][])("falls back to the self-merge wait with a notice when %s", async (_name, setup, optOut, reason) => {
+    const { ctx, notify } = context(setup);
+    if (optOut) ctx.config.repositories = [{ name: "owner/repo", ops: ["merge"], merge: { use_platform_automerge: false } }];
+    expect(await waitForMerge(ctx, { pull_number: 12, comment_id: 9 })).toEqual({ head: HEAD });
+    const [notice] = posts(notify);
+    expect(notice?.startsWith(`${marker("merge-wait", 9)}\ncsm-ci: /merge is not using platform auto-merge because ${reason}.`)).toBe(true);
+    expect(notice).toContain("csm-ci's own merge process is running");
+    expect(notice).toContain("ready by 2026-10-24T12:30:00.000Z");
+  });
+
+  test("names each missing check once when the configuration also lists csm-ci/policy", async () => {
+    const { ctx, notify } = context({ autoMergeAllowed: true, rules: RULES.slice(0, 1) });
+    ctx.config.merge.required_checks = [{ name: "csm-ci/policy", app_id: 1 }];
+    await expect(waitForMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow("merge readiness deadline passed");
+    expect(posts(notify)[0]).toContain("because main does not require csm-ci/policy. ");
+  });
+
+  test("a replayed fallback does not post a second notice", async () => {
+    const { ctx, notify } = context({ notifyComments: [{ body: marker("merge-wait", 9), user: { id: SERVER_BOT_ID, type: "Bot" } }] });
+    await waitForMerge(ctx, { pull_number: 12, comment_id: 9 });
+    expect(posts(notify)).toEqual([]);
+  });
+
+  function platformContext(setup: Setup, mutation: { status?: number; body?: unknown } = {}) {
+    const base = context(setup);
+    const write = fakeFetch([
+      { method: "POST", path: "/graphql", status: mutation.status ?? 200, body: mutation.body ?? { data: { enablePullRequestAutoMerge: { clientMutationId: null } } } },
+      { method: "PUT", path: `${P}/pulls/12/merge`, body: { merged: true, sha: "c".repeat(40) } },
+    ]);
+    base.ctx.write = github("w", write);
+    return { ...base, write };
+  }
+  const mutations = (write: ReturnType<typeof fakeFetch>) => write.requests.filter((r) => r.method === "POST" && r.path === "/graphql");
+
+  test("enables squash auto-merge for the pinned head with the merge commit text", async () => {
+    const { ctx, write, notify } = platformContext({ prState: BLOCKED, reviews: [] });
+    expect(await runMerge(ctx, { pull_number: 12, comment_id: 9 }, { head: HEAD, platform: true })).toEqual({ result: "auto-merge", head: HEAD });
+    const [request] = mutations(write);
+    const variables = JSON.parse(request?.body ?? "{}").variables;
+    expect(variables).toEqual({ id: "PR_node", head: HEAD, title: "Example title (#12)", body: "Description\nCo-authored-by: Alice <alice@example.com>\nCo-authored-by: Bob <bob@example.com>" });
+    expect(JSON.parse(request?.body ?? "{}").query).toContain("mergeMethod:SQUASH");
+    expect(write.calls).not.toContain(`PUT ${P}/pulls/12/merge`);
+    const body = receiptBody(notify);
+    expectReceipt(body, "merge");
+    expect(body.split("<sub>")[0]).toContain("enabled platform auto-merge for the pinned head");
+    expect(body.split("<sub>")[0]).toContain("this is not a merge result");
+  });
+
+  test.each([
+    ...["CLEAN", "UNSTABLE", "HAS_HOOKS"].map((status): [string, Setup, { status?: number; body?: unknown }] => [`the pull request is already ${status}`, { prState: { ...BLOCKED, mergeStateStatus: status } }, {}]),
+    ["GitHub reports unstable status on enabling", { prState: BLOCKED }, { body: { errors: [{ message: "Pull request is in unstable status" }] } }],
+    ["GitHub reports clean status on enabling", { prState: BLOCKED }, { body: { errors: [{ message: "Pull request is in clean status" }] } }],
+  ] satisfies [string, Setup, { status?: number; body?: unknown }][])("merges directly when %s", async (_name, setup, mutation) => {
+    const { ctx, write } = platformContext(setup, mutation);
+    expect(await runMerge(ctx, { pull_number: 12, comment_id: 9 }, { head: HEAD, platform: true })).toEqual({ result: "merged", head: HEAD, mergeCommit: "c".repeat(40) });
+    expect(write.calls).toContain(`PUT ${P}/pulls/12/merge`);
+  });
+
+  test("a mergeable pull request still needs one complete readiness validation", async () => {
+    const { ctx, write, notify } = platformContext({ prState: { ...BLOCKED, mergeStateStatus: "CLEAN" }, reviews: [] });
+    await expect(runMerge(ctx, { pull_number: 12, comment_id: 9 }, { head: HEAD, platform: true })).rejects.toThrow(`the approver has not approved head ${HEAD}`);
+    expect(write.calls).toEqual([]);
+    expect(posts(notify).every((body) => !body.includes(marker("merge-wait", 9)))).toBe(true);
+  });
+
+  test("an opt-out after acceptance skips enabling and merges only when ready", async () => {
+    const { ctx, write } = platformContext({ prState: BLOCKED });
+    ctx.reloadConfig = async () => ({ ...ctx.config, repositories: [{ name: "owner/repo", ops: ["merge"], merge: { use_platform_automerge: false } }] });
+    expect(await runMerge(ctx, { pull_number: 12, comment_id: 9 }, { head: HEAD, platform: true })).toEqual({ result: "merged", head: HEAD, mergeCommit: "c".repeat(40) });
+    expect(mutations(write)).toEqual([]);
+  });
+
+  test("reuses auto-merge already enabled by the Server bot without another mutation", async () => {
+    const { ctx, write } = platformContext({ prState: enabled("Bot", SERVER_BOT_ID) });
+    expect(await runMerge(ctx, { pull_number: 12, comment_id: 9 }, { head: HEAD, platform: true })).toEqual({ result: "auto-merge", head: HEAD });
+    expect(mutations(write)).toEqual([]);
+  });
+
+  test("recovers a lost enabling response from the current auto-merge state", async () => {
+    const { ctx } = platformContext({ prState: BLOCKED, prStateThen: [BLOCKED, enabled("Bot", SERVER_BOT_ID)] }, { status: 502, body: { message: "Bad Gateway" } });
+    expect(await runMerge(ctx, { pull_number: 12, comment_id: 9 }, { head: HEAD, platform: true })).toEqual({ result: "auto-merge", head: HEAD });
+  });
+
+  test.each([
+    ["auto-merge by a user", { prState: enabled("User", 10) }, {}, "auto-merge on #12 was enabled by another actor or merge method"],
+    ["auto-merge by a user with the Server bot ID", { prState: enabled("User", SERVER_BOT_ID) }, {}, "auto-merge on #12 was enabled by another actor or merge method"],
+    ["auto-merge by another bot", { prState: enabled("Bot", 20) }, {}, "auto-merge on #12 was enabled by another actor or merge method"],
+    ["a merge-commit auto-merge by the Server bot", { prState: enabled("Bot", SERVER_BOT_ID, "MERGE") }, {}, "auto-merge on #12 was enabled by another actor or merge method"],
+    ["another enabling error", { prState: BLOCKED }, { body: { errors: [{ message: "Auto merge is not allowed for this repository" }] } }, "Auto merge is not allowed for this repository"],
+    ["a moved head before enabling", { prState: BLOCKED, pull: pull({ head: { sha: NEXT, repo: { full_name: "owner/repo" } } }) }, {}, `the head changed from ${HEAD} to ${NEXT}`],
+  ] satisfies [string, Setup, { status?: number; body?: unknown }, string][])("fails with a receipt for %s", async (_name, setup, mutation, reason) => {
+    const { ctx, write, notify } = platformContext(setup, mutation);
+    await expect(runMerge(ctx, { pull_number: 12, comment_id: 9 }, { head: HEAD, platform: true })).rejects.toThrow(reason);
+    expect(write.calls).not.toContain(`PUT ${P}/pulls/12/merge`);
+    expect(receiptBody(notify).split("<sub>")[0]).toContain(reason);
   });
 });

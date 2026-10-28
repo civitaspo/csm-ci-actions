@@ -8,6 +8,7 @@ import { splitRepository } from "../src/lib/github.ts";
 import { approverReviews, assert, CLIENT, closePr, dispatch, expectOp, openPr, type Pr, postComment, type Scenario, SERVER, SERVER_BOT_ID, serverComments, until, withServerConfig } from "./harness.ts";
 
 const RULESET_ID = 25785295;
+const SERVER_APP_ID = 5455185;
 const TEST_BOT_ID = 347402450;
 const TEST_BOT_LOGIN = "testing-csm-ci-untrusted-committer[bot]";
 const SERVER_CONFIG = "csm-ci.yaml";
@@ -23,6 +24,15 @@ async function request(ctx: Parameters<Scenario["run"]>[0], pr: Pr, commentId: n
 
 function fromComment(pr: Pr, comment: { id: number; since: Date }): MergeRequest {
   return { since: comment.since, match: { kind: "merge", repository: CLIENT, args: { pull_number: pr.number, comment_id: comment.id } } };
+}
+
+const SELF_MERGE = "    merge: { use_platform_automerge: false }\n";
+
+async function withPlatformAutoMerge<T>(ctx: Parameters<Scenario["run"]>[0], run: () => Promise<T>): Promise<T> {
+  return withServerConfig(ctx, (text) => {
+    assert(text.includes(SELF_MERGE), "could not find the self-merge fixture entry");
+    return text.replace(SELF_MERGE, "");
+  }, run);
 }
 
 export async function withTestBotConfigured(ctx: Parameters<Scenario["run"]>[0], run: () => Promise<void>): Promise<void> {
@@ -128,6 +138,23 @@ async function withReviewRulesetDisabled(ctx: Parameters<Scenario["run"]>[0], ru
   }
 }
 
+// Platform auto-merge requires the branch rules to enforce csm-ci/policy; the shared fixture ruleset may lack it.
+async function withPolicyCheckRequired(ctx: Parameters<Scenario["run"]>[0], run: () => Promise<void>): Promise<void> {
+  const repo = { owner: "civitaspo", repo: "testing-csm-ci-client", ruleset_id: RULESET_ID };
+  const { data } = await ctx.gh.rest.repos.getRepoRuleset(repo);
+  const refName = data.conditions?.ref_name;
+  assert(data.target === "branch" && refName, `ruleset ${RULESET_ID} is not the expected default-branch rule`);
+  const rules = data.rules ?? [];
+  if (rules.some((rule) => rule.type === "required_status_checks")) return run();
+  const update = (next: typeof rules) => ctx.gh.rest.repos.updateRepoRuleset({ ...repo, name: data.name, target: "branch", enforcement: data.enforcement, conditions: { ref_name: refName }, rules: next, bypass_actors: data.bypass_actors ?? [] });
+  try {
+    await update([...rules, { type: "required_status_checks", parameters: { strict_required_status_checks_policy: false, do_not_enforce_on_create: false, required_status_checks: [{ context: "csm-ci/policy", integration_id: SERVER_APP_ID }] } }]);
+    await run();
+  } finally {
+    await update(rules);
+  }
+}
+
 export const merge: Scenario[] = [
   {
     id: "merge.authorized",
@@ -169,7 +196,7 @@ export const merge: Scenario[] = [
       fixture: {
         id: "fixture",
         target: "client",
-        title: "/merge posted before /approve on the same pull request still merges",
+        title: "/merge before /approve enables platform auto-merge and GitHub merges after approval",
         classification: "positive",
         checks: [
           "approval-policy",
@@ -179,19 +206,19 @@ export const merge: Scenario[] = [
           {
             "operation": "merge",
             "outcome": "permitted",
-            "expected": "A waiting /merge does not block /approve on the same pull request, and the merge completes"
+            "expected": "/merge enables platform auto-merge before approval, and GitHub merges once /approve lands"
           }
         ],
         identity: OWNER_IDENTITY
       }
     },
-    name: "/merge posted before /approve on the same pull request still merges",
+    name: "/merge before /approve enables platform auto-merge and GitHub merges after approval",
     serial: true,
     run: (ctx) => withServerConfig(ctx, (text) => {
       const exemption = 'exempt: [{ id: 4525500, login: civitaspo }]';
-      assert(text.includes(exemption) && text.includes("deadline_minutes: 1"), "could not find the expected exemption and merge deadline");
-      return text.replace(exemption, "exempt: []").replace("deadline_minutes: 1", "deadline_minutes: 5");
-    }, async () => {
+      assert(text.includes(exemption) && text.includes(SELF_MERGE), "could not find the expected exemption and self-merge entry");
+      return text.replace(exemption, "exempt: []").replace(SELF_MERGE, "");
+    }, () => withPolicyCheckRequired(ctx, async () => {
       const since = new Date(Date.now() - 2_000);
       const path = `.github/e2e-concurrent-${crypto.randomUUID()}.txt`;
       const pr = await openPr(ctx, { intent: prCase(ctx, "fixture"), kind: "signed", filePath: path, fileContent: "concurrent approve and merge\n" });
@@ -199,16 +226,21 @@ export const merge: Scenario[] = [
         await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number } }, since, "success");
         assert(!(await approverReviews(ctx, pr)).some((review) => review.state === "APPROVED" && review.commit_id === pr.head), "sensitive change unexpectedly received automatic approval");
         const merge = await postComment(ctx, pr, "/merge");
-        const approval = await postComment(ctx, pr, "/approve");
         const mergeInfo = fromComment(pr, merge);
-        await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: approval.id } }, approval.since, "success");
         await expectOp(ctx, mergeInfo.match, mergeInfo.since, "success");
-        const { data: merged } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
-        assert(merged.merged && merged.head.sha === pr.head, `pull request #${pr.number} was not merged after concurrent /merge and /approve`);
+        await verifyReceipt(ctx, pr, merge, "merge", /enabled platform auto-merge for the pinned head/u);
+        await noMerge(ctx, pr);
+        const approval = await postComment(ctx, pr, "/approve");
+        await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: approval.id } }, approval.since, "success");
+        const merged = await until(`platform auto-merge of #${pr.number}`, async () => {
+          const { data } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
+          return data.merged ? data : undefined;
+        });
+        assert(merged.head.sha === pr.head && merged.merged_by?.id === SERVER_BOT_ID, `pull request #${pr.number} was not auto-merged at the pinned head by the Server bot`);
       } finally {
         await closePr(ctx, pr);
       }
-    }),
+    })),
   },
   {
     id: "merge.workflow-change",
@@ -347,7 +379,7 @@ export const merge: Scenario[] = [
       fixture: {
         id: "fixture",
         target: "client",
-        title: "an unapproved /merge request is rejected even when the review ruleset is disabled",
+        title: "a disabled review ruleset makes /merge fall back to the self-merge wait",
         classification: "negative",
         checks: [
           "approval-policy"
@@ -356,23 +388,25 @@ export const merge: Scenario[] = [
           {
             "operation": "merge",
             "outcome": "rejected",
-            "expected": "Merge refuses an unapproved head even with the review ruleset disabled"
+            "expected": "Without the review rule, /merge posts the fallback notice instead of enabling auto-merge, and the wait still refuses the unapproved head"
           }
         ],
         identity: OWNER_IDENTITY
       }
     },
-    name: "an unapproved /merge request is rejected even when the review ruleset is disabled",
+    name: "a disabled review ruleset makes /merge fall back to the self-merge wait",
     serial: true,
-    run: (ctx) => withSignedPr(ctx, async (pr) => {
+    run: (ctx) => withPlatformAutoMerge(ctx, () => withSignedPr(ctx, async (pr) => {
       await withReviewRulesetDisabled(ctx, async () => {
         await dismissApproval(ctx, pr);
         const comment = await postComment(ctx, pr, "/merge");
         const requestInfo = fromComment(pr, comment);
-        await expectOp(ctx, requestInfo.match, requestInfo.since, "failure", /merge readiness deadline passed: the approver has not approved/);
+        await until(`the fallback notice for comment ${comment.id}`, async () => (await serverComments(ctx, pr)).some((body) => body.includes(marker("merge-wait", comment.id)) && body.includes("does not require a fresh approval") && body.includes("csm-ci's own merge process is running")) ? true : undefined);
         await noMerge(ctx, pr);
+        await ctx.gh.rest.pulls.update({ ...splitRepository(CLIENT), pull_number: pr.number, state: "closed" });
+        await expectOp(ctx, requestInfo.match, requestInfo.since, "failure", /is closed/);
       });
-    }),
+    })),
   },
   {
     id: "merge.changed-head",
@@ -472,12 +506,12 @@ export const merge: Scenario[] = [
     }),
   },
   {
-    id: "merge.approval-timeout",
+    id: "merge.closed-while-waiting",
     cases: {
       fixture: {
         id: "fixture",
         target: "client",
-        title: "/merge times out when the approver has not approved the current head",
+        title: "/merge fails with one receipt when the pull request closes while waiting",
         classification: "negative",
         checks: [
           "approval-policy",
@@ -487,24 +521,25 @@ export const merge: Scenario[] = [
           {
             "operation": "merge",
             "outcome": "rejected",
-            "expected": "Merge times out without approval; replay is rejected without another receipt"
+            "expected": "Closing the pull request ends the wait with one failure receipt; replay is rejected without another receipt"
           }
         ],
         identity: OWNER_IDENTITY
       }
     },
-    name: "/merge times out when the approver has not approved the current head",
+    name: "/merge fails with one receipt when the pull request closes while waiting",
     run: (ctx) => withSignedPr(ctx, async (pr) => {
       await dismissApproval(ctx, pr);
       const comment = await postComment(ctx, pr, "/merge");
       const requestInfo = await request(ctx, pr, comment.id);
-      await expectOp(ctx, requestInfo.match, requestInfo.since, "failure", /merge readiness deadline passed: the approver has not approved/);
-      await noMerge(ctx, pr);
+      await awaitServerWait(ctx, comment.id);
+      await ctx.gh.rest.pulls.update({ ...splitRepository(CLIENT), pull_number: pr.number, state: "closed" });
+      await expectOp(ctx, requestInfo.match, requestInfo.since, "failure", /is closed/);
       const receipts = (await serverComments(ctx, pr)).filter((body) => body.includes(marker("merge", comment.id)));
-      assert(receipts.length === 1, `expected one deadline receipt, found ${receipts.length}`);
-      await verifyReceipt(ctx, pr, comment, "merge", /readiness deadline passed[\s\S]*post a new exact `\/merge` comment/u);
+      assert(receipts.length === 1, `expected one failure receipt, found ${receipts.length}`);
+      await verifyReceipt(ctx, pr, comment, "merge", /is closed[\s\S]*post a new exact `\/merge` comment/u);
       const replay = await request(ctx, pr, comment.id);
-      await expectOp(ctx, replay.match, replay.since, "failure", /already handled/);
+      await expectOp(ctx, replay.match, replay.since, "failure", /is closed/);
       const replayReceipts = (await serverComments(ctx, pr)).filter((body) => body.includes(marker("merge", comment.id)));
       assert(replayReceipts.length === 1, `replay changed the receipt count to ${replayReceipts.length}`);
     }),

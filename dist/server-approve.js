@@ -32770,7 +32770,7 @@ var RepositoryEntry = strictObject({
     }).optional()
   }).optional(),
   sensitive_paths: strictObject({ paths: array(string2().min(1)).optional(), exempt: array(Principal).optional() }).optional(),
-  merge: strictObject({ allow_bot_requests: boolean2().optional() }).optional()
+  merge: strictObject({ allow_bot_requests: boolean2().optional(), use_platform_automerge: boolean2().optional() }).optional()
 }).superRefine((entry, ctx) => {
   if (entry.ops.includes("release") !== (entry.release !== undefined)) {
     ctx.addIssue({ code: "custom", path: ["release"], message: "release settings must be present exactly when release is enabled" });
@@ -32783,8 +32783,7 @@ var ConfigSchema = strictObject({
   approver: Principal,
   trust: strictObject({ committers: array(Principal), approvers: array(Principal), mergers: array(Principal), bot_mergers: array(Principal) }),
   merge: strictObject({
-    required_checks: array(strictObject({ name: string2().min(1), app_id: Id })),
-    deadline_minutes: number2().int().positive().default(60)
+    required_checks: array(strictObject({ name: string2().min(1), app_id: Id }))
   }),
   policies: array(PolicySchema),
   securefix: SecurefixSchema.optional(),
@@ -37328,6 +37327,15 @@ async function evaluatePullPolicies(ctx, commandApproval) {
     ...commandApproval ? { commandApproval } : {}
   });
 }
+async function approverApprovedHead(server, config, repository, pull) {
+  const reviews = await server.paginate(server.rest.pulls.listReviews, { ...splitRepository(repository), pull_number: pull.number, per_page: 100 });
+  const latest = reviews.filter((r) => Number(r.user?.id) === config.approver.id && r.submitted_at).reduce((current, review) => {
+    if (!current || String(review.submitted_at) > String(current.submitted_at))
+      return review;
+    return String(review.submitted_at) === String(current.submitted_at) && Number(review.id) > Number(current.id) ? review : current;
+  }, undefined);
+  return latest?.state === "APPROVED" && latest.commit_id === pull.headSha;
+}
 function policySummary(results) {
   const escapeCell = (value) => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll("\\", "&#92;").replaceAll("|", "&#124;").replaceAll("`", "&#96;").replaceAll("*", "&#42;").replaceAll("_", "&#95;").replaceAll("[", "&#91;").replaceAll("]", "&#93;").replaceAll("~", "&#126;").replaceAll("!", "&#33;").replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
   const rows = results.map((r) => `| ${escapeCell(r.type)} | ${r.ok ? "pass" : "fail"} | ${escapeCell(r.problems.length ? r.problems.join("; ") : "—")} |`);
@@ -37338,7 +37346,9 @@ async function updatePolicyCheck(ctx) {
   if (ctx.pull.state !== "open")
     return { result: "skipped", reason: `#${ctx.pull.number} is closed` };
   const { owner, repo } = splitRepository(ctx.repository);
-  const results = await evaluatePullPolicies(ctx);
+  const policies = await evaluatePullPolicies(ctx);
+  const approved = await approverApprovedHead(ctx.server, ctx.config, ctx.repository, ctx.pull);
+  const results = [...policies, { type: "approval", ok: approved, problems: approved ? [] : [`${ctx.config.approver.login} has not approved head ${ctx.pull.headSha}`] }];
   const ok = results.every((r) => r.ok);
   const summary = policySummary(results);
   const completedAt = new Date().toISOString();
@@ -37355,7 +37365,7 @@ async function updatePolicyCheck(ctx) {
   } else {
     await ctx.server.rest.checks.create({ owner, repo, name: "csm-ci/policy", external_id: ctx.pull.headSha, head_sha: ctx.pull.headSha, status: "completed", completed_at: completedAt, conclusion: ok ? "success" : "failure", output });
   }
-  await publishPolicyReport({ server: ctx.server, repository: ctx.repository, pullNumber: ctx.pull.number, head: ctx.pull.headSha, serverBotId: ctx.config.apps.server_bot_id, serverRun: ctx.serverRun, requestKind: ctx.requestKind ?? "policy-check", ...ctx.requestCommentId === undefined ? {} : { requestCommentId: ctx.requestCommentId } }, results);
+  await publishPolicyReport({ server: ctx.server, repository: ctx.repository, pullNumber: ctx.pull.number, head: ctx.pull.headSha, serverBotId: ctx.config.apps.server_bot_id, serverRun: ctx.serverRun, requestKind: ctx.requestKind ?? "policy-check", ...ctx.requestCommentId === undefined ? {} : { requestCommentId: ctx.requestCommentId } }, policies);
   return { result: "published", results };
 }
 

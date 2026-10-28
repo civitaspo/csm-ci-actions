@@ -32773,7 +32773,7 @@ var RepositoryEntry = strictObject({
     }).optional()
   }).optional(),
   sensitive_paths: strictObject({ paths: array(string2().min(1)).optional(), exempt: array(Principal).optional() }).optional(),
-  merge: strictObject({ allow_bot_requests: boolean2().optional() }).optional()
+  merge: strictObject({ allow_bot_requests: boolean2().optional(), use_platform_automerge: boolean2().optional() }).optional()
 }).superRefine((entry, ctx) => {
   if (entry.ops.includes("release") !== (entry.release !== undefined)) {
     ctx.addIssue({ code: "custom", path: ["release"], message: "release settings must be present exactly when release is enabled" });
@@ -32786,8 +32786,7 @@ var ConfigSchema = strictObject({
   approver: Principal,
   trust: strictObject({ committers: array(Principal), approvers: array(Principal), mergers: array(Principal), bot_mergers: array(Principal) }),
   merge: strictObject({
-    required_checks: array(strictObject({ name: string2().min(1), app_id: Id })),
-    deadline_minutes: number2().int().positive().default(60)
+    required_checks: array(strictObject({ name: string2().min(1), app_id: Id }))
   }),
   policies: array(PolicySchema),
   securefix: SecurefixSchema.optional(),
@@ -37218,7 +37217,19 @@ async function evaluatePullPolicies(ctx, commandApproval) {
     ...commandApproval ? { commandApproval } : {}
   });
 }
+async function approverApprovedHead(server, config, repository, pull) {
+  const reviews = await server.paginate(server.rest.pulls.listReviews, { ...splitRepository(repository), pull_number: pull.number, per_page: 100 });
+  const latest = reviews.filter((r) => Number(r.user?.id) === config.approver.id && r.submitted_at).reduce((current, review) => {
+    if (!current || String(review.submitted_at) > String(current.submitted_at))
+      return review;
+    return String(review.submitted_at) === String(current.submitted_at) && Number(review.id) > Number(current.id) ? review : current;
+  }, undefined);
+  return latest?.state === "APPROVED" && latest.commit_id === pull.headSha;
+}
 // src/lib/merge.ts
+var DEADLINE_MINUTES = 60;
+var MERGEABLE = ["CLEAN", "UNSTABLE", "HAS_HOOKS"];
+
 class NotReady extends Error {
 }
 async function pullFacts(server, repository, number) {
@@ -37309,15 +37320,6 @@ async function checkHeadPredatesComment(ctx, pull, comment) {
   if (forced)
     throw new Rejection(`#${pull.number} was force-pushed after comment ${comment.id}`);
 }
-async function latestApproval(ctx, pull) {
-  const reviews = await ctx.server.paginate(ctx.server.rest.pulls.listReviews, { ...splitRepository(ctx.repository), pull_number: pull.number, per_page: 100 });
-  const latest = reviews.filter((r) => Number(r.user?.id) === ctx.config.approver.id && r.submitted_at).reduce((current, review) => {
-    if (!current || String(review.submitted_at) > String(current.submitted_at))
-      return review;
-    return String(review.submitted_at) === String(current.submitted_at) && Number(review.id) > Number(current.id) ? review : current;
-  }, undefined);
-  return latest?.state === "APPROVED" && latest.commit_id === pull.headSha;
-}
 async function requiredChecks(ctx, pull) {
   const runs = await ctx.server.paginate(ctx.server.rest.checks.listForRef, { ...splitRepository(ctx.repository), ref: pull.headSha, per_page: 100 });
   const problems = [];
@@ -37344,11 +37346,74 @@ async function ready(ctx, args, head) {
   const policyErrors = results.filter((r) => !["signed-commits", "trusted-committers"].includes(r.type) && !r.ok).flatMap((r) => r.problems.map((p) => `${r.type}: ${p}`));
   if (policyErrors.length)
     throw new NotReady(`policies failed: ${policyErrors.join("; ")}`);
-  if (!await latestApproval(ctx, pull))
+  if (!await approverApprovedHead(ctx.server, ctx.config, ctx.repository, pull))
     throw new NotReady(`the approver has not approved head ${head}`);
   const checks = await requiredChecks(ctx, pull);
   if (!checks.ok)
     throw new NotReady(checks.problems.join("; "));
+}
+async function platformFallbackReason(ctx, pull) {
+  if (repositoryEntry(ctx.config, ctx.repository)?.merge?.use_platform_automerge === false)
+    return "use_platform_automerge is false for this repository";
+  const { owner, repo } = splitRepository(ctx.repository);
+  const { repository } = await ctx.server.graphql("query($owner:String!,$name:String!){repository(owner:$owner,name:$name){autoMergeAllowed}}", { owner, name: repo });
+  if (!repository.autoMergeAllowed)
+    return "auto-merge is not allowed in this repository";
+  const rules = await ctx.server.paginate(ctx.server.rest.repos.getBranchRules, { owner, repo, branch: pull.defaultBranch, per_page: 100 });
+  const review = rules.some((r) => r.type === "pull_request" && (r.parameters?.required_approving_review_count ?? 0) >= 1 && r.parameters?.dismiss_stale_reviews_on_push === true);
+  if (!review)
+    return `${pull.defaultBranch} does not require a fresh approval`;
+  const checks = rules.flatMap((r) => r.type === "required_status_checks" ? r.parameters?.required_status_checks ?? [] : []);
+  const missing = [{ name: "csm-ci/policy", app_id: ctx.config.apps.server_app_id }, ...ctx.config.merge.required_checks].filter((required) => !checks.some((c) => c.context === required.name && c.integration_id === required.app_id));
+  if (missing.length)
+    return `${pull.defaultBranch} does not require ${[...new Set(missing.map((m) => m.name))].join(", ")}`;
+  return;
+}
+async function autoMergeState(ctx, number) {
+  const { owner, repo } = splitRepository(ctx.repository);
+  const data = await ctx.server.graphql("query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){id mergeStateStatus autoMergeRequest{mergeMethod enabledBy{__typename ... on Bot{databaseId}}}}}}", { owner, name: repo, number });
+  return data.repository.pullRequest;
+}
+function enabledByServer(ctx, state, number) {
+  const request = state.autoMergeRequest;
+  if (!request)
+    return false;
+  if (request.enabledBy?.__typename === "Bot" && request.enabledBy.databaseId === ctx.config.apps.server_bot_id && request.mergeMethod === "SQUASH")
+    return true;
+  throw new Rejection(`auto-merge on #${number} was enabled by another actor or merge method`);
+}
+async function enableAutoMerge(ctx, write, args, head) {
+  const state = await autoMergeState(ctx, args.pull_number);
+  if (enabledByServer(ctx, state, args.pull_number))
+    return true;
+  if (MERGEABLE.includes(state.mergeStateStatus))
+    return false;
+  await pinAndValidate(ctx, args, head);
+  const { title, message } = await commitText(ctx, args.pull_number);
+  try {
+    await write.graphql("mutation($id:ID!,$head:GitObjectID!,$title:String!,$body:String!){enablePullRequestAutoMerge(input:{pullRequestId:$id,mergeMethod:SQUASH,expectedHeadOid:$head,commitHeadline:$title,commitBody:$body}){clientMutationId}}", { id: state.id, head, title, body: message });
+  } catch (error) {
+    if (error instanceof Error && /\b(clean|unstable|has_hooks) status/i.test(error.message))
+      return false;
+    if (!enabledByServer(ctx, await autoMergeState(ctx, args.pull_number), args.pull_number))
+      throw error;
+  }
+  return true;
+}
+async function commitText(ctx, number) {
+  const { data: raw } = await ctx.server.rest.pulls.get({ ...splitRepository(ctx.repository), pull_number: number });
+  const seenCoauthors = new Set;
+  const message = (raw.body ?? "").split(/\r?\n/).filter((line) => {
+    if (!/^Co-authored-by:\s*.+$/i.test(line))
+      return true;
+    const key = line.toLowerCase();
+    if (seenCoauthors.has(key))
+      return false;
+    seenCoauthors.add(key);
+    return true;
+  }).join(`
+`);
+  return { title: `${raw.title} (#${number})`, message };
 }
 async function refreshConfig(ctx) {
   if (ctx.reloadConfig)
@@ -37379,7 +37444,13 @@ async function waitForMerge(ctx, args) {
   try {
     await notify.rest.reactions.createForIssueComment({ ...splitRepository(ctx.repository), comment_id: args.comment_id, content: "rocket" });
     ctx.onAccepted?.(pull.headSha);
-    const deadline = ctx.now().getTime() + ctx.config.merge.deadline_minutes * 60000;
+    const deadline = new Date(comment.createdAt).getTime() + DEADLINE_MINUTES * 60000;
+    const fallback = await platformFallbackReason(ctx, pull);
+    if (!fallback)
+      return { head: pull.headSha, platform: true };
+    await postReceipt(ctx, pull.number, marker("merge-wait", comment.id), `csm-ci: /merge is not using platform auto-merge because ${escapeHtml(fallback)}. csm-ci's own merge process is running: this pull request is squash-merged if approval and checks are ready by ${new Date(deadline).toISOString()}; otherwise /merge fails with a receipt.
+
+${receiptFooter({ repository: ctx.repository, pullNumber: pull.number, commentId: comment.id, head: pull.headSha, serverRun: ctx.serverRun })}`);
     let last;
     while (ctx.now().getTime() <= deadline) {
       try {
@@ -37393,7 +37464,7 @@ async function waitForMerge(ctx, args) {
       const remaining = deadline - ctx.now().getTime();
       if (remaining <= 0)
         break;
-      await ctx.sleep(Math.min(30000, ctx.config.merge.deadline_minutes * 5000, remaining));
+      await ctx.sleep(Math.min(30000, remaining));
     }
     throw new Rejection(`merge readiness deadline passed: ${last instanceof Error ? last.message : "not ready"}`);
   } catch (error) {
@@ -37451,24 +37522,21 @@ async function runMerge(ctx, args, expected) {
   let outcome;
   let uncertain = false;
   try {
+    const optedOut = repositoryEntry(ctx.config, ctx.repository)?.merge?.use_platform_automerge === false;
+    if (expected.platform && !optedOut && await enableAutoMerge(ctx, write, args, expected.head)) {
+      outcome = { result: "auto-merge", head: expected.head };
+      await postReceipt(ctx, args.pull_number, receipt, `csm-ci: /merge enabled platform auto-merge for the pinned head. GitHub squash-merges it once approval and required checks pass; this is not a merge result.
+
+${receiptFooter({ repository: ctx.repository, pullNumber: args.pull_number, commentId: args.comment_id, head: expected.head, serverRun: ctx.serverRun })}`);
+      return outcome;
+    }
     await ready(ctx, args, expected.head);
     const pull = await pullFacts(ctx.server, ctx.repository, args.pull_number);
-    const { data: raw } = await ctx.server.rest.pulls.get({ ...splitRepository(ctx.repository), pull_number: pull.number });
-    const seenCoauthors = new Set;
-    const commitMessage = (raw.body ?? "").split(/\r?\n/).filter((line) => {
-      if (!/^Co-authored-by:\s*.+$/i.test(line))
-        return true;
-      const key = line.toLowerCase();
-      if (seenCoauthors.has(key))
-        return false;
-      seenCoauthors.add(key);
-      return true;
-    }).join(`
-`);
+    const { title, message: commitMessage } = await commitText(ctx, pull.number);
     for (let attempt = 0;; attempt++) {
       let data;
       try {
-        ({ data } = await write.rest.pulls.merge({ ...splitRepository(ctx.repository), pull_number: pull.number, sha: expected.head, merge_method: "squash", commit_title: `${raw.title} (#${pull.number})`, commit_message: commitMessage }));
+        ({ data } = await write.rest.pulls.merge({ ...splitRepository(ctx.repository), pull_number: pull.number, sha: expected.head, merge_method: "squash", commit_title: title, commit_message: commitMessage }));
       } catch (error) {
         if (status(error) === 409)
           throw new Rejection(`pull request #${pull.number} cannot merge because its base changed`);
@@ -37495,9 +37563,10 @@ async function runMerge(ctx, args, expected) {
       outcome = { result: "merged", head: expected.head, mergeCommit: data.sha };
       break;
     }
+    const mergeCommit = outcome.result === "merged" ? outcome.mergeCommit : "";
     await postReceipt(ctx, pull.number, receipt, `csm-ci: /merge succeeded. Squash-merged this pull request.
 
-${receiptFooter({ repository: ctx.repository, pullNumber: pull.number, commentId: args.comment_id, head: expected.head, serverRun: ctx.serverRun, mergeCommit: outcome.mergeCommit })}`);
+${receiptFooter({ repository: ctx.repository, pullNumber: pull.number, commentId: args.comment_id, head: expected.head, serverRun: ctx.serverRun, mergeCommit })}`);
     return outcome;
   } catch (error) {
     if (!outcome && !uncertain)
@@ -37543,6 +37612,7 @@ async function main() {
       const ready = await waitForMerge(ctx, args);
       setOutput("ready", "true");
       setOutput("head", ready.head);
+      setOutput("platform", String(ready.platform === true));
       info(`pull request is ready at ${ready.head}`);
     } catch (error) {
       setOutput("error", error instanceof Error ? error.message : String(error));
@@ -37556,9 +37626,10 @@ async function main() {
   }
   if (mode !== "merge")
     throw new Error(`unknown merge action mode: ${mode}`);
-  const outcome = await runMerge(ctx, args, { head: getInput("head", { required: true }) });
+  const outcome = await runMerge(ctx, args, { head: getInput("head", { required: true }), platform: getInput("platform") === "true" });
   setOutput("result", outcome.result);
-  setOutput("merge-commit", outcome.mergeCommit);
-  info(`${outcome.result} at ${outcome.mergeCommit}`);
+  if (outcome.result === "merged")
+    setOutput("merge-commit", outcome.mergeCommit);
+  info(outcome.result === "merged" ? `merged at ${outcome.mergeCommit}` : `auto-merge enabled at ${outcome.head}`);
 }
 main().catch((e) => setFailed(e instanceof Error ? e.message : String(e)));

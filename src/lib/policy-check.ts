@@ -32,6 +32,16 @@ export async function evaluatePullPolicies(ctx: PolicyCheckContext, commandAppro
   });
 }
 
+export async function approverApprovedHead(server: GitHub, config: Config, repository: string, pull: PullFacts): Promise<boolean> {
+  const reviews = await server.paginate(server.rest.pulls.listReviews, { ...splitRepository(repository), pull_number: pull.number, per_page: 100 });
+  const latest = reviews.filter((r) => Number(r.user?.id) === config.approver.id && r.submitted_at)
+    .reduce<(typeof reviews)[number] | undefined>((current, review) => {
+      if (!current || String(review.submitted_at) > String(current.submitted_at)) return review;
+      return String(review.submitted_at) === String(current.submitted_at) && Number(review.id) > Number(current.id) ? review : current;
+    }, undefined);
+  return latest?.state === "APPROVED" && latest.commit_id === pull.headSha;
+}
+
 export function policySummary(results: readonly PolicyResult[]): string {
   const escapeCell = (value: string): string => value
     .replaceAll("&", "&amp;")
@@ -58,7 +68,9 @@ export type PolicyCheckOutcome =
 export async function updatePolicyCheck(ctx: PublicationContext): Promise<PolicyCheckOutcome> {
   if (ctx.pull.state !== "open") return { result: "skipped", reason: `#${ctx.pull.number} is closed` };
   const { owner, repo } = splitRepository(ctx.repository);
-  const results = await evaluatePullPolicies(ctx);
+  const policies = await evaluatePullPolicies(ctx);
+  const approved = await approverApprovedHead(ctx.server, ctx.config, ctx.repository, ctx.pull);
+  const results: PolicyResult[] = [...policies, { type: "approval", ok: approved, problems: approved ? [] : [`${ctx.config.approver.login} has not approved head ${ctx.pull.headSha}`] }];
   const ok = results.every((r) => r.ok);
   const summary = policySummary(results);
   const completedAt = new Date().toISOString();
@@ -73,7 +85,7 @@ export async function updatePolicyCheck(ctx: PublicationContext): Promise<Policy
   } else {
     await ctx.server.rest.checks.create({ owner, repo, name: "csm-ci/policy", external_id: ctx.pull.headSha, head_sha: ctx.pull.headSha, status: "completed", completed_at: completedAt, conclusion: ok ? "success" : "failure", output });
   }
-  await publishPolicyReport({ server: ctx.server, repository: ctx.repository, pullNumber: ctx.pull.number, head: ctx.pull.headSha, serverBotId: ctx.config.apps.server_bot_id, serverRun: ctx.serverRun, requestKind: ctx.requestKind ?? "policy-check", ...(ctx.requestCommentId === undefined ? {} : { requestCommentId: ctx.requestCommentId }) }, results);
+  await publishPolicyReport({ server: ctx.server, repository: ctx.repository, pullNumber: ctx.pull.number, head: ctx.pull.headSha, serverBotId: ctx.config.apps.server_bot_id, serverRun: ctx.serverRun, requestKind: ctx.requestKind ?? "policy-check", ...(ctx.requestCommentId === undefined ? {} : { requestCommentId: ctx.requestCommentId }) }, policies);
   return { result: "published", results };
 }
 
