@@ -50,9 +50,9 @@ jobs:
             *" $COMMENTER_ID "*) ;;
             *) echo "commenter $COMMENTER_ID is not allowed to run e2e"; echo ok=false >> "$GITHUB_OUTPUT"; exit 0 ;;
           esac
-          re='^/e2e ([a-z-]+(,[a-z-]+)*)( --scenario ([^[:cntrl:]]{1,200}))?[[:space:]]*$'
+          re='^/e2e --feature ([a-z-]+(,[a-z-]+)*)( --scenario ([^[:cntrl:]]{1,200}))?[[:space:]]*$'
           if [[ ! "$BODY" =~ $re ]]; then
-            reply "e2e rejected: the comment must be exactly \`/e2e <feature>[,<feature>...] [--scenario <name substring>]\`."
+            reply "e2e rejected: the comment must be exactly \`/e2e --feature <feature>[,<feature>...] [--scenario <name substring>]\`."
             echo ok=false >> "$GITHUB_OUTPUT"; exit 0
           fi
           feature="${BASH_REMATCH[1]}"
