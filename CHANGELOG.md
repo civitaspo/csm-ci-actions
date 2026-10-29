@@ -2,6 +2,28 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.5.0] - 2026-10-29
+
+### 🚀 Features
+
+- *(e2e)* Add cooperative cancellation ([#201](https://github.com/civitaspo/csm-ci-actions/pull/201))
+- *(e2e)* Link pull request in run summary ([#204](https://github.com/civitaspo/csm-ci-actions/pull/204))
+- *(merge)* Implement automerge reservations ([#199](https://github.com/civitaspo/csm-ci-actions/pull/199))
+
+### 🐛 Bug Fixes
+
+- *(e2e)* Associate deployments with pull request heads ([#202](https://github.com/civitaspo/csm-ci-actions/pull/202))
+- *(e2e)* Clarify pull request summary ([#205](https://github.com/civitaspo/csm-ci-actions/pull/205))
+
+### 📚 Documentation
+
+- *(e2e)* Verify affected suites on pull requests ([#200](https://github.com/civitaspo/csm-ci-actions/pull/200))
+- *(merge)* Specify csm-ci automerge ([#198](https://github.com/civitaspo/csm-ci-actions/pull/198))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(repo-settings)* Sync managed files ([#192](https://github.com/civitaspo/csm-ci-actions/pull/192))
+
 ## [0.4.0] - 2026-10-28
 
 ### 🚀 Features
