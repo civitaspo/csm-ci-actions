@@ -36693,7 +36693,7 @@ var RepositoryEntry = strictObject({
     }).optional()
   }).optional(),
   sensitive_paths: strictObject({ paths: array(string2().min(1)).optional(), exempt: array(Principal).optional() }).optional(),
-  merge: strictObject({ allow_bot_requests: boolean2().optional(), use_platform_automerge: boolean2().optional() }).optional()
+  merge: strictObject({ allow_bot_requests: boolean2().optional() }).optional()
 }).superRefine((entry, ctx) => {
   if (entry.ops.includes("release") !== (entry.release !== undefined)) {
     ctx.addIssue({ code: "custom", path: ["release"], message: "release settings must be present exactly when release is enabled" });

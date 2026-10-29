@@ -32770,7 +32770,7 @@ var RepositoryEntry = strictObject({
     }).optional()
   }).optional(),
   sensitive_paths: strictObject({ paths: array(string2().min(1)).optional(), exempt: array(Principal).optional() }).optional(),
-  merge: strictObject({ allow_bot_requests: boolean2().optional(), use_platform_automerge: boolean2().optional() }).optional()
+  merge: strictObject({ allow_bot_requests: boolean2().optional() }).optional()
 }).superRefine((entry, ctx) => {
   if (entry.ops.includes("release") !== (entry.release !== undefined)) {
     ctx.addIssue({ code: "custom", path: ["release"], message: "release settings must be present exactly when release is enabled" });
@@ -37735,7 +37735,7 @@ async function inspectRepoSettingsPreflight(args) {
   const actionsRepository = (args.actionsRepository ?? "civitaspo/csm-ci-actions").toLowerCase();
   const repo = await args.readGH.rest.repos.get(splitRepository(args.target.name));
   const callerDistributed = await hasDistributedCaller(args.readGH, args.target, repo.data.default_branch, actionsRepository);
-  const autoMergeQueueCount = await countAutoMergeQueue(args.readGH, args.target.name, args.serverBotId);
+  const autoMergeQueueCount = await countAutoMergeQueue(args.readGH, args.target.name);
   return { callerDistributed, autoMergeQueueCount };
 }
 async function verifyRepoSettingsApprover(args) {
@@ -37804,22 +37804,19 @@ async function hasDistributedCaller(gh, target, defaultBranch, actionsRepository
   }
   return requirements.every((requirement) => distributed.has(requirement.workflow));
 }
-async function countAutoMergeQueue(gh, fullName, serverBotId) {
+async function countAutoMergeQueue(gh, fullName) {
   const { owner, repo } = splitRepository(fullName);
-  const page = object({ repository: object({ pullRequests: object({ nodes: array(object({ autoMergeRequest: object({ enabledBy: object({ __typename: string2(), databaseId: number2().optional() }).nullable().optional() }).nullable() })), pageInfo: object({ hasNextPage: boolean2(), endCursor: string2().nullable() }) }).nullable() }).nullable() });
+  const page = object({ repository: object({ pullRequests: object({ nodes: array(object({ autoMergeRequest: object({ __typename: string2() }).nullable() })), pageInfo: object({ hasNextPage: boolean2(), endCursor: string2().nullable() }) }).nullable() }).nullable() });
   let cursor = null;
   let total = 0;
   const seenCursors = new Set;
   do {
-    const response = await gh.graphql("query($owner:String!,$name:String!,$cursor:String){repository(owner:$owner,name:$name){pullRequests(states:OPEN,first:100,after:$cursor){nodes{autoMergeRequest{enabledBy{__typename ... on Bot{databaseId}}}} pageInfo{hasNextPage endCursor}}}}", { owner, name: repo, cursor });
+    const response = await gh.graphql("query($owner:String!,$name:String!,$cursor:String){repository(owner:$owner,name:$name){pullRequests(states:OPEN,first:100,after:$cursor){nodes{autoMergeRequest{__typename}} pageInfo{hasNextPage endCursor}}}}", { owner, name: repo, cursor });
     const result = page.parse(response);
     const connection = result.repository?.pullRequests;
     if (!connection)
       throw new Rejection(`repository ${fullName} is unavailable for auto-merge preflight`);
-    total += connection.nodes.filter((node) => {
-      const by = node.autoMergeRequest?.enabledBy;
-      return node.autoMergeRequest !== null && !(by?.__typename === "Bot" && by.databaseId === serverBotId);
-    }).length;
+    total += connection.nodes.filter((node) => node.autoMergeRequest !== null).length;
     cursor = connection.pageInfo.hasNextPage ? connection.pageInfo.endCursor : null;
     if (connection.pageInfo.hasNextPage && cursor === null)
       throw new Error("GitHub returned a next page without a cursor");
@@ -38180,7 +38177,7 @@ async function main() {
   }
   const readGH = github(input("read-token", true));
   if (mode === "preflight") {
-    const result = await inspectRepoSettingsPreflight({ readGH, target, actionsRepository: input("actions-repository", true), serverBotId: config.apps.server_bot_id });
+    const result = await inspectRepoSettingsPreflight({ readGH, target, actionsRepository: input("actions-repository", true) });
     if (!result.callerDistributed)
       throw new Error(`caller workflow is not distributed on ${target.name}`);
     if (result.autoMergeQueueCount !== 0)
