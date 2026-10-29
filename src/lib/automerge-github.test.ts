@@ -28,19 +28,26 @@ function deployment(id: number, createdAt: string, overrides: Record<string, unk
     payload,
     createdAt,
     creator: { __typename: "Bot", databaseId: serverBotId },
+    statuses: { nodes: [], pageInfo: { hasNextPage: false } },
     ...overrides,
   };
 }
 
 function harness(options: { malformedDeploymentOneStatus?: boolean } = {}) {
   const deployments = [
-    deployment(1, "2026-10-15T00:00:00.000Z", { payload: JSON.stringify(JSON.stringify(payload)) }),
+    deployment(1, "2026-10-15T00:00:00.000Z", { payload: JSON.stringify(JSON.stringify(payload)), statuses: { nodes: [
+      { id: "STATUS_1", state: "QUEUED", description: "waiting", createdAt: "2026-10-29T00:00:01.000Z", creator: { __typename: "Bot", databaseId: serverBotId } },
+      { id: "STATUS_2", state: "SUCCESS", description: "merged", createdAt: "2026-10-29T00:00:02.000Z", creator: { __typename: "Bot", databaseId: serverBotId } },
+      ...(options.malformedDeploymentOneStatus ? [{ state: "FAILURE" }] : []),
+    ], pageInfo: { hasNextPage: false } } }),
     deployment(2, "2026-10-28T00:00:00.000Z", { payload: { ...payload, pull_number: 99 } }),
     deployment(3, "2026-10-29T00:00:00.000Z", { creator: { __typename: "User" } }),
     deployment(4, "2026-10-29T00:00:00.000Z", { payload: "{invalid json" }),
     deployment(5, "2026-10-14T23:59:59.000Z"),
   ];
   const restWrites: { path: string; body: Record<string, unknown> }[] = [];
+  const restReads: string[] = [];
+  const restHistory = new Map<number, Record<string, unknown>[]>();
   const graphQueries: { query: string; variables: Record<string, unknown> }[] = [];
   const statuses: Record<string, unknown>[] = [];
   let loseDeploymentResponse = false;
@@ -77,7 +84,14 @@ function harness(options: { malformedDeploymentOneStatus?: boolean } = {}) {
       return answer({ id: 30, ...body, creator: { id: serverBotId, type: "Bot" } }, 201);
     }
     if (/^\/repos\/owner\/server\/deployments\/\d+\/statuses$/.test(path) && method === "GET") {
+      restReads.push(path);
       const deploymentId = Number(path.split("/")[5]);
+      const history = restHistory.get(deploymentId);
+      if (history) {
+        const page = Number(url.searchParams.get("page") ?? "1");
+        const headers = page * 100 < history.length ? { link: `<https://api.github.com${path}?per_page=100&page=${page + 1}>; rel="next"` } : {};
+        return Response.json(history.slice((page - 1) * 100, page * 100), { headers });
+      }
       if (deploymentId === 1 && options.malformedDeploymentOneStatus) return answer([
         { id: 2, state: "success", description: "merged", created_at: "2026-10-29T00:00:02.000Z", creator: { id: serverBotId, type: "Bot" } },
         { state: "failure", description: "malformed terminal status", created_at: "2026-10-29T00:00:03.000Z", creator: { id: serverBotId, type: "Bot" } },
@@ -94,6 +108,8 @@ function harness(options: { malformedDeploymentOneStatus?: boolean } = {}) {
     server: github("test", fetch, { backoffMs: [] }),
     deployments,
     restWrites,
+    restReads,
+    restHistory,
     graphQueries,
     statuses,
     loseDeploymentResponse: () => { loseDeploymentResponse = true; },
@@ -101,18 +117,43 @@ function harness(options: { malformedDeploymentOneStatus?: boolean } = {}) {
   };
 }
 
-test("lists only valid Server-created reservations and reads REST status history", async () => {
+test("lists only valid Server-created reservations with GraphQL status history", async () => {
   const h = harness();
   const result = await listReservations({ server: h.server, serverRepository, serverBotId, now });
   expect(result.map((reservation) => reservation.deploymentId)).toEqual([1, 2, 6]);
   expect(result[0]?.statuses.map((item) => item.state)).toEqual(["queued", "success"]);
   expect(result[0]?.state).toEqual({ kind: "terminal", state: "success", at: "2026-10-29T00:00:02.000Z", description: "merged", reason: "other" });
-  expect(h.graphQueries.every(({ query }) => !query.includes("statuses"))).toBe(true);
+  expect(h.restReads).toEqual([]);
+  expect(h.graphQueries.every(({ query }) => query.includes("statuses"))).toBe(true);
 });
 
 test("rejects an unparseable status instead of treating the reservation as active", async () => {
   const h = harness({ malformedDeploymentOneStatus: true });
   await expect(listReservations({ server: h.server, serverRepository, serverBotId, now })).rejects.toThrow("GitHub returned an invalid deployment status for deployment 1");
+});
+
+test("ignores statuses from untrusted creators", async () => {
+  const h = harness();
+  h.deployments[0] = deployment(1, "2026-10-15T00:00:00.000Z", { statuses: { nodes: [
+    { id: "foreign", state: "SUCCESS", description: "forged", createdAt: "2026-10-29T00:00:01.000Z", creator: { __typename: "Bot", databaseId: 9999 } },
+    { id: "human", state: "FAILURE", description: "forged", createdAt: "2026-10-29T00:00:02.000Z", creator: { __typename: "User" } },
+    { id: "trusted", state: "QUEUED", description: "waiting", createdAt: "2026-10-29T00:00:03.000Z", creator: { __typename: "Bot", databaseId: serverBotId } },
+  ], pageInfo: { hasNextPage: false } } });
+  const result = await listReservations({ server: h.server, serverRepository, serverBotId, now });
+  expect(result[0]?.state).toEqual({ kind: "active", waitingReason: "waiting" });
+});
+
+test.each(["more statuses", "same timestamp"])('reads complete REST history when GraphQL has %s', async (condition) => {
+  const h = harness();
+  const node = (state: string, createdAt: string) => ({ id: state, state, description: state, createdAt, creator: { __typename: "Bot", databaseId: serverBotId } });
+  h.deployments[0] = deployment(1, "2026-10-15T00:00:00.000Z", { statuses: { nodes: [node("QUEUED", "2026-10-29T00:00:01.000Z"), node("SUCCESS", condition === "same timestamp" ? "2026-10-29T00:00:01.000Z" : "2026-10-29T00:00:02.000Z")], pageInfo: { hasNextPage: condition === "more statuses" } } });
+  const status = (id: number, state: string, description: string) => ({ id, state, description, created_at: "2026-10-29T00:00:02.000Z", creator: { id: serverBotId, type: "Bot" } });
+  h.restHistory.set(1, condition === "same timestamp"
+    ? [status(9, "failure", "later"), status(3, "success", "merged")]
+    : [...Array.from({ length: 100 }, (_, i) => status(i + 1, "queued", "waiting")), status(101, "success", "merged")]);
+  const result = await listReservations({ server: h.server, serverRepository, serverBotId, now });
+  expect(result[0]?.state).toEqual({ kind: "terminal", state: "success", at: "2026-10-29T00:00:02.000Z", description: "merged", reason: "other" });
+  expect(h.restReads).toEqual(Array(condition === "more statuses" ? 2 : 1).fill("/repos/owner/server/deployments/1/statuses"));
 });
 
 test("finds every reservation matching the repository ID and pull number", async () => {

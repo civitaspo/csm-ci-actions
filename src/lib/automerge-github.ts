@@ -9,9 +9,11 @@ const LOOKBACK_MS = 14 * 24 * 60 * 60 * 1000;
 const Creator = z.object({ __typename: z.string(), databaseId: z.number().int().positive().optional() }).nullable();
 const DeploymentNode = z.object({
   id: z.string().min(1), databaseId: z.number().int().positive(), task: z.string(), payload: z.unknown(),
-  createdAt: z.iso.datetime(), creator: Creator,
+  createdAt: z.iso.datetime(), creator: Creator, statuses: z.unknown(),
 });
 const DeploymentPage = z.object({ repository: z.object({ deployments: z.object({ nodes: z.array(DeploymentNode), pageInfo: z.object({ hasNextPage: z.boolean(), endCursor: z.string().nullable() }) }) }) });
+const GraphStatus = z.object({ id: z.string().min(1), state: z.string(), description: z.string().nullable(), createdAt: z.iso.datetime(), creator: Creator });
+const GraphStatuses = z.object({ nodes: z.array(GraphStatus), pageInfo: z.object({ hasNextPage: z.boolean() }) });
 const RestStatus = z.object({
   id: z.number().int().positive(), state: z.string(), description: z.string().nullable(), created_at: z.iso.datetime(),
   log_url: z.string().nullable().optional(), environment_url: z.string().nullable().optional(),
@@ -31,7 +33,7 @@ export type ReservationRecord = {
 type ListArgs = { server: GitHub; serverRepository: string; serverBotId: number; now: Date; limit?: number };
 type CreateArgs = { server: GitHub; serverRepository: string; defaultBranch: string; serverBotId: number; payload: ReservationPayload };
 
-const DEPLOYMENTS_QUERY = `query($owner:String!,$name:String!,$cursor:String){repository(owner:$owner,name:$name){deployments(environments:["${ENVIRONMENT}"],first:100,after:$cursor,orderBy:{field:CREATED_AT,direction:DESC}){pageInfo{hasNextPage endCursor}nodes{id databaseId task payload createdAt creator{__typename ... on Bot{databaseId}}}}}}`;
+const DEPLOYMENTS_QUERY = `query($owner:String!,$name:String!,$cursor:String){repository(owner:$owner,name:$name){deployments(environments:["${ENVIRONMENT}"],first:100,after:$cursor,orderBy:{field:CREATED_AT,direction:DESC}){pageInfo{hasNextPage endCursor}nodes{id databaseId task payload createdAt creator{__typename ... on Bot{databaseId}} statuses(first:100){pageInfo{hasNextPage}nodes{id state description createdAt creator{__typename ... on Bot{databaseId}}}}}}}}`;
 
 export async function listReservations(args: ListArgs): Promise<ReservationRecord[]> {
   const { owner, repo } = splitRepository(args.serverRepository);
@@ -95,25 +97,34 @@ export async function createReservationStatus(args: { server: GitHub; serverRepo
 }
 
 async function withStatuses(args: ListArgs, nodes: readonly z.infer<typeof DeploymentNode>[]): Promise<ReservationRecord[]> {
-  const records: ReservationRecord[] = [];
+  const records: { record: ReservationRecord; statuses: unknown }[] = [];
   for (const node of nodes) {
     if (node.task !== TASK || node.creator?.__typename !== "Bot" || node.creator.databaseId !== args.serverBotId) continue;
     const payload = parsePayload(node.payload);
     if (!payload.success) { console.warn(`ignoring automerge deployment ${node.databaseId} with invalid payload`); continue; }
-    records.push({ deploymentId: node.databaseId, nodeId: node.id, createdAt: node.createdAt, payload: payload.data, statuses: [], state: { kind: "active" } });
+    records.push({ record: { deploymentId: node.databaseId, nodeId: node.id, createdAt: node.createdAt, payload: payload.data, statuses: [], state: { kind: "active" } }, statuses: node.statuses });
   }
   const selected = args.limit === undefined ? records : records.slice(0, args.limit);
   const { owner, repo } = splitRepository(args.serverRepository);
-  for (const record of selected) {
-    const raw: unknown[] = await args.server.paginate(args.server.rest.repos.listDeploymentStatuses, { owner, repo, deployment_id: record.deploymentId, per_page: 100 });
-    record.statuses = raw.map((value) => {
-      const parsed = RestStatus.safeParse(value);
-      if (!parsed.success) throw new Error(`GitHub returned an invalid deployment status for deployment ${record.deploymentId}`);
-      return mapStatus(parsed.data);
-    });
+  for (const { record, statuses } of selected) {
+    const parsed = GraphStatuses.safeParse(statuses);
+    if (!parsed.success) throw new Error(`GitHub returned an invalid deployment status for deployment ${record.deploymentId}`);
+    const trusted = parsed.data.nodes.filter((s) => s.creator?.__typename === "Bot" && s.creator.databaseId === args.serverBotId);
+    const timestamps = new Set(trusted.map((s) => Date.parse(s.createdAt)));
+    if (parsed.data.pageInfo.hasNextPage || timestamps.size !== trusted.length) {
+      const raw: unknown[] = await args.server.paginate(args.server.rest.repos.listDeploymentStatuses, { owner, repo, deployment_id: record.deploymentId, per_page: 100 });
+      record.statuses = raw.map((value) => {
+        const status = RestStatus.safeParse(value);
+        if (!status.success) throw new Error(`GitHub returned an invalid deployment status for deployment ${record.deploymentId}`);
+        return mapStatus(status.data);
+      });
+    } else {
+      // GraphQL has no numeric status ID; REST resolves ties before IDs can affect ordering.
+      record.statuses = parsed.data.nodes.map((s, index) => mapStatus({ id: index + 1, state: s.state.toLowerCase(), description: s.description, created_at: s.createdAt, creator: s.creator?.__typename === "Bot" && s.creator.databaseId ? { type: "Bot", id: s.creator.databaseId } : null }));
+    }
     record.state = reservationState({ statuses: record.statuses, serverBotId: args.serverBotId });
   }
-  return selected;
+  return selected.map(({ record }) => record);
 }
 
 function parsePayload(raw: unknown): ReturnType<typeof ReservationPayloadSchema.safeParse> {

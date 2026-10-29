@@ -37098,9 +37098,12 @@ var DeploymentNode = object({
   task: string2(),
   payload: unknown(),
   createdAt: exports_iso.datetime(),
-  creator: Creator
+  creator: Creator,
+  statuses: unknown()
 });
 var DeploymentPage = object({ repository: object({ deployments: object({ nodes: array(DeploymentNode), pageInfo: object({ hasNextPage: boolean2(), endCursor: string2().nullable() }) }) }) });
+var GraphStatus = object({ id: string2().min(1), state: string2(), description: string2().nullable(), createdAt: exports_iso.datetime(), creator: Creator });
+var GraphStatuses = object({ nodes: array(GraphStatus), pageInfo: object({ hasNextPage: boolean2() }) });
 var RestStatus = object({
   id: number2().int().positive(),
   state: string2(),
@@ -37111,7 +37114,7 @@ var RestStatus = object({
   creator: object({ id: number2().int().positive(), type: string2() }).nullable()
 });
 var CreatedDeployment = object({ id: number2().int().positive(), node_id: string2().min(1), task: string2(), created_at: exports_iso.datetime(), creator: object({ id: number2().int().positive(), type: string2() }).nullable() });
-var DEPLOYMENTS_QUERY = `query($owner:String!,$name:String!,$cursor:String){repository(owner:$owner,name:$name){deployments(environments:["${ENVIRONMENT}"],first:100,after:$cursor,orderBy:{field:CREATED_AT,direction:DESC}){pageInfo{hasNextPage endCursor}nodes{id databaseId task payload createdAt creator{__typename ... on Bot{databaseId}}}}}}`;
+var DEPLOYMENTS_QUERY = `query($owner:String!,$name:String!,$cursor:String){repository(owner:$owner,name:$name){deployments(environments:["${ENVIRONMENT}"],first:100,after:$cursor,orderBy:{field:CREATED_AT,direction:DESC}){pageInfo{hasNextPage endCursor}nodes{id databaseId task payload createdAt creator{__typename ... on Bot{databaseId}} statuses(first:100){pageInfo{hasNextPage}nodes{id state description createdAt creator{__typename ... on Bot{databaseId}}}}}}}}`;
 async function listReservations(args) {
   const { owner, repo } = splitRepository(args.serverRepository);
   const cutoff = args.now.getTime() - LOOKBACK_MS;
@@ -37166,21 +37169,30 @@ async function withStatuses(args, nodes) {
       console.warn(`ignoring automerge deployment ${node.databaseId} with invalid payload`);
       continue;
     }
-    records.push({ deploymentId: node.databaseId, nodeId: node.id, createdAt: node.createdAt, payload: payload.data, statuses: [], state: { kind: "active" } });
+    records.push({ record: { deploymentId: node.databaseId, nodeId: node.id, createdAt: node.createdAt, payload: payload.data, statuses: [], state: { kind: "active" } }, statuses: node.statuses });
   }
   const selected = args.limit === undefined ? records : records.slice(0, args.limit);
   const { owner, repo } = splitRepository(args.serverRepository);
-  for (const record of selected) {
-    const raw = await args.server.paginate(args.server.rest.repos.listDeploymentStatuses, { owner, repo, deployment_id: record.deploymentId, per_page: 100 });
-    record.statuses = raw.map((value) => {
-      const parsed = RestStatus.safeParse(value);
-      if (!parsed.success)
-        throw new Error(`GitHub returned an invalid deployment status for deployment ${record.deploymentId}`);
-      return mapStatus(parsed.data);
-    });
+  for (const { record, statuses } of selected) {
+    const parsed = GraphStatuses.safeParse(statuses);
+    if (!parsed.success)
+      throw new Error(`GitHub returned an invalid deployment status for deployment ${record.deploymentId}`);
+    const trusted = parsed.data.nodes.filter((s) => s.creator?.__typename === "Bot" && s.creator.databaseId === args.serverBotId);
+    const timestamps = new Set(trusted.map((s) => Date.parse(s.createdAt)));
+    if (parsed.data.pageInfo.hasNextPage || timestamps.size !== trusted.length) {
+      const raw = await args.server.paginate(args.server.rest.repos.listDeploymentStatuses, { owner, repo, deployment_id: record.deploymentId, per_page: 100 });
+      record.statuses = raw.map((value) => {
+        const status = RestStatus.safeParse(value);
+        if (!status.success)
+          throw new Error(`GitHub returned an invalid deployment status for deployment ${record.deploymentId}`);
+        return mapStatus(status.data);
+      });
+    } else {
+      record.statuses = parsed.data.nodes.map((s, index) => mapStatus({ id: index + 1, state: s.state.toLowerCase(), description: s.description, created_at: s.createdAt, creator: s.creator?.__typename === "Bot" && s.creator.databaseId ? { type: "Bot", id: s.creator.databaseId } : null }));
+    }
     record.state = reservationState({ statuses: record.statuses, serverBotId: args.serverBotId });
   }
-  return selected;
+  return selected.map(({ record }) => record);
 }
 function parsePayload(raw) {
   let decoded = raw;

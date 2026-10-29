@@ -18,7 +18,7 @@ function runEntry(action: "approve" | "merge" | "automerge", mode: string) {
       merger: { id: 10, login: "alice", type: "User" }, mode: "human", command_comment_id: 9,
       accepted_head: "a".repeat(40), accepted_at: acceptedAt, expires_at: new Date(Date.parse(acceptedAt) + 7 * 24 * 60 * 60_000).toISOString(),
     };
-    const deploymentList = { data: { repository: { deployments: { nodes: [{ id: "deployment-node", databaseId: 123, task: "csm-ci:automerge", payload, createdAt: acceptedAt, creator: { __typename: "Bot", databaseId: 3000 } }], pageInfo: { hasNextPage: false, endCursor: null } } } } };
+    const deploymentList = { data: { repository: { deployments: { nodes: [{ id: "deployment-node", databaseId: 123, task: "csm-ci:automerge", payload, createdAt: acceptedAt, creator: { __typename: "Bot", databaseId: 3000 }, statuses: { nodes: [], pageInfo: { hasNextPage: false } } }], pageInfo: { hasNextPage: false, endCursor: null } } } } };
     const emptyDeploymentList = { data: { repository: { deployments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } };
     const initialGraphql = action === "automerge" ? deploymentList : { data: { node: { databaseId: 9, lastEditedAt: null } } };
     const laterGraphql = action === "merge" ? [emptyDeploymentList, emptyDeploymentList] : [];
