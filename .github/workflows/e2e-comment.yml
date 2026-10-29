@@ -23,7 +23,7 @@ jobs:
       deployments: write
       actions: read
       issues: write
-      pull-requests: read
+      pull-requests: write
     outputs:
       ok: ${{ steps.check.outputs.ok }}
       deployment-id: ${{ steps.check.outputs.deployment-id }}
