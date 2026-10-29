@@ -37,6 +37,7 @@ jobs:
       name: ${{ steps.intake.outputs.name }}
       args: ${{ steps.intake.outputs.args }}
       concurrency-key: ${{ steps.intake.outputs.concurrency-key }}
+      automerge-concurrency-key: ${{ steps.intake.outputs.automerge-concurrency-key }}
       release: ${{ steps.intake.outputs.release }}
       server-bot-id: ${{ steps.intake.outputs.server-bot-id }}
     steps:
@@ -55,13 +56,12 @@ jobs:
     needs: [intake]
     if: needs.intake.outputs.kind != 'release'
     runs-on: ubuntu-26.04
-    timeout-minutes: 70
+    timeout-minutes: 10
     environment: csm-ci
     # Keyed on the normalized repository and number from intake, so spelling variants share a group. /approve and policy-check
-    # share it because both publish policy checks and reports for the pull request; other kinds, such as a waiting /merge,
-    # keep their own key so they never block publication on the same pull request.
+    # share it because both publish policy checks and reports; merge acceptance keeps its own group so it does not block them.
     concurrency:
-      group: csm-ci-${{ needs.intake.outputs.concurrency-key }}
+      group: csm-ci-${{ needs.intake.outputs.kind == 'merge' && needs.intake.outputs.automerge-concurrency-key || needs.intake.outputs.concurrency-key }}
       cancel-in-progress: false
     permissions:
       contents: read
@@ -188,6 +188,15 @@ jobs:
           permission-pull-requests: read
           permission-checks: read
           permission-issues: read
+      - id: automerge-deployments-token
+        if: needs.intake.outputs.kind == 'merge'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-deployments: write
       - id: merge-notify-token
         if: needs.intake.outputs.kind == 'merge'
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
@@ -198,90 +207,17 @@ jobs:
           repositories: ${{ needs.intake.outputs.name }}
           permission-issues: write
           permission-pull-requests: write
-      - id: merge-ready
+      - id: merge-accept
         if: needs.intake.outputs.kind == 'merge'
-        continue-on-error: true
         uses: ./.csm-ci-actions/actions/server/merge
         with:
-          mode: wait
+          mode: accept
           config-path: ${{ inputs.config-path }}
           server-token: ${{ steps.merge-read-token.outputs.token }}
           notification-token: ${{ steps.merge-notify-token.outputs.token }}
+          deployments-token: ${{ steps.automerge-deployments-token.outputs.token }}
           repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
           args: ${{ needs.intake.outputs.args }}
-      - id: merge-failure-notify-token
-        if: needs.intake.outputs.kind == 'merge' && steps.merge-ready.outcome == 'failure' && steps.merge-ready.outputs.accepted == 'true'
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        with:
-          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
-          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
-          owner: ${{ needs.intake.outputs.owner }}
-          repositories: ${{ needs.intake.outputs.name }}
-          permission-issues: write
-          permission-pull-requests: write
-      - if: needs.intake.outputs.kind == 'merge' && steps.merge-ready.outcome == 'failure' && steps.merge-ready.outputs.accepted == 'true'
-        continue-on-error: true
-        uses: ./.csm-ci-actions/actions/server/merge
-        with:
-          mode: failure-receipt
-          config-path: ${{ inputs.config-path }}
-          server-token: ${{ steps.merge-read-token.outputs.token }}
-          notification-token: ${{ steps.merge-failure-notify-token.outputs.token }}
-          repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
-          args: ${{ needs.intake.outputs.args }}
-          failure-message: ${{ steps.merge-ready.outputs.error }}
-          head: ${{ steps.merge-ready.outputs.head }}
-      - if: always() && needs.intake.outputs.kind == 'merge' && steps.merge-ready.outcome == 'failure'
-        env:
-          FAILURE_MESSAGE: ${{ steps.merge-ready.outputs.error }}
-        run: |
-          echo "$FAILURE_MESSAGE" >&2
-          exit 1
-      - id: merge-final-read-token
-        if: needs.intake.outputs.kind == 'merge' && steps.merge-ready.outputs.ready == 'true'
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        with:
-          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
-          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
-          owner: ${{ needs.intake.outputs.owner }}
-          repositories: ${{ needs.intake.outputs.name }}
-          permission-contents: read
-          permission-pull-requests: read
-          permission-checks: read
-          permission-issues: read
-      - id: merge-final-notify-token
-        if: needs.intake.outputs.kind == 'merge' && steps.merge-ready.outputs.ready == 'true'
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        with:
-          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
-          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
-          owner: ${{ needs.intake.outputs.owner }}
-          repositories: ${{ needs.intake.outputs.name }}
-          permission-issues: write
-          permission-pull-requests: write
-      - id: merge-token
-        if: needs.intake.outputs.kind == 'merge' && steps.merge-ready.outputs.ready == 'true'
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        with:
-          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
-          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
-          owner: ${{ needs.intake.outputs.owner }}
-          repositories: ${{ needs.intake.outputs.name }}
-          permission-contents: write
-          permission-pull-requests: write
-          permission-workflows: write
-      - if: needs.intake.outputs.kind == 'merge'
-        uses: ./.csm-ci-actions/actions/server/merge
-        with:
-          mode: merge
-          config-path: ${{ inputs.config-path }}
-          server-token: ${{ steps.merge-final-read-token.outputs.token }}
-          notification-token: ${{ steps.merge-final-notify-token.outputs.token }}
-          write-token: ${{ steps.merge-token.outputs.token }}
-          repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
-          args: ${{ needs.intake.outputs.args }}
-          head: ${{ steps.merge-ready.outputs.head }}
-          platform: ${{ steps.merge-ready.outputs.platform }}
       - if: needs.intake.outputs.kind == 'policy-check'
         uses: ./.csm-ci-actions/actions/server/policy-check
         with:
@@ -315,6 +251,25 @@ jobs:
         env:
           KIND: ${{ needs.intake.outputs.kind }}
         run: echo "no $KIND handler yet"
+
+  automerge:
+    needs: [intake, op]
+    if: >-
+      always() && needs.intake.result == 'success' &&
+      contains(fromJSON('["approve", "merge", "policy-check"]'), needs.intake.outputs.kind)
+    uses: ./.github/workflows/server-automerge-evaluate.yml
+    permissions:
+      contents: read
+    with:
+      repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
+      repository-owner: ${{ needs.intake.outputs.owner }}
+      repository-name: ${{ needs.intake.outputs.name }}
+      pull-number: ${{ fromJSON(needs.intake.outputs.args).pull_number }}
+      deployment-id: ''
+      concurrency-key: ${{ needs.intake.outputs.automerge-concurrency-key }}
+      config-path: ${{ inputs.config-path }}
+    secrets:
+      CSM_CI_SERVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
 
   release-plan:
     needs: [intake]

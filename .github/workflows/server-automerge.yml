@@ -1,0 +1,77 @@
+name: csm-ci automerge sweep
+
+on:
+  workflow_call:
+    secrets:
+      CSM_CI_SERVER_APP_PRIVATE_KEY:
+        required: true
+    inputs:
+      config-path:
+        description: Path of csm-ci.yaml in the server repository.
+        type: string
+        default: csm-ci.yaml
+
+permissions: {}
+
+jobs:
+  list:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    environment: csm-ci
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.reservations.outputs.matrix }}
+      count: ${{ steps.reservations.outputs.count }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .csm-ci-actions
+          persist-credentials: false
+      - id: deployments-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-deployments: read
+      - id: discovery-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          # jactionlint ignore=github-app
+          owner: ${{ github.repository_owner }}
+          permission-metadata: read
+      - id: reservations
+        uses: ./.csm-ci-actions/actions/server/automerge
+        with:
+          mode: list
+          config-path: ${{ inputs.config-path }}
+          deployments-token: ${{ steps.deployments-token.outputs.token }}
+          discovery-token: ${{ steps.discovery-token.outputs.token }}
+
+  evaluate:
+    needs: [list]
+    if: needs.list.outputs.count != '0'
+    strategy:
+      max-parallel: 4
+      fail-fast: false
+      matrix:
+        reservation: ${{ fromJSON(needs.list.outputs.matrix) }}
+    uses: ./.github/workflows/server-automerge-evaluate.yml
+    permissions:
+      contents: read
+    with:
+      repository: ${{ matrix.reservation.repository }}
+      repository-owner: ${{ matrix.reservation.repository_owner }}
+      repository-name: ${{ matrix.reservation.repository_name }}
+      pull-number: ${{ matrix.reservation.pull_number }}
+      deployment-id: ${{ matrix.reservation.deployment_id }}
+      concurrency-key: ${{ matrix.reservation.concurrency_key }}
+      config-path: ${{ inputs.config-path }}
+    secrets:
+      CSM_CI_SERVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
