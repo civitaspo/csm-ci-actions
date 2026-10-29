@@ -88,7 +88,8 @@ describe("validateCancellationTarget", () => {
 
 describe("cancellation marker", () => {
   test("uses a run-scoped label and idempotent PR/attempt metadata", () => {
-    expect(cancellationLabel(40896049487)).toBe("e2e-cancel-40896049487");
+    expect(cancellationLabel(40896049487, 2)).toBe("e2e-cancel-40896049487-2");
+    expect(cancellationLabel(40896049487, 1)).not.toBe(cancellationLabel(40896049487, 2));
     expect(cancellationDescription(200, 2)).toBe("pr=200;attempt=2");
   });
 });

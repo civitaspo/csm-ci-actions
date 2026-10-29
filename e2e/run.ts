@@ -102,7 +102,7 @@ async function main(): Promise<void> {
     : undefined;
   const prNumber = process.env.E2E_PR_NUMBER ?? (event?.issue?.number ? String(event.issue.number) : undefined);
   const cancelLabel = process.env.GITHUB_RUN_ID && process.env.GITHUB_RUN_ATTEMPT && prNumber
-    ? `e2e-cancel-${process.env.GITHUB_RUN_ID}` : undefined;
+    ? `e2e-cancel-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}` : undefined;
   const reportCancellation = async (message: string) => {
     if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, "cancelled=true\n");
     console.log(message);

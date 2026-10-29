@@ -168,7 +168,7 @@ export async function requestCancellation(gh: ReturnType<typeof github>, reposit
   if (!current.ok) throw new Error(current.error);
   if (current.target.attempt !== target.attempt) throw new Error(`run ${target.runId} changed attempts before the cancellation request`);
   const repo = splitRepository(repository);
-  const label = cancellationLabel(target.runId);
+  const label = cancellationLabel(target.runId, target.attempt);
   const description = cancellationDescription(prNumber, target.attempt);
   try {
     await gh.rest.issues.createLabel({ ...repo, name: label, description, color: "d73a4a" });
@@ -179,8 +179,8 @@ export async function requestCancellation(gh: ReturnType<typeof github>, reposit
   }
 }
 
-export function cancellationLabel(runId: number): string {
-  return `${LABEL_PREFIX}${runId}`;
+export function cancellationLabel(runId: number, attempt: number): string {
+  return `${LABEL_PREFIX}${runId}-${attempt}`;
 }
 
 export function cancellationDescription(prNumber: number, attempt: number): string {
