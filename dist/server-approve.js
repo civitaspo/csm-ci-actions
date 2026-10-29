@@ -32770,7 +32770,7 @@ var RepositoryEntry = strictObject({
     }).optional()
   }).optional(),
   sensitive_paths: strictObject({ paths: array(string2().min(1)).optional(), exempt: array(Principal).optional() }).optional(),
-  merge: strictObject({ allow_bot_requests: boolean2().optional(), use_platform_automerge: boolean2().optional() }).optional()
+  merge: strictObject({ allow_bot_requests: boolean2().optional() }).optional()
 }).superRefine((entry, ctx) => {
   if (entry.ops.includes("release") !== (entry.release !== undefined)) {
     ctx.addIssue({ code: "custom", path: ["release"], message: "release settings must be present exactly when release is enabled" });
@@ -32879,6 +32879,8 @@ function parseCommand(body) {
     return { name: "approve" };
   if (text === "/merge")
     return { name: "merge" };
+  if (text === "/merge cancel")
+    return { name: "merge-cancel" };
   if (text === "/recheck")
     return { name: "recheck" };
   return;
@@ -32889,7 +32891,7 @@ function validateComment(c, repository, pullNumber, now) {
   }
   const command = parseCommand(c.body);
   if (!command)
-    throw new Rejection(`comment ${c.id} is not exactly /approve, /merge or /recheck`);
+    throw new Rejection(`comment ${c.id} is not exactly /approve, /merge, /merge cancel or /recheck`);
   if (command.name === "recheck")
     return command;
   if (c.lastEditedAt !== null || c.createdAt !== c.updatedAt)
