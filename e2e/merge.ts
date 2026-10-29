@@ -612,10 +612,16 @@ export const merge: Scenario[] = [
         try {
           const opened = await openBotPr(ctx, prCase(ctx, "mixed-commits"));
           mixedPr = opened.pr;
+          const pr = opened.pr;
           await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: mixedPr.number } }, opened.since, "success");
-          await pushSignedCommit(ctx, mixedPr, mixedPr.head);
+          const head = await pushSignedCommit(ctx, pr, pr.head);
+          await until(`mixed-identity head for pull request #${pr.number}`, async () => {
+            const { data: pull } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
+            const commits = await ctx.gh.paginate(ctx.gh.rest.pulls.listCommits, { ...splitRepository(CLIENT), pull_number: pr.number, per_page: 100 });
+            return pull.head.sha === head && commits.some((commit) => commit.sha === head && commit.author?.id === 4525500) ? true : undefined;
+          });
           const { comment, requestInfo } = await postBotMergeRequest(ctx, mixedPr);
-          await expectOp(ctx, requestInfo.match, requestInfo.since, "failure", /bot merger testing-csm-ci-untrusted-committer\[bot\] can merge only commits by itself/);
+          await expectOp(ctx, requestInfo.match, requestInfo.since, "failure", /bot merger testing-csm-ci-untrusted-committer\[bot\] can merge only its own pull request and commits/);
           await noMerge(ctx, mixedPr);
           assert(!(await serverComments(ctx, mixedPr)).some((body) => body.includes(marker("merge", comment.id))), "rejected mixed-identity bot request unexpectedly posted a receipt");
         } finally {
