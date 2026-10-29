@@ -17,6 +17,7 @@ export const CLIENT = `${OWNER}/testing-csm-ci-client`;
 const FIXTURES = join(import.meta.dir, "fixtures");
 const POLL_MS = 5_000;
 const TIMEOUT_MS = 10 * 60_000;
+const EVENT_RUN_QUIET_MS = 60_000;
 
 export type Run = { id: number; html_url: string; status: string | null; conclusion: string | null; created_at: string; display_title: string };
 export type Ctx = { gh: GitHub; urls: string[]; untrusted: GitHub | undefined; run: RunMetadata; cases: Readonly<Record<string, PrIntent>> };
@@ -144,6 +145,86 @@ export async function recentWorkflowRuns(ctx: Ctx, repository: string, workflow:
     for await (const page of iterator) yield page.data;
   }
   return recentItems(pages(), since);
+}
+
+type DrainTiming = {
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+  pollMs?: number;
+  quietMs?: number;
+  timeoutMs?: number;
+};
+
+// Drain workflows triggered during this invocation. Scan all runs in both testing repositories:
+// client callers trigger PR/comment/release workflows, server label intake runs in the server
+// repository, and fixture/config changes trigger push or PR checks. The repository-wide query also
+// catches future event types without another allowlist. This deliberately includes unrelated runs
+// in the lock window.
+// GitHub's `created` search accepts ISO-8601 date-times only to whole-second precision; floor the
+// start to a second so the API query and run timestamps use the same precision.
+// A quiet rescan catches delayed visibility, but GitHub exposes no event-delivery barrier, so it
+// cannot prove that a run will not become visible after the quiet window.
+export async function drainWorkflowRuns(gh: GitHub, since: Date, timing: DrainTiming = {}): Promise<void> {
+  assert(Number.isFinite(since.getTime()), "client event drain requires a valid start time");
+  const repositories = [CLIENT, SERVER] as const;
+  const now = timing.now ?? Date.now;
+  const wait = timing.sleep ?? sleep;
+  const pollMs = timing.pollMs ?? POLL_MS;
+  const quietMs = timing.quietMs ?? EVENT_RUN_QUIET_MS;
+  const deadline = now() + (timing.timeoutMs ?? TIMEOUT_MS);
+  const searchSince = new Date(Math.floor(since.getTime() / 1_000) * 1_000).toISOString().replace(/\.000Z$/u, "Z");
+  const observed = new Map<string, Run>();
+  let quietSince = now();
+
+  for (;;) {
+    assert(now() <= deadline, `timed out draining workflow runs; ${[...observed].filter(([, run]) => run.status !== "completed").map(([key, run]) => `${key} ${run.html_url}`).join(", ") || "workflow run discovery did not settle"}`);
+    let discovered = false;
+    let completed = false;
+    for (const repository of repositories) {
+      const repo = splitRepository(repository);
+      let listed = 0;
+      const pages = gh.paginate.iterator(gh.rest.actions.listWorkflowRunsForRepo, {
+        ...repo,
+        created: `>=${searchSince}`,
+        per_page: 100,
+      });
+      for await (const page of pages) {
+        listed += page.data.length;
+        for (const run of page.data) {
+          const current: Run = {
+            id: run.id,
+            html_url: run.html_url,
+            status: run.status,
+            conclusion: run.conclusion,
+            created_at: run.created_at,
+            display_title: run.display_title,
+          };
+          const key = `${repository}#${run.id}`;
+          if (!observed.has(key)) {
+            observed.set(key, current);
+            discovered = true;
+            console.log(`tracking ${repository} run ${run.id}: ${run.html_url}`);
+          } else {
+            const previous = observed.get(key);
+            if (previous?.status !== "completed" && current.status === "completed") completed = true;
+            observed.set(key, current);
+          }
+        }
+      }
+      // Pagination exposes only the `workflow_runs` array, not total_count. GitHub caps filtered
+      // searches at 1,000 results, so an exactly full result set is ambiguous and fails closed.
+      // Do not compare timestamps locally: the API's `created` filter is second-granular.
+      assert(listed < 1_000, `could not prove every ${repository} workflow run was enumerated since ${searchSince} (at least 1,000 results)`);
+    }
+
+    const pending = [...observed.values()].filter((run) => run.status !== "completed");
+    if (discovered || completed) quietSince = now();
+    if (pending.length === 0 && now() - quietSince >= quietMs) {
+      console.log(`drained ${observed.size} workflow runs`);
+      return;
+    }
+    await wait(pollMs);
+  }
 }
 
 // A completed run's jobs and logs do not change. Concurrent scenarios poll the same server runs,
