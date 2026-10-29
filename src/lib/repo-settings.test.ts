@@ -519,7 +519,7 @@ describe("verifyRepoSettingsApprover", () => {
 
 describe("auto-merge queue preflight", () => {
   const client: RepoSettingsTarget = { name: "owner/client", isServer: false };
-  const auto = { autoMergeRequest: { enabledAt: "now" } };
+  const auto = { autoMergeRequest: { __typename: "AutoMergeRequest" } };
   const manual = { autoMergeRequest: null };
   const page = (nodes: unknown[], hasNextPage: boolean, endCursor: string | null) => ({ repository: { pullRequests: { nodes, pageInfo: { hasNextPage, endCursor } } } });
   const queueFetch = (pages: unknown[]) => {
@@ -539,15 +539,14 @@ describe("auto-merge queue preflight", () => {
   });
 
   test.each([
-    ["the Server bot", { __typename: "Bot", databaseId: 3000 }, 0, 3000],
-    ["another bot", { __typename: "Bot", databaseId: 20 }, 1, 3000],
-    ["a user with the Server bot ID", { __typename: "User", databaseId: 3000 }, 1, 3000],
-    ["a deleted actor", null, 1, 3000],
-    ["the Server bot when its ID is unknown", { __typename: "Bot", databaseId: 3000 }, 1, null],
-  ] satisfies [string, unknown, number, number | null][])("auto-merge enabled by %s counts %i", async (_name, enabledBy, count, serverBotId) => {
-    const fetch = queueFetch([page([{ autoMergeRequest: { enabledBy } }], false, null)]);
-    const result = await inspectRepoSettingsPreflight({ readGH: github("read", fetch), target: client, ...(serverBotId === null ? {} : { serverBotId }) });
-    expect(result.autoMergeQueueCount).toBe(count);
+    ["the Server bot", { __typename: "Bot" }],
+    ["another bot", { __typename: "Bot" }],
+    ["a user", { __typename: "User" }],
+    ["an actor deleted after enabling auto-merge", null],
+  ] satisfies [string, unknown][])("counts any auto-merge request enabled by %s", async (_name, enabledBy) => {
+    const fetch = queueFetch([page([{ autoMergeRequest: { __typename: "AutoMergeRequest", enabledBy } }], false, null)]);
+    const result = await inspectRepoSettingsPreflight({ readGH: github("read", fetch), target: client });
+    expect(result.autoMergeQueueCount).toBe(1);
   });
 
   const unavailable: [string, unknown][] = [
@@ -744,7 +743,7 @@ function dispatchFetch(options: DispatchOptions) {
         data: {
           repository: {
             pullRequests: {
-              nodes: Array.from({ length: options.queueCount ?? 0 }, () => ({ autoMergeRequest: { enabledAt: "now" } })),
+              nodes: Array.from({ length: options.queueCount ?? 0 }, () => ({ autoMergeRequest: { __typename: "AutoMergeRequest" } })),
               pageInfo: { hasNextPage: false, endCursor: null },
             },
           },

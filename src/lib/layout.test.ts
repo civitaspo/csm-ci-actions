@@ -17,7 +17,7 @@ const actionSchema = z.object({
 const readYaml = (path: string): unknown => parse(readFileSync(path, "utf8"));
 const actions = {
   client: ["approve", "merge", "policy-check", "release-prepare", "release-publish", "securefix"],
-  server: ["approve", "check-config", "intake", "merge", "policy-check", "release-assets", "release-build", "release-plan", "release-publish", "release-tag", "repo-settings", "securefix"],
+  server: ["approve", "automerge", "check-config", "intake", "merge", "policy-check", "release-assets", "release-build", "release-plan", "release-publish", "release-tag", "repo-settings", "securefix"],
 };
 
 describe("published action layout", () => {
@@ -85,26 +85,24 @@ describe("merge token boundary", () => {
   const workflow = z.object({ jobs: z.object({ op: z.object({ steps: z.array(stepSchema) }) }) }).parse(readYaml(".github/workflows/server.yml"));
   const steps = workflow.jobs.op.steps;
 
-  test("mints the final merge token only after readiness with target repository write permissions", () => {
-    const token = steps.find((step) => step.id === "merge-token");
+  test("acceptance can write deployments on the server repository without client write permissions", () => {
+    const token = steps.find((step) => step.id === "automerge-deployments-token");
     expect(token?.uses).toMatch(/^actions\/create-github-app-token@/u);
-    expect(token?.if).toBe("needs.intake.outputs.kind == 'merge' && steps.merge-ready.outputs.ready == 'true'");
+    expect(token?.if).toBe("needs.intake.outputs.kind == 'merge'");
     expect(token?.with).toEqual({
       "client-id": "${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}",
       "private-key": "${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}",
-      owner: "${{ needs.intake.outputs.owner }}",
-      repositories: "${{ needs.intake.outputs.name }}",
-      "permission-contents": "write",
-      "permission-pull-requests": "write",
-      "permission-workflows": "write",
+      owner: "${{ github.repository_owner }}",
+      repositories: "${{ github.event.repository.name }}",
+      "permission-deployments": "write",
     });
-    expect(steps.findIndex((step) => step.id === "merge-token")).toBeGreaterThan(steps.findIndex((step) => step.id === "merge-ready"));
-    const merge = steps.find((step) => step.with?.mode === "merge");
-    expect(merge?.with?.["write-token"]).toBe("${{ steps.merge-token.outputs.token }}");
-    expect(merge?.with?.head).toBe("${{ steps.merge-ready.outputs.head }}");
+    const merge = steps.find((step) => step.with?.mode === "accept");
+    expect(merge?.with?.["deployments-token"]).toBe("${{ steps.automerge-deployments-token.outputs.token }}");
+    expect(merge?.with?.["server-token"]).toBe("${{ steps.merge-read-token.outputs.token }}");
+    expect(merge?.with?.["notification-token"]).toBe("${{ steps.merge-notify-token.outputs.token }}");
   });
 
-  test.each(["merge-read-token", "merge-notify-token", "merge-failure-notify-token", "merge-final-read-token", "merge-final-notify-token"])("keeps workflows permission off %s", (id) => {
+  test.each(["merge-read-token", "merge-notify-token", "automerge-deployments-token"])("keeps client merge permissions off %s", (id) => {
     const token = steps.find((step) => step.id === id);
     expect(token).toBeDefined();
     expect(token?.with).not.toHaveProperty("permission-workflows");
@@ -112,10 +110,16 @@ describe("merge token boundary", () => {
   });
 });
 
-test("fresh-token merge failure receipts receive the head pinned at acceptance", () => {
-  const workflow = z.object({ jobs: z.object({ op: z.object({ steps: z.array(stepSchema) }) }) }).parse(readYaml(".github/workflows/server.yml"));
-  const receipt = workflow.jobs.op.steps.find((step) => step.with?.mode === "failure-receipt");
-  expect(receipt?.with?.head).toBe("${{ steps.merge-ready.outputs.head }}");
-  expect(receipt?.with?.["failure-message"]).toBe("${{ steps.merge-ready.outputs.error }}");
-  expect(receipt?.if).toContain("steps.merge-ready.outputs.accepted == 'true'");
+test("automerge mints client write permissions only after readiness and pins the reservation and head", () => {
+  const workflow = z.object({ jobs: z.object({ evaluate: z.object({ steps: z.array(stepSchema) }) }) }).parse(readYaml(".github/workflows/server-automerge-evaluate.yml"));
+  const steps = workflow.jobs.evaluate.steps;
+  const token = steps.find((step) => step.id === "write-token");
+  expect(token?.if).toBe("steps.readiness.outputs.ready == 'true'");
+  expect(token?.with?.["permission-contents"]).toBe("write");
+  expect(token?.with?.["permission-pull-requests"]).toBe("write");
+  expect(token?.with?.["permission-workflows"]).toBe("write");
+  const merge = steps.find((step) => step.with?.mode === "merge");
+  expect(merge?.with?.["write-token"]).toBe("${{ steps.write-token.outputs.token }}");
+  expect(merge?.with?.head).toBe("${{ steps.readiness.outputs.head }}");
+  expect(merge?.with?.["deployment-id"]).toBe("${{ steps.readiness.outputs.deployment-id || inputs.deployment-id }}");
 });

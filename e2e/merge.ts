@@ -1,38 +1,70 @@
 import { withRepositoryPolicy } from "./repository-policy.ts";
-import { verifyReceipt } from "./notifications.ts";
 import { OWNER_IDENTITY } from "./pr-metadata.ts";
 import { prCase } from "./harness.ts";
 import { marker } from "../src/lib/notify.ts";
+import { automergeMarker } from "../src/lib/automerge.ts";
 import { parseConfig } from "../src/lib/config.ts";
 import { splitRepository } from "../src/lib/github.ts";
 import { approverReviews, assert, CLIENT, closePr, dispatch, expectOp, openPr, type Pr, postComment, type Scenario, SERVER, SERVER_BOT_ID, serverComments, until, withServerConfig } from "./harness.ts";
 
-const RULESET_ID = 25785295;
-const SERVER_APP_ID = 5455185;
 const TEST_BOT_ID = 347402450;
 const TEST_BOT_LOGIN = "testing-csm-ci-untrusted-committer[bot]";
 const SERVER_CONFIG = "csm-ci.yaml";
 
 type MergeRequest = { match: { kind: string; repository: string; args: Record<string, number> }; since: Date };
 
-async function request(ctx: Parameters<Scenario["run"]>[0], pr: Pr, commentId: number): Promise<MergeRequest> {
+async function request(ctx: Parameters<Scenario["run"]>[0], pr: Pr, commentId: number, kind: "merge" | "merge-cancel" = "merge"): Promise<MergeRequest> {
   const since = new Date(Date.now() - 2_000);
-  const run = await dispatch(ctx, CLIENT, "csm-ci-smoke.yml", { kind: "merge", args: `${pr.number}/${commentId}` });
+  const run = await dispatch(ctx, CLIENT, "csm-ci-smoke.yml", { kind, args: `${pr.number}/${commentId}` });
   assert(run.conclusion === "success", `client merge request concluded ${run.conclusion} (${run.html_url})`);
-  return { since, match: { kind: "merge", repository: CLIENT, args: { pull_number: pr.number, comment_id: commentId } } };
+  return { since, match: { kind, repository: CLIENT, args: { pull_number: pr.number, comment_id: commentId } } };
 }
 
 function fromComment(pr: Pr, comment: { id: number; since: Date }): MergeRequest {
   return { since: comment.since, match: { kind: "merge", repository: CLIENT, args: { pull_number: pr.number, comment_id: comment.id } } };
 }
 
-const SELF_MERGE = "    merge: { use_platform_automerge: false }\n";
+type AutomergeRecord = { id: string; databaseId: number; task: string; payload: unknown; createdAt: string; creator: { __typename: string; databaseId: number } | null; statuses: { nodes: { databaseId: number; state: string; description: string; createdAt: string; creator: { __typename: string; databaseId: number } | null }[] } };
 
-async function withPlatformAutoMerge<T>(ctx: Parameters<Scenario["run"]>[0], run: () => Promise<T>): Promise<T> {
-  return withServerConfig(ctx, (text) => {
-    assert(text.includes(SELF_MERGE), "could not find the self-merge fixture entry");
-    return text.replace(SELF_MERGE, "");
-  }, run);
+async function reservations(ctx: Parameters<Scenario["run"]>[0], pr: Pr): Promise<AutomergeRecord[]> {
+  const data = await ctx.gh.graphql<{ client: { databaseId: number }; server: { deployments: { nodes: AutomergeRecord[] } } }>(
+    "query{client:repository(owner:\"civitaspo\",name:\"testing-csm-ci-client\"){databaseId} server:repository(owner:\"civitaspo\",name:\"testing-csm-ci-server\"){deployments(environments:[\"csm-ci-automerge\"],first:100,orderBy:{field:CREATED_AT,direction:DESC}){nodes{databaseId task payload createdAt creator{__typename ... on Bot{databaseId}} statuses(first:100){nodes{databaseId state description createdAt creator{__typename ... on Bot{databaseId}}}}}}}}",
+  );
+  return data.server.deployments.nodes.filter((deployment) => {
+    try {
+      const payload = (typeof deployment.payload === "string" ? JSON.parse(deployment.payload) : deployment.payload) as { repository_id?: number; pull_number?: number };
+      return deployment.task === "csm-ci:automerge" && deployment.creator?.__typename === "Bot" && deployment.creator.databaseId === SERVER_BOT_ID && payload.repository_id === data.client.databaseId && payload.pull_number === pr.number;
+    } catch { return false; }
+  });
+}
+
+async function awaitReservation(ctx: Parameters<Scenario["run"]>[0], pr: Pr): Promise<AutomergeRecord> {
+  return until(`automerge reservation for pull request #${pr.number}`, async () => (await reservations(ctx, pr))[0]);
+}
+
+async function assertAutomergeLabel(ctx: Parameters<Scenario["run"]>[0], pr: Pr, expected: boolean): Promise<void> {
+  const { data } = await ctx.gh.rest.issues.listLabelsOnIssue({ ...splitRepository(CLIENT), issue_number: pr.number });
+  assert(data.some((label) => label.name === "csm-ci/automerge") === expected, `csm-ci/automerge label presence did not equal ${expected} on #${pr.number}`);
+}
+
+function terminalStatus(record: AutomergeRecord): AutomergeRecord["statuses"]["nodes"][number] | undefined {
+  return record.statuses.nodes.filter((status) => status.creator?.__typename === "Bot" && status.creator.databaseId === SERVER_BOT_ID && ["SUCCESS", "FAILURE", "INACTIVE"].includes(status.state))
+    .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.databaseId - b.databaseId)[0];
+}
+
+async function assertReservation(ctx: Parameters<Scenario["run"]>[0], pr: Pr, expected: "QUEUED" | "SUCCESS" | "INACTIVE"): Promise<AutomergeRecord> {
+  const record = await awaitReservation(ctx, pr);
+  assert(record.creator?.__typename === "Bot" && record.creator.databaseId === SERVER_BOT_ID, `deployment ${record.databaseId} was not created by the Server bot`);
+  const terminal = terminalStatus(record);
+  if (expected === "QUEUED") assert(!terminal, `reservation for #${pr.number} unexpectedly ended as ${terminal?.state}`);
+  else assert(terminal?.state === expected, `reservation for #${pr.number} ended as ${terminal?.state ?? "active"}, expected ${expected}`);
+  return record;
+}
+
+async function assertAutomergeComment(ctx: Parameters<Scenario["run"]>[0], pr: Pr, record: AutomergeRecord, event: "accepted" | "merged" | "cancelled", text: RegExp): Promise<void> {
+  const bodies = await serverComments(ctx, pr);
+  assert(bodies.filter((body) => body.includes(automergeMarker(record.databaseId, event))).length === 1, `expected one ${event} comment for deployment ${record.databaseId}`);
+  assert(bodies.some((body) => body.includes(automergeMarker(record.databaseId, event)) && text.test(body)), `automerge ${event} comment did not match ${text}`);
 }
 
 export async function withTestBotConfigured(ctx: Parameters<Scenario["run"]>[0], run: () => Promise<void>): Promise<void> {
@@ -77,18 +109,39 @@ async function withSignedPr(ctx: Parameters<Scenario["run"]>[0], fn: (pr: Pr) =>
   }
 }
 
+function automergeScenario(id: string, title: string, run: Scenario["run"], classification: "positive" | "negative" = "positive", needsUntrusted = false): Scenario {
+  const fixture: Scenario["cases"][string] = classification === "positive"
+    ? { id: "fixture", target: "client" as const, title, classification, checks: ["approval-policy", "head-consistency"] as const, steps: [{ operation: "merge", outcome: "permitted" as const, expected: title }], identity: OWNER_IDENTITY }
+    : { id: "fixture", target: "client" as const, title, classification, checks: ["approval-policy", "head-consistency"] as const, steps: [{ operation: "merge", outcome: "rejected" as const, expected: title }], identity: OWNER_IDENTITY };
+  return {
+    id: `merge.${id}`,
+    name: title,
+    needsUntrusted,
+    cases: { fixture },
+    run,
+  };
+}
+
+async function reserve(ctx: Parameters<Scenario["run"]>[0], pr: Pr): Promise<{ comment: Awaited<ReturnType<typeof postComment>>; record: AutomergeRecord }> {
+  const comment = await postComment(ctx, pr, "/merge");
+  const info = fromComment(pr, comment);
+  await expectOp(ctx, info.match, info.since, "success");
+  return { comment, record: await awaitReservation(ctx, pr) };
+}
+
+async function waitForCsmMerge(ctx: Parameters<Scenario["run"]>[0], pr: Pr, expectedHead: string): Promise<void> {
+  const merged = await until(`csm-ci merge of #${pr.number}`, async () => {
+    const { data } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
+    return data.merged ? data : undefined;
+  });
+  assert(merged.head.sha === expectedHead && merged.merged_by?.id === SERVER_BOT_ID, `pull request #${pr.number} was not merged by the Server bot at head ${expectedHead}`);
+}
+
 async function dismissApproval(ctx: Parameters<Scenario["run"]>[0], pr: Pr): Promise<void> {
   const reviews = await ctx.gh.paginate(ctx.gh.rest.pulls.listReviews, { owner: "civitaspo", repo: "testing-csm-ci-client", pull_number: pr.number, per_page: 100 });
   for (const review of reviews.filter((r) => r.user?.login === "testing-csm-ci-approver[bot]" && r.state === "APPROVED")) {
     await ctx.gh.rest.pulls.dismissReview({ owner: "civitaspo", repo: "testing-csm-ci-client", pull_number: pr.number, review_id: Number(review.id), message: "e2e: test merge readiness" });
   }
-}
-
-async function awaitServerWait(ctx: Parameters<Scenario["run"]>[0], commentId: number): Promise<void> {
-  await until(`the Server App rocket on comment ${commentId}`, async () => {
-    const reactions = await ctx.gh.paginate(ctx.gh.rest.reactions.listForIssueComment, { owner: "civitaspo", repo: "testing-csm-ci-client", comment_id: commentId, per_page: 100 });
-    return reactions.some((reaction) => reaction.content === "rocket" && reaction.user?.login === "testing-csm-ci-server[bot]") ? true : undefined;
-  });
 }
 
 async function pushSignedCommit(ctx: Parameters<Scenario["run"]>[0], pr: Pr, expectedHead: string): Promise<string> {
@@ -111,50 +164,7 @@ async function noMerge(ctx: Parameters<Scenario["run"]>[0], pr: Pr): Promise<voi
   assert(!data.merged && data.state === "open", `request unexpectedly merged pull request #${pr.number}`);
 }
 
-async function withReviewRulesetDisabled(ctx: Parameters<Scenario["run"]>[0], run: () => Promise<void>): Promise<void> {
-  const { data } = await ctx.gh.rest.repos.getRepoRuleset({ owner: "civitaspo", repo: "testing-csm-ci-client", ruleset_id: RULESET_ID });
-  const enforcement = data.enforcement;
-  assert(enforcement === "active", `expected review-and-checks ruleset ${RULESET_ID} to be active, found ${enforcement}`);
-  const refName = data.conditions?.ref_name;
-  assert(data.target === "branch" && refName, `ruleset ${RULESET_ID} is not the expected default-branch rule`);
-  const updateEnforcement = async (value: "active" | "disabled"): Promise<void> => {
-    await ctx.gh.rest.repos.updateRepoRuleset({
-      owner: "civitaspo",
-      repo: "testing-csm-ci-client",
-      ruleset_id: RULESET_ID,
-      name: data.name,
-      target: "branch",
-      enforcement: value,
-      conditions: { ref_name: refName },
-      rules: data.rules ?? [],
-      bypass_actors: data.bypass_actors ?? [],
-    });
-  };
-  try {
-    await updateEnforcement("disabled");
-    await run();
-  } finally {
-    await updateEnforcement(enforcement);
-  }
-}
-
 // Platform auto-merge requires the branch rules to enforce csm-ci/policy; the shared fixture ruleset may lack it.
-async function withPolicyCheckRequired(ctx: Parameters<Scenario["run"]>[0], run: () => Promise<void>): Promise<void> {
-  const repo = { owner: "civitaspo", repo: "testing-csm-ci-client", ruleset_id: RULESET_ID };
-  const { data } = await ctx.gh.rest.repos.getRepoRuleset(repo);
-  const refName = data.conditions?.ref_name;
-  assert(data.target === "branch" && refName, `ruleset ${RULESET_ID} is not the expected default-branch rule`);
-  const rules = data.rules ?? [];
-  if (rules.some((rule) => rule.type === "required_status_checks")) return run();
-  const update = (next: typeof rules) => ctx.gh.rest.repos.updateRepoRuleset({ ...repo, name: data.name, target: "branch", enforcement: data.enforcement, conditions: { ref_name: refName }, rules: next, bypass_actors: data.bypass_actors ?? [] });
-  try {
-    await update([...rules, { type: "required_status_checks", parameters: { strict_required_status_checks_policy: false, do_not_enforce_on_create: false, required_status_checks: [{ context: "csm-ci/policy", integration_id: SERVER_APP_ID }] } }]);
-    await run();
-  } finally {
-    await update(rules);
-  }
-}
-
 export const merge: Scenario[] = [
   {
     id: "merge.authorized",
@@ -183,20 +193,20 @@ export const merge: Scenario[] = [
       const comment = await postComment(ctx, pr, "/merge");
       const requestInfo = fromComment(pr, comment);
       await expectOp(ctx, requestInfo.match, requestInfo.since, "success");
+      const reservation = await assertReservation(ctx, pr, "SUCCESS");
+      await assertAutomergeLabel(ctx, pr, true);
       const { data: merged } = await ctx.gh.rest.pulls.get({ owner: "civitaspo", repo: "testing-csm-ci-client", pull_number: pr.number });
       assert(merged.merged && merged.merge_commit_sha, `pull request #${pr.number} was not merged`);
-      const receipts = (await serverComments(ctx, pr)).filter((body) => body.includes(marker("merge", comment.id)));
-      assert(receipts.length === 1 && receipts[0]?.includes("Squash-merged"), `expected one merge receipt, found ${receipts.length}`);
-      await verifyReceipt(ctx, pr, comment, "merge", /Squash-merged/u, merged.merge_commit_sha);
+      await assertAutomergeComment(ctx, pr, reservation, "merged", /squash-merged/u);
     }),
   },
   {
-    id: "merge.concurrent-approve",
+    id: "merge.reserve-then-approve",
     cases: {
       fixture: {
         id: "fixture",
         target: "client",
-        title: "/merge before /approve enables platform auto-merge and GitHub merges after approval",
+        title: "/merge reserves an unapproved pull request and merges it after approval",
         classification: "positive",
         checks: [
           "approval-policy",
@@ -206,42 +216,137 @@ export const merge: Scenario[] = [
           {
             "operation": "merge",
             "outcome": "permitted",
-            "expected": "/merge enables platform auto-merge before approval, and GitHub merges once /approve lands"
+            "expected": "/merge creates an active deployment and label, then /approve lets csm-ci merge the current head"
           }
         ],
         identity: OWNER_IDENTITY
       }
     },
-    name: "/merge before /approve enables platform auto-merge and GitHub merges after approval",
-    serial: true,
-    run: (ctx) => withServerConfig(ctx, (text) => {
-      const exemption = 'exempt: [{ id: 4525500, login: civitaspo }]';
-      assert(text.includes(exemption) && text.includes(SELF_MERGE), "could not find the expected exemption and self-merge entry");
-      return text.replace(exemption, "exempt: []").replace(SELF_MERGE, "");
-    }, () => withPolicyCheckRequired(ctx, async () => {
-      const since = new Date(Date.now() - 2_000);
-      const path = `.github/e2e-concurrent-${crypto.randomUUID()}.txt`;
-      const pr = await openPr(ctx, { intent: prCase(ctx, "fixture"), kind: "signed", filePath: path, fileContent: "concurrent approve and merge\n" });
-      try {
-        await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number } }, since, "success");
-        assert(!(await approverReviews(ctx, pr)).some((review) => review.state === "APPROVED" && review.commit_id === pr.head), "sensitive change unexpectedly received automatic approval");
-        const merge = await postComment(ctx, pr, "/merge");
-        const mergeInfo = fromComment(pr, merge);
-        await expectOp(ctx, mergeInfo.match, mergeInfo.since, "success");
-        await verifyReceipt(ctx, pr, merge, "merge", /enabled platform auto-merge for the pinned head/u);
-        await noMerge(ctx, pr);
-        const approval = await postComment(ctx, pr, "/approve");
-        await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: approval.id } }, approval.since, "success");
-        const merged = await until(`platform auto-merge of #${pr.number}`, async () => {
-          const { data } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
-          return data.merged ? data : undefined;
-        });
-        assert(merged.head.sha === pr.head && merged.merged_by?.id === SERVER_BOT_ID, `pull request #${pr.number} was not auto-merged at the pinned head by the Server bot`);
-      } finally {
-        await closePr(ctx, pr);
-      }
-    })),
+    name: "/merge reserves an unapproved pull request and merges it after approval",
+    run: (ctx) => withSignedPr(ctx, async (pr) => {
+      await dismissApproval(ctx, pr);
+      const merge = await postComment(ctx, pr, "/merge");
+      const mergeInfo = fromComment(pr, merge);
+      await expectOp(ctx, mergeInfo.match, mergeInfo.since, "success");
+      const reservation = await assertReservation(ctx, pr, "QUEUED");
+      assert(reservation.statuses.nodes.some((status) => status.state === "QUEUED" && status.description?.includes("approval")), "reservation has no queued approval reason");
+      await assertAutomergeLabel(ctx, pr, true);
+      await assertAutomergeComment(ctx, pr, reservation, "accepted", /merge reserved/iu);
+      await noMerge(ctx, pr);
+      const approval = await postComment(ctx, pr, "/approve");
+      await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: approval.id } }, approval.since, "success");
+      const merged = await until(`csm-ci merge of #${pr.number}`, async () => {
+        const { data } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
+        return data.merged ? data : undefined;
+      });
+      assert(merged.head.sha === pr.head && merged.merged_by?.id === SERVER_BOT_ID, `pull request #${pr.number} was not merged by the Server bot at its approved head`);
+      await assertReservation(ctx, pr, "SUCCESS");
+      await assertAutomergeLabel(ctx, pr, true);
+    }),
   },
+  automergeScenario("head-change-carries-over", "A reservation follows a new head and merges after that head is approved", async (ctx) => withSignedPr(ctx, async (pr) => {
+    await dismissApproval(ctx, pr);
+    await reserve(ctx, pr);
+    const head = await pushSignedCommit(ctx, pr, pr.head);
+    await until(`pull request #${pr.number} head update`, async () => {
+      const { data } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
+      return data.head.sha === head ? true : undefined;
+    });
+    const approval = await postComment(ctx, pr, "/approve");
+    await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: approval.id } }, approval.since, "success");
+    await waitForCsmMerge(ctx, pr, head);
+    await assertReservation(ctx, pr, "SUCCESS");
+  })),
+  automergeScenario("head-change-needs-approval", "A reservation waits when its new head has not been approved", async (ctx) => withSignedPr(ctx, async (pr) => {
+    const { data: pull } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
+    await ctx.gh.graphql("mutation($pull:ID!){convertPullRequestToDraft(input:{pullRequestId:$pull}){pullRequest{isDraft}}}", { pull: pull.node_id });
+    await reserve(ctx, pr);
+    const head = await pushSignedCommit(ctx, pr, pr.head);
+    await until(`pull request #${pr.number} head update`, async () => {
+      const { data } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
+      return data.head.sha === head ? true : undefined;
+    });
+    await ctx.gh.graphql("mutation($pull:ID!){convertPullRequestToReadyForReview(input:{pullRequestId:$pull}){pullRequest{isDraft}}}", { pull: pull.node_id });
+    const sweep = await dispatch(ctx, SERVER, "csm-ci-automerge.yml");
+    assert(sweep.conclusion === "success", `automerge sweep concluded ${sweep.conclusion} (${sweep.html_url})`);
+    await until(`queued reservation for changed head #${pr.number}`, async () => {
+      const record = await awaitReservation(ctx, pr);
+      return record.statuses.nodes.some((status) => status.state === "QUEUED" && /approval/u.test(status.description)) ? record : undefined;
+    });
+    await noMerge(ctx, pr);
+  }), "negative"),
+  automergeScenario("cancel", "The merger can cancel an active reservation", async (ctx) => withSignedPr(ctx, async (pr) => {
+    const { record } = await reserve(ctx, pr);
+    const comment = await postComment(ctx, pr, "/merge cancel");
+    await expectOp(ctx, { kind: "merge-cancel", repository: CLIENT, args: { pull_number: pr.number, comment_id: comment.id } }, comment.since, "success");
+    await assertReservation(ctx, pr, "INACTIVE");
+    await assertAutomergeLabel(ctx, pr, false);
+    const bodies = await serverComments(ctx, pr);
+    assert(bodies.some((body) => body.includes(`<!-- csm-ci:automerge:${record.databaseId}:cancelled -->`)), "cancel receipt is missing");
+    await noMerge(ctx, pr);
+  })),
+  automergeScenario("cancel-unauthorized", "An untrusted requester cannot cancel another merger reservation", async (ctx) => withSignedPr(ctx, async (pr) => {
+    assert(ctx.untrusted, "the untrusted test token is not configured");
+    await reserve(ctx, pr);
+    const comment = await postComment(ctx, pr, "/merge cancel", ctx.untrusted);
+    const info = await request(ctx, pr, comment.id, "merge-cancel");
+    await expectOp(ctx, info.match, info.since, "failure", /only the reserving User or a trusted merger/u);
+    await assertReservation(ctx, pr, "QUEUED");
+  }), "negative", true),
+  automergeScenario("closed", "Closing a pull request ends its reservation without a comment", async (ctx) => withSignedPr(ctx, async (pr) => {
+    await reserve(ctx, pr);
+    await ctx.gh.rest.pulls.update({ ...splitRepository(CLIENT), pull_number: pr.number, state: "closed" });
+    const sweep = await dispatch(ctx, SERVER, "csm-ci-automerge.yml");
+    assert(sweep.conclusion === "success", `automerge sweep concluded ${sweep.conclusion} (${sweep.html_url})`);
+    await assertReservation(ctx, pr, "INACTIVE");
+    await assertAutomergeLabel(ctx, pr, false);
+    assert(!(await serverComments(ctx, pr)).some((body) => body.includes("pull request closed")), "closing the PR unexpectedly posted an automerge comment");
+  }), "negative"),
+  automergeScenario("command-edit-ignored", "Editing the original command does not revoke an accepted reservation", async (ctx) => withSignedPr(ctx, async (pr) => {
+    await dismissApproval(ctx, pr);
+    const { comment } = await reserve(ctx, pr);
+    await ctx.gh.rest.issues.updateComment({ ...splitRepository(CLIENT), comment_id: comment.id, body: "/merge edited after acceptance" });
+    const approval = await postComment(ctx, pr, "/approve");
+    await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: approval.id } }, approval.since, "success");
+    await waitForCsmMerge(ctx, pr, pr.head);
+    await assertReservation(ctx, pr, "SUCCESS");
+  })),
+  { ...automergeScenario("label-reconcile", "Evaluation restores the automerge label for an active reservation", async (ctx) => withSignedPr(ctx, async (pr) => {
+    await dismissApproval(ctx, pr);
+    await reserve(ctx, pr);
+    await ctx.gh.rest.issues.removeLabel({ ...splitRepository(CLIENT), issue_number: pr.number, name: "csm-ci/automerge" });
+    const sweep = await dispatch(ctx, SERVER, "csm-ci-automerge.yml");
+    assert(sweep.conclusion === "success", `automerge sweep concluded ${sweep.conclusion} (${sweep.html_url})`);
+    await assertAutomergeLabel(ctx, pr, true);
+    await assertReservation(ctx, pr, "QUEUED");
+  }), "positive"), serial: true },
+  { ...automergeScenario("sweep", "The scheduled sweep evaluates active reservations", async (ctx) => withSignedPr(ctx, async (pr) => {
+    const { data: pull } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
+    await ctx.gh.graphql("mutation($pull:ID!){convertPullRequestToDraft(input:{pullRequestId:$pull}){pullRequest{isDraft}}}", { pull: pull.node_id });
+    await reserve(ctx, pr);
+    await ctx.gh.graphql("mutation($pull:ID!){convertPullRequestToReadyForReview(input:{pullRequestId:$pull}){pullRequest{isDraft}}}", { pull: pull.node_id });
+    const sweep = await dispatch(ctx, SERVER, "csm-ci-automerge.yml");
+    assert(sweep.conclusion === "success", `automerge sweep concluded ${sweep.conclusion} (${sweep.html_url})`);
+    await waitForCsmMerge(ctx, pr, pr.head);
+    await assertReservation(ctx, pr, "SUCCESS");
+  }), "positive"), serial: true },
+  { ...automergeScenario("platform-auto-merge-disabled", "csm-ci disables a pre-existing GitHub auto-merge request before merging", async (ctx) => withSignedPr(ctx, async (pr) => {
+    await dismissApproval(ctx, pr);
+    const { data: repo } = await ctx.gh.rest.repos.get({ ...splitRepository(CLIENT) });
+    assert(repo.allow_auto_merge, "testing client repository must have allow_auto_merge enabled for this scenario");
+    const { data: pull } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
+    await ctx.gh.graphql("mutation($pull:ID!){enablePullRequestAutoMerge(input:{pullRequestId:$pull,mergeMethod:SQUASH}){pullRequest{autoMergeRequest{enabledAt}}}}", { pull: pull.node_id });
+    const enabled = await ctx.gh.graphql<{ repository: { pullRequest: { autoMergeRequest: { enabledAt: string } | null } } }>("query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){autoMergeRequest{enabledAt}}}}", { owner: "civitaspo", name: "testing-csm-ci-client", number: pr.number });
+    assert(enabled.repository.pullRequest.autoMergeRequest, "GitHub auto-merge request was not enabled");
+    await reserve(ctx, pr);
+    const approval = await postComment(ctx, pr, "/approve");
+    await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: approval.id } }, approval.since, "success");
+    await waitForCsmMerge(ctx, pr, pr.head);
+    const after = await ctx.gh.graphql<{ repository: { pullRequest: { autoMergeRequest: unknown | null } } }>("query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){autoMergeRequest{enabledAt}}}}", { owner: "civitaspo", name: "testing-csm-ci-client", number: pr.number });
+    assert(after.repository.pullRequest.autoMergeRequest === null, "GitHub auto-merge request remained enabled after csm-ci merged");
+    const reservation = await assertReservation(ctx, pr, "SUCCESS");
+    await assertAutomergeComment(ctx, pr, reservation, "merged", /squash-merged/u);
+  })), serial: true },
   {
     id: "merge.workflow-change",
     cases: {
@@ -289,9 +394,8 @@ export const merge: Scenario[] = [
         assert(merged.merged && merged.merge_commit_sha && merged.head.sha === pr.head, `workflow pull request #${pr.number} was not merged at its approved head`);
         const { data: file } = await ctx.gh.rest.repos.getContent({ ...splitRepository(CLIENT), path, ref: merged.merge_commit_sha });
         assert(!Array.isArray(file) && file.type === "file" && Buffer.from(file.content, "base64").toString("utf8") === content, "merged workflow content differs from the approved change");
-        const receipts = (await serverComments(ctx, pr)).filter((body) => body.includes(marker("merge", comment.id)));
-        assert(receipts.length === 1 && receipts[0]?.includes("Squash-merged"), `expected one workflow merge receipt, found ${receipts.length}`);
-        await verifyReceipt(ctx, pr, comment, "merge", /Squash-merged/u, merged.merge_commit_sha);
+        const reservation = await assertReservation(ctx, pr, "SUCCESS");
+        await assertAutomergeComment(ctx, pr, reservation, "merged", /squash-merged/u);
       } finally {
         await closePr(ctx, pr);
       }
@@ -371,177 +475,6 @@ export const merge: Scenario[] = [
       await noMerge(ctx, pr);
       const receipts = (await serverComments(ctx, pr)).filter((body) => body.includes(marker("merge", comment.id)));
       assert(receipts.length === 0, `expected no receipt before command acceptance, found ${receipts.length}`);
-    }),
-  },
-  {
-    id: "merge.disabled-review-rule",
-    cases: {
-      fixture: {
-        id: "fixture",
-        target: "client",
-        title: "a disabled review ruleset makes /merge fall back to the self-merge wait",
-        classification: "negative",
-        checks: [
-          "approval-policy"
-        ],
-        steps: [
-          {
-            "operation": "merge",
-            "outcome": "rejected",
-            "expected": "Without the review rule, /merge posts the fallback notice instead of enabling auto-merge, and the wait still refuses the unapproved head"
-          }
-        ],
-        identity: OWNER_IDENTITY
-      }
-    },
-    name: "a disabled review ruleset makes /merge fall back to the self-merge wait",
-    serial: true,
-    run: (ctx) => withPlatformAutoMerge(ctx, () => withSignedPr(ctx, async (pr) => {
-      await withReviewRulesetDisabled(ctx, async () => {
-        await dismissApproval(ctx, pr);
-        const comment = await postComment(ctx, pr, "/merge");
-        const requestInfo = fromComment(pr, comment);
-        await until(`the fallback notice for comment ${comment.id}`, async () => (await serverComments(ctx, pr)).some((body) => body.includes(marker("merge-wait", comment.id)) && body.includes("does not require a fresh approval") && body.includes("csm-ci's own merge process is running")) ? true : undefined);
-        await noMerge(ctx, pr);
-        await ctx.gh.rest.pulls.update({ ...splitRepository(CLIENT), pull_number: pr.number, state: "closed" });
-        await expectOp(ctx, requestInfo.match, requestInfo.since, "failure", /is closed/);
-      });
-    })),
-  },
-  {
-    id: "merge.changed-head",
-    cases: {
-      fixture: {
-        id: "fixture",
-        target: "client",
-        title: "a head change while /merge waits aborts the merge",
-        classification: "negative",
-        checks: [
-          "head-consistency"
-        ],
-        steps: [
-          {
-            "operation": "merge",
-            "outcome": "rejected",
-            "expected": "A head change while waiting aborts merge and leaves the PR open"
-          }
-        ],
-        identity: OWNER_IDENTITY
-      }
-    },
-    name: "a head change while /merge waits aborts the merge",
-    run: (ctx) => withSignedPr(ctx, async (pr) => {
-      await dismissApproval(ctx, pr);
-      const comment = await postComment(ctx, pr, "/merge");
-      const requestInfo = fromComment(pr, comment);
-      await awaitServerWait(ctx, comment.id);
-      await pushSignedCommit(ctx, pr, pr.head);
-      // A short poll can see the new commit in the commit list before the pull request head moves.
-      await expectOp(ctx, requestInfo.match, requestInfo.since, "failure", /head changed|newer than comment|is not the pinned head/);
-      await noMerge(ctx, pr);
-    }),
-  },
-  {
-    id: "merge.edited-command",
-    cases: {
-      fixture: {
-        id: "fixture",
-        target: "client",
-        title: "an edited /merge comment while waiting aborts the merge",
-        classification: "negative",
-        checks: [
-          "command-evidence"
-        ],
-        steps: [
-          {
-            "operation": "merge",
-            "outcome": "rejected",
-            "expected": "Editing the command while waiting aborts merge and leaves the PR open"
-          }
-        ],
-        identity: OWNER_IDENTITY
-      }
-    },
-    name: "an edited /merge comment while waiting aborts the merge",
-    run: (ctx) => withSignedPr(ctx, async (pr) => {
-      await dismissApproval(ctx, pr);
-      const comment = await postComment(ctx, pr, "/merge");
-      const requestInfo = fromComment(pr, comment);
-      await awaitServerWait(ctx, comment.id);
-      await ctx.gh.rest.issues.updateComment({ owner: "civitaspo", repo: "testing-csm-ci-client", comment_id: comment.id, body: "/merge edited" });
-      await expectOp(ctx, requestInfo.match, requestInfo.since, "failure", /no longer \/merge|has been edited|was edited|is not exactly \/approve, \/merge or \/recheck/i);
-      await noMerge(ctx, pr);
-    }),
-  },
-  {
-    id: "merge.deleted-command",
-    cases: {
-      fixture: {
-        id: "fixture",
-        target: "client",
-        title: "a deleted /merge comment while waiting aborts the merge",
-        classification: "negative",
-        checks: [
-          "command-evidence"
-        ],
-        steps: [
-          {
-            "operation": "merge",
-            "outcome": "rejected",
-            "expected": "Deleting the command while waiting aborts merge and leaves the PR open"
-          }
-        ],
-        identity: OWNER_IDENTITY
-      }
-    },
-    name: "a deleted /merge comment while waiting aborts the merge",
-    run: (ctx) => withSignedPr(ctx, async (pr) => {
-      await dismissApproval(ctx, pr);
-      const comment = await postComment(ctx, pr, "/merge");
-      const requestInfo = fromComment(pr, comment);
-      await awaitServerWait(ctx, comment.id);
-      await ctx.gh.rest.issues.deleteComment({ owner: "civitaspo", repo: "testing-csm-ci-client", comment_id: comment.id });
-      await expectOp(ctx, requestInfo.match, requestInfo.since, "failure", /not found|missing|could not resolve to a node/i);
-      await noMerge(ctx, pr);
-    }),
-  },
-  {
-    id: "merge.closed-while-waiting",
-    cases: {
-      fixture: {
-        id: "fixture",
-        target: "client",
-        title: "/merge fails with one receipt when the pull request closes while waiting",
-        classification: "negative",
-        checks: [
-          "approval-policy",
-          "replay"
-        ],
-        steps: [
-          {
-            "operation": "merge",
-            "outcome": "rejected",
-            "expected": "Closing the pull request ends the wait with one failure receipt; replay is rejected without another receipt"
-          }
-        ],
-        identity: OWNER_IDENTITY
-      }
-    },
-    name: "/merge fails with one receipt when the pull request closes while waiting",
-    run: (ctx) => withSignedPr(ctx, async (pr) => {
-      await dismissApproval(ctx, pr);
-      const comment = await postComment(ctx, pr, "/merge");
-      const requestInfo = await request(ctx, pr, comment.id);
-      await awaitServerWait(ctx, comment.id);
-      await ctx.gh.rest.pulls.update({ ...splitRepository(CLIENT), pull_number: pr.number, state: "closed" });
-      await expectOp(ctx, requestInfo.match, requestInfo.since, "failure", /is closed/);
-      const receipts = (await serverComments(ctx, pr)).filter((body) => body.includes(marker("merge", comment.id)));
-      assert(receipts.length === 1, `expected one failure receipt, found ${receipts.length}`);
-      await verifyReceipt(ctx, pr, comment, "merge", /is closed[\s\S]*post a new exact `\/merge` comment/u);
-      const replay = await request(ctx, pr, comment.id);
-      await expectOp(ctx, replay.match, replay.since, "failure", /is closed/);
-      const replayReceipts = (await serverComments(ctx, pr)).filter((body) => body.includes(marker("merge", comment.id)));
-      assert(replayReceipts.length === 1, `replay changed the receipt count to ${replayReceipts.length}`);
     }),
   },
   {

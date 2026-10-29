@@ -76,7 +76,7 @@ async function main(): Promise<void> {
   }
   const readGH = github(input("read-token", true));
   if (mode === "preflight") {
-    const result = await inspectRepoSettingsPreflight({ readGH, target, actionsRepository: input("actions-repository", true), serverBotId: config.apps.server_bot_id });
+    const result = await inspectRepoSettingsPreflight({ readGH, target, actionsRepository: input("actions-repository", true) });
     if (!result.callerDistributed) throw new Error(`caller workflow is not distributed on ${target.name}`);
     if (result.autoMergeQueueCount !== 0) throw new Error(`auto-merge queue is not empty for ${target.name} (${result.autoMergeQueueCount} pull requests)`);
     core.setOutput("caller-distributed", String(result.callerDistributed));

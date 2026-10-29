@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildLabel, concurrencyKey, type LabelEvent, parseLabel, Rejection, validateIntake } from "./request.ts";
+import { automergeConcurrencyKey, buildLabel, concurrencyKey, type LabelEvent, parseLabel, Rejection, validateIntake } from "./request.ts";
 import { CLIENT_BOT_ID, config } from "./testing.ts";
 
 describe("parseLabel", () => {
@@ -91,6 +91,10 @@ describe("validateIntake", () => {
 });
 
 describe("concurrencyKey", () => {
+  test("uses the same automerge key for differently cased repository names", () => {
+    expect(automergeConcurrencyKey("Owner/Repo", 5)).toBe(automergeConcurrencyKey("owner/repo", 5));
+    expect(automergeConcurrencyKey("owner/repo", 5)).not.toBe(automergeConcurrencyKey("owner/repo", 6));
+  });
   test("uses the operation kind and the pull request or run number", () => {
     expect(concurrencyKey(parseLabel("csm-ci-merge-a", "Owner/Repo/5/6"))).toBe("merge-owner/repo#5");
     expect(concurrencyKey(parseLabel("csm-ci-securefix-a", "owner/repo/9"))).toBe("securefix-owner/repo#9");

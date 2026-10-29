@@ -1,13 +1,14 @@
 import type { Principal } from "./config.ts";
 import { Rejection } from "./request.ts";
 
-export type Command = { name: "approve" } | { name: "merge" } | { name: "recheck" };
+export type Command = { name: "approve" } | { name: "merge" } | { name: "merge-cancel" } | { name: "recheck" };
 
 export const COMMAND_TTL_MS = 60 * 60_000;
 export function parseCommand(body: string): Command | undefined {
   const text = body.trim();
   if (text === "/approve") return { name: "approve" };
   if (text === "/merge") return { name: "merge" };
+  if (text === "/merge cancel") return { name: "merge-cancel" };
   if (text === "/recheck") return { name: "recheck" };
   return undefined;
 }
@@ -29,7 +30,7 @@ export function validateComment(c: CommentFacts, repository: string, pullNumber:
     throw new Rejection(`comment ${c.id} is not on ${repository}#${pullNumber}`);
   }
   const command = parseCommand(c.body);
-  if (!command) throw new Rejection(`comment ${c.id} is not exactly /approve, /merge or /recheck`);
+  if (!command) throw new Rejection(`comment ${c.id} is not exactly /approve, /merge, /merge cancel or /recheck`);
   if (command.name === "recheck") return command;
   if (c.lastEditedAt !== null || c.createdAt !== c.updatedAt) throw new Rejection(`comment ${c.id} was edited after it was posted`);
   const age = now.getTime() - new Date(c.createdAt).getTime();

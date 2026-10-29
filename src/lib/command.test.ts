@@ -14,6 +14,9 @@ describe("parseCommand", () => {
     ["/approved", undefined],
     ["/recheck now", undefined],
     ["/merge", { name: "merge" }],
+    ["/merge cancel", { name: "merge-cancel" }],
+    [" /merge cancel ", { name: "merge-cancel" }],
+    ["/merge cancel now", undefined],
     ["", undefined],
   ];
   test.each(cases)("%p", (body, expected) => {
@@ -41,11 +44,16 @@ describe("validateComment", () => {
     expect(validateComment(comment({ createdAt: "2026-10-24T11:00:00Z", updatedAt: "2026-10-24T11:00:00Z" }), "owner/repo", 12, NOW)).toEqual({ name: "approve" });
   });
 
+  test("accepts a fresh cancellation command", () => {
+    expect(validateComment(comment({ body: "/merge cancel" }), "owner/repo", 12, NOW)).toEqual({ name: "merge-cancel" });
+  });
+
   const rejects: [string, Partial<CommentFacts>, RegExp][] = [
     ["comment on another pull request", { issueUrl: "https://api.github.com/repos/owner/repo/issues/13" }, /not on owner\/repo#12/],
     ["comment on a suffix-matching number", { issueUrl: "https://api.github.com/repos/owner/repo/issues/112" }, /not on owner\/repo#12/],
     ["comment in another repository", { issueUrl: "https://api.github.com/repos/owner/other/issues/12" }, /not on owner\/repo#12/],
     ["not a command", { body: "/approve please" }, /not exactly/],
+    ["cancel command with extra text", { body: "/merge cancel now" }, /not exactly/],
     ["edited comment", { updatedAt: "2026-10-24T11:31:00Z" }, /was edited/],
     ["same-second edited comment", { lastEditedAt: "2026-10-24T11:30:00Z" }, /was edited/],
     ["older than 60 minutes", { createdAt: "2026-10-24T10:59:59Z", updatedAt: "2026-10-24T10:59:59Z" }, /older than 60 minutes/],
@@ -53,6 +61,16 @@ describe("validateComment", () => {
   ];
   test.each(rejects)("rejects %s", (_, over, message) => {
     expect(() => validateComment(comment(over), "owner/repo", 12, NOW)).toThrow(message);
+  });
+
+  test("reports the accepted command set when cancellation has extra text", () => {
+    try {
+      validateComment(comment({ body: "/merge cancel now" }), "owner/repo", 12, NOW);
+      throw new Error("expected validation to reject the comment");
+    } catch (error) {
+      expect(error).toBeInstanceOf(Rejection);
+      if (error instanceof Error) expect(error.message).toBe("comment 9 is not exactly /approve, /merge, /merge cancel or /recheck");
+    }
   });
 
   test("/recheck skips the freshness checks", () => {

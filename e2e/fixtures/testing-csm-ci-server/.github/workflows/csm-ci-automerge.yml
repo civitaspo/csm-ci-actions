@@ -1,0 +1,23 @@
+name: csm-ci automerge e2e sweep
+run-name: csm-ci-automerge ${{ inputs.correlation }}
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      correlation:
+        description: Unique e2e run identifier.
+        required: false
+        type: string
+
+permissions: {}
+
+jobs:
+  sweep:
+    # jactionlint ignore=unpinned-uses
+    uses: civitaspo/csm-ci-actions/.github/workflows/server-automerge.yml@e2e
+    secrets:
+      CSM_CI_SERVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+    permissions:
+      contents: read
