@@ -443,8 +443,9 @@ describe("mergeReservation", () => {
 
   test.each([
     ["closed", { state: "closed" }, "inactive"],
-    ["merged", { state: "closed", merged: true }, "success"],
-    ["changed identity", { node_id: "other" }, "inactive"],
+    ["merged", { merged: true }, "success"],
+    ["changed repository ID", { base: { ref: "main", repo: { id: 999, full_name: "owner/repo", default_branch: "main" } } }, "inactive"],
+    ["changed pull request ID", { node_id: "other" }, "inactive"],
   ] as const)("rechecks a %s pull request after a conflict", async (_case, change, expectedState) => {
     const original = pull();
     const changed = { ...original, ...change };
