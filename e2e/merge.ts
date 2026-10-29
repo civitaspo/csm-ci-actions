@@ -278,9 +278,12 @@ export const merge: Scenario[] = [
     await waitForCsmMerge(ctx, pr, head);
     await assertReservation(ctx, pr, "SUCCESS");
   })),
-  { ...automergeScenario("head-change-needs-approval", "A reservation waits when its new head has not been approved", async (ctx) => withRepositoryPolicy(ctx, { sensitive_paths: { paths: ["e2e/**"], exempt: [] } }, async () => withSignedPr(ctx, async (pr) => {
-    const approval = await postComment(ctx, pr, "/approve");
-    await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: approval.id } }, approval.since, "success");
+  { ...automergeScenario("head-change-needs-approval", "A reservation waits when its new head has not been approved", async (ctx) => withSignedPr(ctx, async (pr) => withServerConfig(ctx, (text) => {
+    const operations = "ops: [approve, merge, policy-check, securefix, release]";
+    assert(text.includes(operations), "could not find the client fixture operations");
+    return text.replace(operations, "ops: [merge, policy-check, securefix, release]");
+  }, async () => {
+    assert((await approverReviews(ctx, pr)).some((review) => review.state === "APPROVED" && review.commit_id === pr.head), "original head did not receive approval");
     const { data: pull } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
     await ctx.gh.graphql("mutation($pull:ID!){convertPullRequestToDraft(input:{pullRequestId:$pull}){pullRequest{isDraft}}}", { pull: pull.node_id });
     await reserve(ctx, pr);
