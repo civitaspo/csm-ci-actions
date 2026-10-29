@@ -116,11 +116,11 @@ docs/, e2e/
   - The comment belongs to the target PR, and its body matches the command exactly.
   - It is unedited (`updated_at == created_at` and GraphQL `lastEditedAt == null`) and no more than 60 minutes old.
   - The author's ID and `type` match.
-- An accepted comment gets 🚀. For `/approve` and `/merge`, on success and failure alike, the server posts a receipt with the marker `<!-- csm-ci:<op>:<comment_id> -->`.
-- **Replay**: a request is rejected if a marker authored by the Server bot already exists. A collaborator who deletes the marker can only retry the same command against the same head, which does no harm.
-- **Head pinning**: commands take no argument. The server pins the head it observed and rejects the request when a `head_ref_force_pushed` event follows the comment or the head's committer date is newer than the comment. A short SHA argument could be brute-forced and a full one is impractical to type. `/approve` requires every commit to come from a trusted committer, so a swapped commit can only come from one.
-- **Platform auto-merge**: a `/merge` that enables auto-merge delegates the merge-time checks to the default-branch rules and `csm-ci/policy`. Head pinning, the kill switch, merger trust, Bot ownership, and configuration changes are not rechecked after enabling. A later push dismisses the approval, but a fresh approval of the new head lets GitHub merge it without another `/merge`. This tradeoff is accepted so a request survives a late approval.
-- **Kill switch**: while a self-merge request waits, the server re-reads the comment on every poll and aborts if it was edited or deleted. A `/merge` that enabled platform auto-merge checks the comment only at acceptance; see [Merge](merge.md#platform-auto-merge).
+- An accepted comment gets 🚀. `/approve` receives a receipt with the marker `<!-- csm-ci:approve:<comment_id> -->`. `/merge` creates a reservation and reports its result with a deployment-specific marker; see [Merge](merge.md).
+- **Replay**: `/approve` is rejected if a marker authored by the Server bot already exists. `/merge` checks the same marker and also searches for an active reservation with the command comment ID, so deleting a receipt cannot create a second reservation.
+- **Head pinning**: commands take no argument. `/approve` pins the head it observed and rejects the request when a `head_ref_force_pushed` event follows the comment or the head's committer date is newer than the comment. `/merge` checks the same conditions at acceptance, then reserves the pull request rather than pinning one head. The client forwards `/merge cancel` as a merge operation. The server reads the comment body and validates the cancellation command. Before a merge, the server requires approval, policy, and required checks for the current head.
+- **Reservation cancellation**: editing or deleting an accepted `/merge` comment does not cancel its reservation. A trusted merger cancels it with `/merge cancel`.
+- **Auto-merge**: csm-ci does not enable GitHub auto-merge. It disables an existing auto-merge request immediately before its own squash merge. A previously enabled request can merge before that point; the server checks the pull request state during final validation.
 - **`/recheck`** re-runs the policy check and the automatic approval decision for the current head after a transient GitHub failure. Its result depends only on current API state, so it is idempotent. It skips the edit, 60-minute and replay checks, posts no receipt, and never forces an approval.
 
 ### S6. Placement of secrets and permissions
@@ -129,7 +129,7 @@ docs/, e2e/
 - The release build job declares no environment.
 - **Client App** is installed only on the server repository, with `issues: write`.
 - **Server App** permissions:
-  - `contents: write`, `pull_requests: write`, `issues: write`, `checks: write`, `actions: read`.
+  - `contents: write`, `pull_requests: write`, `issues: write`, `checks: write`, `actions: read`. Deployments read and write access on the server repository is required for automerge reservations.
   - `workflows: write`: minted only when securefix allows workflow changes, for managed files, and on the final merge token after readiness succeeds. Read and notification tokens never receive it.
   - `administration: write`: minted only in repo-settings jobs. Unlike an admin PAT, the token expires in an hour, can be limited to one repository, is not tied to a person and needs no renewal.
 - **Approver App** needs `contents: write` installed so its approval counts toward required approvals; its tokens are minted with `pull_requests: write` only.
@@ -146,7 +146,7 @@ docs/, e2e/
 - For required checks produced by GitHub Actions, a PR author with write access can modify the workflow. The real gates are the approval and `csm-ci/policy`.
 - Fork PRs are out of scope for securefix. approve and policy-check run on `pull_request_target` but never check out PR code.
 - Head pinning cannot detect a push by a trusted committer that forged `committedDate`.
-- The final merge token carries `workflows: write` for every ready PR, to avoid a separate path decision before minting it. It is used only to merge the pinned head after final revalidation, or to enable platform auto-merge for it after acceptance, and does not allow securefix workflow changes when `allow_workflow_changes` is false.
+- The final merge token carries `workflows: write` for every ready PR, to avoid a separate path decision before minting it. It is used only to merge the current head after final revalidation and does not allow securefix workflow changes when `allow_workflow_changes` is false.
 - The `/e2e` comment command ([testing](testing.md#running-e2e)) can run the pull request's own `e2e/` harness with the `csm-ci-e2e` credentials. That is the one place candidate code receives them. It is allowed only when the commenter is the repository owner, the head branch is in this repository, and every PR commit is GitHub-verified and authored by the owner. Otherwise the harness comes from `main`. The workflow file always comes from `main`.
 - **All server jobs share the Server App key**, so a compromise of any job can mint an `administration: write` token. Narrowing token permissions per job is operational discipline, not a boundary. Separating it would need a third App and environment.
 
@@ -174,9 +174,10 @@ This is the single source for names. The implementation, docs and setup skill us
 | Location | Name | Contents |
 |---|---|---|
 | server repo | `csm-ci` | Server and Approver credentials; Terraform provider signing credentials when enabled |
+| server repo | `csm-ci-automerge` | No secrets or protection rules. Server App-created automerge deployments only. |
 | csm-ci-actions | `csm-ci-e2e` | e2e harness credentials |
 
-Both allow deployments only from the default branch.
+The `csm-ci` and `csm-ci-e2e` environments allow deployments only from the default branch. The `csm-ci-automerge` environment has no secrets or protection rules.
 
 ### Environment `csm-ci` of the server repo
 
@@ -218,5 +219,7 @@ Terraform provider publication only. The production and testing servers each use
 | label | `csm-ci-<op>-*` |
 | check | `csm-ci/policy` |
 | branch | `csm-ci/repo-settings`, `release/next`, `e2e` |
+| deployment task | `csm-ci:automerge` |
+| label | `csm-ci/automerge` (display only) |
 | marker | `<!-- csm-ci:... -->` |
 | configuration file | `csm-ci.yaml` |
