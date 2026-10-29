@@ -51,12 +51,11 @@ export async function inspectRepoSettingsPreflight(args: {
   readGH: GitHub;
   target: RepoSettingsTarget;
   actionsRepository?: string;
-  serverBotId?: number;
 }): Promise<Pick<DispatchPreflight, "callerDistributed" | "autoMergeQueueCount">> {
   const actionsRepository = (args.actionsRepository ?? "civitaspo/csm-ci-actions").toLowerCase();
   const repo = await args.readGH.rest.repos.get(splitRepository(args.target.name));
   const callerDistributed = await hasDistributedCaller(args.readGH, args.target, repo.data.default_branch, actionsRepository);
-  const autoMergeQueueCount = await countAutoMergeQueue(args.readGH, args.target.name, args.serverBotId);
+  const autoMergeQueueCount = await countAutoMergeQueue(args.readGH, args.target.name);
   return { callerDistributed, autoMergeQueueCount };
 }
 
@@ -121,22 +120,18 @@ async function hasDistributedCaller(gh: GitHub, target: RepoSettingsTarget, defa
   return requirements.every((requirement) => distributed.has(requirement.workflow));
 }
 
-// Auto-merge queued by the Server bot came from an accepted /merge, so only other actors block activation.
-async function countAutoMergeQueue(gh: GitHub, fullName: string, serverBotId?: number): Promise<number> {
+async function countAutoMergeQueue(gh: GitHub, fullName: string): Promise<number> {
   const { owner, repo } = splitRepository(fullName);
-  const page = z.object({ repository: z.object({ pullRequests: z.object({ nodes: z.array(z.object({ autoMergeRequest: z.object({ enabledBy: z.object({ __typename: z.string(), databaseId: z.number().optional() }).nullable().optional() }).nullable() })), pageInfo: z.object({ hasNextPage: z.boolean(), endCursor: z.string().nullable() }) }).nullable() }).nullable() });
+  const page = z.object({ repository: z.object({ pullRequests: z.object({ nodes: z.array(z.object({ autoMergeRequest: z.object({ __typename: z.string() }).nullable() })), pageInfo: z.object({ hasNextPage: z.boolean(), endCursor: z.string().nullable() }) }).nullable() }).nullable() });
   let cursor: string | null = null;
   let total = 0;
   const seenCursors = new Set<string>();
   do {
-    const response = await gh.graphql<unknown>("query($owner:String!,$name:String!,$cursor:String){repository(owner:$owner,name:$name){pullRequests(states:OPEN,first:100,after:$cursor){nodes{autoMergeRequest{enabledBy{__typename ... on Bot{databaseId}}}} pageInfo{hasNextPage endCursor}}}}", { owner, name: repo, cursor });
+    const response = await gh.graphql<unknown>("query($owner:String!,$name:String!,$cursor:String){repository(owner:$owner,name:$name){pullRequests(states:OPEN,first:100,after:$cursor){nodes{autoMergeRequest{__typename}} pageInfo{hasNextPage endCursor}}}}", { owner, name: repo, cursor });
     const result = page.parse(response);
     const connection = result.repository?.pullRequests;
     if (!connection) throw new Rejection(`repository ${fullName} is unavailable for auto-merge preflight`);
-    total += connection.nodes.filter((node) => {
-      const by = node.autoMergeRequest?.enabledBy;
-      return node.autoMergeRequest !== null && !(by?.__typename === "Bot" && by.databaseId === serverBotId);
-    }).length;
+    total += connection.nodes.filter((node) => node.autoMergeRequest !== null).length;
     cursor = connection.pageInfo.hasNextPage ? connection.pageInfo.endCursor : null;
     if (connection.pageInfo.hasNextPage && cursor === null) throw new Error("GitHub returned a next page without a cursor");
     if (cursor !== null && seenCursors.has(cursor)) throw new Error("GitHub repeated an auto-merge queue cursor");

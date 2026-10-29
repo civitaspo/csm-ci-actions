@@ -18,6 +18,8 @@ outputs:
     description: JSON object of the request numbers.
   concurrency-key:
     description: Key that serializes requests for the same pull request or run.
+  automerge-concurrency-key:
+    description: Key that serializes automerge evaluations for the same pull request.
   release:
     description: Validated release build configuration, when release is enabled.
   server-bot-id:

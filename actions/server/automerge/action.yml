@@ -1,0 +1,63 @@
+name: csm-ci automerge
+description: List, evaluate, merge, or record errors for deployment-backed merge reservations.
+inputs:
+  mode:
+    description: list selects active sweep reservations; resolve finds a reservation's current repository by immutable ID; evaluate checks readiness; merge revalidates and merges; error-status records an evaluation error.
+    required: true
+  github-token:
+    description: Token with contents:read on the server repository for csm-ci.yaml.
+    default: ${{ github.token }}
+  deployments-token:
+    description: Server App token with deployments read or write access on the server repository.
+    required: true
+  discovery-token:
+    description: Server App token with metadata read access for list, resolve, and error-status modes.
+    required: false
+  server-token:
+    description: Server App token with contents, pull requests, checks, and issues read access on the client repository.
+    required: false
+  notification-token:
+    description: Server App token with issues and pull requests write access on the client repository.
+    required: false
+  write-token:
+    description: Server App token with contents, pull requests, and workflows write access, required only in merge mode.
+    required: false
+  config-path:
+    description: Path of csm-ci.yaml in the server repository.
+    default: csm-ci.yaml
+  repository:
+    description: owner/repo of the client repository.
+    required: false
+  pull-number:
+    description: Pull request number to evaluate.
+    required: false
+  deployment-id:
+    description: Deployment ID for a sweep reservation.
+    required: false
+  head:
+    description: Head SHA returned by evaluate mode, required in merge mode.
+    required: false
+outputs:
+  matrix:
+    description: JSON array of active reservation repository, pull_number, and deployment_id values.
+  count:
+    description: Number of reservations returned by list mode.
+  ready:
+    description: true when the reservation is ready to merge.
+  head:
+    description: Current pull request head SHA after readiness succeeds.
+  deployment-id:
+    description: Reservation deployment ID found by evaluate mode.
+  resolved:
+    description: true when resolve mode found the current repository for an active reservation.
+  repository:
+    description: Current owner/repo resolved from the reservation's immutable repository ID.
+  repository-owner:
+    description: Current owner of the resolved repository.
+  repository-name:
+    description: Current name of the resolved repository.
+  concurrency-key:
+    description: Automerge concurrency key based on the resolved repository name and pull request number.
+runs:
+  using: node24
+  main: ../../../dist/server-automerge.js

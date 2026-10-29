@@ -1,8 +1,8 @@
 name: csm-ci merge
-description: Squash-merge a ready pull request, enable platform auto-merge, or wait for a fresh, policy-compliant approval.
+description: Accept or cancel a pull request merge reservation.
 inputs:
   mode:
-    description: wait checks readiness; merge rechecks readiness and performs the merge; failure-receipt posts an accepted wait failure.
+    description: accept validates the command and creates or cancels its reservation.
     required: true
   github-token:
     description: Token with contents:read on the server repository to read csm-ci.yaml.
@@ -11,44 +11,23 @@ inputs:
     description: Path of csm-ci.yaml in the server repository.
     default: csm-ci.yaml
   server-token:
-    description: Server App read token for the client repository.
+    description: Server App token for the client repository.
     required: true
   notification-token:
-    description: Server App token with issues:write for reactions and request receipts.
+    description: Server App token with issues:write for reactions and command receipts.
     required: true
-  write-token:
-    description: Server App token with contents:write and pull_requests:write, required only in merge mode.
-    required: false
+  deployments-token:
+    description: Server App token with deployments:write on the server repository.
+    required: true
   repository:
     description: owner/repo of the client repository.
     required: true
   args:
     description: JSON request numbers from intake, pull_number and comment_id.
     required: true
-  head:
-    description: Pinned head SHA from wait mode, required in merge and failure-receipt modes.
-    required: false
-  platform:
-    description: true from wait mode when merge mode should enable platform auto-merge unless the pull request is already mergeable.
-    required: false
-  failure-message:
-    description: Original wait failure to include in the failure receipt.
-    required: false
 outputs:
-  ready:
-    description: true when the request is ready to merge.
-  accepted:
-    description: true when the Server App accepted the command and reacted with a rocket.
-  error:
-    description: Wait failure message for a fresh-token failure receipt step.
-  head:
-    description: Pinned pull request head SHA, available after acceptance even if readiness fails.
-  platform:
-    description: true when the request uses platform auto-merge instead of the self-merge wait.
-  result:
-    description: merged when the pull request was merged, or auto-merge when platform auto-merge was enabled.
-  merge-commit:
-    description: Squash merge commit SHA.
+  reservation-id:
+    description: Deployment ID for the accepted reservation.
 runs:
   using: node24
   main: ../../../dist/server-merge.js

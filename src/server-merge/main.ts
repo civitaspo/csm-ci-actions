@@ -1,7 +1,6 @@
-import { setTimeout as sleep } from "node:timers/promises";
 import * as core from "@actions/core";
-import { type MergeArgs, type MergeContext, postMergeFailureReceipt, runMerge, waitForMerge } from "../lib/merge.ts";
-import { github, loadConfig, loadCurrentServerConfig } from "../lib/github.ts";
+import { type MergeArgs, type MergeContext, acceptMerge } from "../lib/merge.ts";
+import { github, loadCurrentServerConfig } from "../lib/github.ts";
 
 function env(name: string): string {
   const value = process.env[name];
@@ -10,50 +9,26 @@ function env(name: string): string {
 }
 
 async function main(): Promise<void> {
-  const read = github(core.getInput("server-token", { required: true }));
-  const workflowRepository = env("GITHUB_REPOSITORY");
-  const configPath = core.getInput("config-path", { required: true });
+  if (core.getInput("mode", { required: true }) !== "accept") throw new Error("unknown merge action mode");
+  const serverRepository = env("GITHUB_REPOSITORY");
   const configReader = github(core.getInput("github-token", { required: true }));
-  const config = await loadConfig(configReader, workflowRepository, env("GITHUB_SHA"), configPath);
-  const args = JSON.parse(core.getInput("args", { required: true })) as MergeArgs;
+  const configPath = core.getInput("config-path", { required: true });
+  const config = await loadCurrentServerConfig(configReader, serverRepository, configPath);
   const ctx: MergeContext = {
-    server: read,
+    server: github(core.getInput("server-token", { required: true })),
+    deployments: github(core.getInput("deployments-token", { required: true })),
     notify: github(core.getInput("notification-token", { required: true })),
-    ...(core.getInput("mode") === "merge" ? { write: github(core.getInput("write-token", { required: true })) } : {}),
     config,
-    reloadConfig: () => loadCurrentServerConfig(configReader, workflowRepository, configPath),
-    repository: core.getInput("repository", { required: true }),
-    serverRun: { serverUrl: env("GITHUB_SERVER_URL"), repository: env("GITHUB_REPOSITORY"), id: env("GITHUB_RUN_ID"), attempt: env("GITHUB_RUN_ATTEMPT") },
+    reloadConfig: () => loadCurrentServerConfig(configReader, serverRepository, configPath),
+    repository: core.getInput("repository", { required: true }).toLowerCase(),
+    serverRepository,
+    serverRun: { serverUrl: env("GITHUB_SERVER_URL"), repository: serverRepository, id: env("GITHUB_RUN_ID"), attempt: env("GITHUB_RUN_ATTEMPT") },
     now: () => new Date(),
-    sleep: async (milliseconds: number) => { await sleep(milliseconds); },
   };
-  const mode = core.getInput("mode", { required: true });
-  if (mode === "wait") {
-    ctx.onAccepted = (head) => {
-      core.setOutput("accepted", "true");
-      core.setOutput("head", head);
-    };
-    try {
-      const ready = await waitForMerge(ctx, args);
-      core.setOutput("ready", "true");
-      core.setOutput("head", ready.head);
-      core.setOutput("platform", String(ready.platform === true));
-      core.info(`pull request is ready at ${ready.head}`);
-    } catch (error) {
-      core.setOutput("error", error instanceof Error ? error.message : String(error));
-      throw error;
-    }
-    return;
-  }
-  if (mode === "failure-receipt") {
-    await postMergeFailureReceipt(ctx, args, core.getInput("failure-message", { required: true }), core.getInput("head", { required: true }));
-    return;
-  }
-  if (mode !== "merge") throw new Error(`unknown merge action mode: ${mode}`);
-  const outcome = await runMerge(ctx, args, { head: core.getInput("head", { required: true }), platform: core.getInput("platform") === "true" });
-  core.setOutput("result", outcome.result);
-  if (outcome.result === "merged") core.setOutput("merge-commit", outcome.mergeCommit);
-  core.info(outcome.result === "merged" ? `merged at ${outcome.mergeCommit}` : `auto-merge enabled at ${outcome.head}`);
+  const args = JSON.parse(core.getInput("args", { required: true })) as MergeArgs;
+  const result = await acceptMerge(ctx, args);
+  if (result.reservation) core.setOutput("reservation-id", String(result.reservation.deploymentId));
+  core.info(`merge command ${result.kind}`);
 }
 
-main().catch((e: unknown) => core.setFailed(e instanceof Error ? e.message : String(e)));
+main().catch((error: unknown) => core.setFailed(error instanceof Error ? error.message : String(error)));

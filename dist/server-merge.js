@@ -32,6 +32,19 @@ var __toESM = (mod, isNodeMode, target) => {
   return to;
 };
 var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
+var __returnValue = (v) => v;
+function __exportSetter(name, newValue) {
+  this[name] = __returnValue.bind(null, newValue);
+}
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, {
+      get: all[name],
+      enumerable: true,
+      configurable: true,
+      set: __exportSetter.bind(all, name)
+    });
+};
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // node_modules/undici/lib/core/symbols.js
@@ -26047,8 +26060,18 @@ var require_public_api = __commonJS(function(exports) {
   exports.stringify = stringify;
 });
 
-// src/server-merge/main.ts
-import { setTimeout as sleep } from "node:timers/promises";
+// node_modules/zod/v4/classic/iso.js
+var exports_iso = {};
+__export(exports_iso, {
+  ZodISODate: () => ZodISODate,
+  ZodISODateTime: () => ZodISODateTime,
+  ZodISODuration: () => ZodISODuration,
+  ZodISOTime: () => ZodISOTime,
+  date: () => date2,
+  datetime: () => datetime2,
+  duration: () => duration2,
+  time: () => time2
+});
 
 // node_modules/@actions/core/lib/command.js
 import * as os from "os";
@@ -32586,6 +32609,19 @@ function preprocess(fn, schema) {
     out: schema
   });
 }
+// node_modules/zod/v4/classic/iso.js
+function datetime2(params) {
+  return _isoDateTime(ZodISODateTime, params);
+}
+function date2(params) {
+  return _isoDate(ZodISODate, params);
+}
+function time2(params) {
+  return _isoTime(ZodISOTime, params);
+}
+function duration2(params) {
+  return _isoDuration(ZodISODuration, params);
+}
 // src/lib/config.ts
 var import_picomatch = __toESM(require_picomatch2(), 1);
 
@@ -32593,7 +32629,7 @@ var import_picomatch = __toESM(require_picomatch2(), 1);
 var composer = require_composer();
 var Document = require_Document();
 var Schema = require_Schema();
-var errors3 = require_errors2();
+var errors4 = require_errors2();
 var Alias = require_Alias();
 var identity = require_identity();
 var Pair = require_Pair();
@@ -32609,9 +32645,9 @@ var visit = require_visit();
 var $Composer = composer.Composer;
 var $Document = Document.Document;
 var $Schema = Schema.Schema;
-var $YAMLError = errors3.YAMLError;
-var $YAMLParseError = errors3.YAMLParseError;
-var $YAMLWarning = errors3.YAMLWarning;
+var $YAMLError = errors4.YAMLError;
+var $YAMLParseError = errors4.YAMLParseError;
+var $YAMLWarning = errors4.YAMLWarning;
 var $Alias = Alias.Alias;
 var $isAlias = identity.isAlias;
 var $isCollection = identity.isCollection;
@@ -32773,7 +32809,7 @@ var RepositoryEntry = strictObject({
     }).optional()
   }).optional(),
   sensitive_paths: strictObject({ paths: array(string2().min(1)).optional(), exempt: array(Principal).optional() }).optional(),
-  merge: strictObject({ allow_bot_requests: boolean2().optional(), use_platform_automerge: boolean2().optional() }).optional()
+  merge: strictObject({ allow_bot_requests: boolean2().optional() }).optional()
 }).superRefine((entry, ctx) => {
   if (entry.ops.includes("release") !== (entry.release !== undefined)) {
     ctx.addIssue({ code: "custom", path: ["release"], message: "release settings must be present exactly when release is enabled" });
@@ -32882,6 +32918,8 @@ function parseCommand(body) {
     return { name: "approve" };
   if (text === "/merge")
     return { name: "merge" };
+  if (text === "/merge cancel")
+    return { name: "merge-cancel" };
   if (text === "/recheck")
     return { name: "recheck" };
   return;
@@ -32892,7 +32930,7 @@ function validateComment(c, repository, pullNumber, now) {
   }
   const command = parseCommand(c.body);
   if (!command)
-    throw new Rejection(`comment ${c.id} is not exactly /approve, /merge or /recheck`);
+    throw new Rejection(`comment ${c.id} is not exactly /approve, /merge, /merge cancel or /recheck`);
   if (command.name === "recheck")
     return command;
   if (c.lastEditedAt !== null || c.createdAt !== c.updatedAt)
@@ -32902,10 +32940,10 @@ function validateComment(c, repository, pullNumber, now) {
     throw new Rejection(`comment ${c.id} is older than 60 minutes`);
   return command;
 }
-function checkPullState(p) {
+function checkPullState(p, allowDraft = false) {
   if (p.state !== "open")
     throw new Rejection(`#${p.number} is ${p.state}`);
-  if (p.draft)
+  if (p.draft && !allowDraft)
     throw new Rejection(`#${p.number} is a draft`);
   if (p.headRepository?.toLowerCase() !== p.baseRepository.toLowerCase())
     throw new Rejection(`#${p.number} comes from a fork`);
@@ -33258,7 +33296,7 @@ function expand(template, context) {
     return template.replace(/\/$/, "");
   }
 }
-function parse3(options) {
+function parse4(options) {
   let method = options.method.toUpperCase();
   let url = (options.url || "/").replace(/:([a-z]\w+)/g, "{$1}");
   let headers = Object.assign({}, options.headers);
@@ -33313,7 +33351,7 @@ function parse3(options) {
   return Object.assign({ method, url, headers }, typeof body !== "undefined" ? { body } : null, options.request ? { request: options.request } : null);
 }
 function endpointWithDefaults(defaults, route, options) {
-  return parse3(merge2(defaults, route, options));
+  return parse4(merge2(defaults, route, options));
 }
 function withDefaults(oldDefaults, newDefaults) {
   const DEFAULTS2 = merge2(oldDefaults, newDefaults);
@@ -33322,7 +33360,7 @@ function withDefaults(oldDefaults, newDefaults) {
     DEFAULTS: DEFAULTS2,
     defaults: withDefaults.bind(null, DEFAULTS2),
     merge: merge2.bind(null, DEFAULTS2),
-    parse: parse3
+    parse: parse4
   });
 }
 var endpoint = withDefaults(null, DEFAULTS);
@@ -33372,7 +33410,7 @@ var NullObject = /* @__PURE__ */ (() => {
   C.prototype = Object.create(null);
   return C;
 })();
-function parse4(header, options) {
+function parse5(header, options) {
   const stopFlags = SEMI_FLAG | (options?.comma === true ? COMMA_FLAG : 0);
   const len = header.length;
   let valueStart = options?.start ?? 0;
@@ -34003,7 +34041,7 @@ async function getResponseData(response) {
   if (!contentType) {
     return response.text().catch(noop);
   }
-  const mimetype = parse4(contentType);
+  const mimetype = parse5(contentType);
   if (isJSONResponse(mimetype)) {
     let text = "";
     try {
@@ -37011,41 +37049,6 @@ async function loadCurrentServerConfig(gh, repository, path) {
   return config;
 }
 
-// src/lib/notify.ts
-function marker(op, id) {
-  return `<!-- csm-ci:${op}:${id} -->`;
-}
-function hasServerMarker(comments, text, serverBotId) {
-  return comments.some((c) => Number(c.user?.id) === serverBotId && (c.body ?? "").includes(text));
-}
-async function postResult(gh, repository, issueNumber, markerText, body) {
-  await gh.rest.issues.createComment({ ...splitRepository(repository), issue_number: issueNumber, body: `${markerText}
-${body}` });
-}
-function escapeHtml(text) {
-  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
-}
-function receiptFooter(input) {
-  const { repository, pullNumber, commentId, head, serverRun, mergeCommit } = input;
-  const link = (url, label) => `<a href="${escapeHtml(url)}">${escapeHtml(label)}</a>`;
-  const repoUrl = `${serverRun.serverUrl}/${repository}`;
-  const links = [
-    link(`${repoUrl}/pull/${pullNumber}#issuecomment-${commentId}`, "Request"),
-    link(`${repoUrl}/commit/${head}`, `Head ${head.slice(0, 7)}`),
-    ...mergeCommit ? [link(`${repoUrl}/commit/${mergeCommit}`, `Squash commit ${mergeCommit.slice(0, 7)}`)] : [],
-    link(`${serverRun.serverUrl}/${serverRun.repository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, `Server run ${serverRun.id}, attempt ${serverRun.attempt}`)
-  ];
-  return `<sub>${links.join(" · ")}</sub>`;
-}
-
-// src/lib/policies/signed-commits.ts
-function signedCommits(_, { trust }) {
-  return [...trust.problems, ...trust.commits.filter((c) => !c.signed).map((c) => `${c.sha} is not signed and verified`)];
-}
-
-// src/lib/policies/sensitive-paths.ts
-var import_picomatch2 = __toESM(require_picomatch2(), 1);
-
 // src/lib/github-comment.ts
 async function fetchComment(gh, repository, commentId) {
   const { data: comment } = await gh.rest.issues.getComment({ ...splitRepository(repository), comment_id: commentId });
@@ -37064,79 +37067,6 @@ async function fetchComment(gh, repository, commentId) {
     lastEditedAt: node.lastEditedAt,
     user: comment.user ? { id: Number(comment.user.id), login: comment.user.login, type: comment.user.type } : null
   };
-}
-
-// src/lib/policies/sensitive-paths.ts
-var MARKER = /<!-- csm-ci:approve:command:(\d+) -->/g;
-var MAX_FILES = 3000;
-async function sensitivePaths(policy, ctx) {
-  const { owner, repo } = splitRepository(ctx.repository);
-  const files = await ctx.gh.paginate(ctx.gh.rest.pulls.listFiles, { owner, repo, pull_number: ctx.pullNumber, per_page: 100 });
-  if (files.length >= MAX_FILES)
-    return [`pull request changes ${MAX_FILES} or more files; sensitive-paths cannot verify every file`];
-  const match = import_picomatch2.default(policy.paths, { dot: true });
-  const changed = files.filter((f) => match(f.filename) || f.previous_filename !== undefined && match(f.previous_filename));
-  if (changed.length === 0)
-    return [];
-  const exempt = policy.exempt.some((p) => p.id === ctx.authorId) && ctx.trust.commits.length > 0 && ctx.trust.commits.every((c) => c.identity.kind === "user" && c.identity.principal.id === ctx.authorId);
-  if (exempt)
-    return [];
-  const commandApproval = ctx.commandApproval;
-  if (commandApproval?.head === ctx.head && ctx.config.trust.approvers.some((p) => p.id === commandApproval.authorId))
-    return [];
-  const reviews = await ctx.gh.paginate(ctx.gh.rest.pulls.listReviews, { owner, repo, pull_number: ctx.pullNumber, per_page: 100 });
-  const candidates = reviews.filter((r) => Number(r.user?.id) === ctx.config.approver.id && r.state === "APPROVED" && r.commit_id === ctx.head);
-  for (const review of candidates) {
-    const body = review.body ?? "";
-    const markers = [...body.matchAll(MARKER)];
-    for (const marker of markers) {
-      const commentId = Number(marker[1]);
-      try {
-        const comment = await fetchComment(ctx.gh, ctx.repository, commentId);
-        const belongsToPull = comment.issueUrl.toLowerCase() === `https://api.github.com/repos/${owner}/${repo}/issues/${ctx.pullNumber}`;
-        if (comment.body !== "/approve" || !belongsToPull || comment.user?.type !== "User" || !ctx.config.trust.approvers.some((p) => p.id === comment.user?.id) || comment.createdAt !== comment.updatedAt || comment.lastEditedAt !== null)
-          continue;
-        return [];
-      } catch (error) {
-        if (typeof error === "object" && error !== null && "status" in error && error.status === 404)
-          continue;
-        if (error instanceof Rejection)
-          continue;
-        throw error;
-      }
-    }
-  }
-  const paths = changed.slice(0, 20).map((f) => f.previous_filename ? `${f.filename} (previously ${f.previous_filename})` : f.filename);
-  const more = changed.length > paths.length ? ` and ${changed.length - paths.length} more` : "";
-  return [`sensitive paths need a trusted approver's /approve: ${paths.join(", ")}${more}`];
-}
-
-// src/lib/policies/trusted-committers.ts
-function trustedCommitters(_, { trust }) {
-  return [
-    ...trust.problems,
-    ...trust.commits.flatMap((c) => {
-      if (c.identity.kind === "unknown")
-        return [`${c.sha}: ${c.identity.reason}`];
-      if (c.identity.kind === "user" && !c.trusted)
-        return [`${c.sha} is by ${c.identity.principal.login}, not a trusted committer`];
-      return [];
-    })
-  ];
-}
-
-// src/lib/policies/index.ts
-var EVALUATORS = {
-  "signed-commits": signedCommits,
-  "trusted-committers": trustedCommitters,
-  "sensitive-paths": sensitivePaths
-};
-async function evaluatePolicies(policies, ctx) {
-  return Promise.all(policies.map(async (policy) => {
-    const evaluate = EVALUATORS[policy.type];
-    const problems = await evaluate(policy, ctx);
-    return { type: policy.type, ok: problems.length === 0, problems };
-  }));
 }
 
 // src/lib/trust.ts
@@ -37217,6 +37147,33 @@ async function fetchCommitFacts(gh, repository, pullNumber) {
   return facts;
 }
 
+// src/lib/notify.ts
+function marker(op, id) {
+  return `<!-- csm-ci:${op}:${id} -->`;
+}
+function hasServerMarker(comments, text, serverBotId) {
+  return comments.some((c) => Number(c.user?.id) === serverBotId && (c.body ?? "").includes(text));
+}
+async function postResult(gh, repository, issueNumber, markerText, body) {
+  await gh.rest.issues.createComment({ ...splitRepository(repository), issue_number: issueNumber, body: `${markerText}
+${body}` });
+}
+function escapeHtml(text) {
+  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
+}
+function receiptFooter(input) {
+  const { repository, pullNumber, commentId, head, serverRun, mergeCommit } = input;
+  const link = (url, label) => `<a href="${escapeHtml(url)}">${escapeHtml(label)}</a>`;
+  const repoUrl = `${serverRun.serverUrl}/${repository}`;
+  const links = [
+    link(`${repoUrl}/pull/${pullNumber}#issuecomment-${commentId}`, "Request"),
+    link(`${repoUrl}/commit/${head}`, `Head ${head.slice(0, 7)}`),
+    ...mergeCommit ? [link(`${repoUrl}/commit/${mergeCommit}`, `Squash commit ${mergeCommit.slice(0, 7)}`)] : [],
+    link(`${serverRun.serverUrl}/${serverRun.repository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, `Server run ${serverRun.id}, attempt ${serverRun.attempt}`)
+  ];
+  return `<sub>${links.join(" · ")}</sub>`;
+}
+
 // src/lib/policy-report.ts
 var stateSchema = object({ node: object({
   id: string2(),
@@ -37227,63 +37184,226 @@ var stateSchema = object({ node: object({
   author: object({ __typename: literal("Bot"), databaseId: number2() }),
   issue: object({ number: number2(), repository: object({ nameWithOwner: string2() }) })
 }) });
+// src/lib/automerge.ts
+var ReservationPayloadSchema = strictObject({
+  version: literal(1),
+  repository_id: number2().int().positive(),
+  repository: string2().regex(/^[^/]+\/[^/]+$/),
+  pull_number: number2().int().positive(),
+  pull_node_id: string2().min(1),
+  base_ref: string2().min(1),
+  merger: strictObject({ id: number2().int().positive(), login: string2().min(1), type: _enum(["User", "Bot"]) }),
+  mode: _enum(["human", "bot"]),
+  command_comment_id: number2().int().positive(),
+  accepted_head: string2().regex(/^[0-9a-f]{40}$/),
+  accepted_at: exports_iso.datetime(),
+  expires_at: exports_iso.datetime()
+}).refine((payload) => Date.parse(payload.expires_at) === Date.parse(payload.accepted_at) + 7 * 24 * 60 * 60 * 1000, {
+  message: "expires_at must be exactly seven days after accepted_at",
+  path: ["expires_at"]
+}).refine((payload) => payload.mode === "bot" === (payload.merger.type === "Bot"), {
+  message: "mode must match the merger type",
+  path: ["mode"]
+});
+var terminalReasonPrefix = "csm-ci:automerge:reason=";
+var terminalReasons = ["external-merge", "closed", "expired", "invalidated", "rejected", "merged", "cancelled", "other"];
+function terminalReason(description) {
+  const match = description?.match(/^csm-ci:automerge:reason=([a-z-]+)\|/);
+  return terminalReasons.find((reason) => reason === match?.[1]) ?? "other";
+}
+function terminalDescription(reason, description) {
+  return `${terminalReasonPrefix}${reason}| ${description}`;
+}
+function reservationState(args) {
+  const statuses = args.statuses.filter((status) => status.creator.type === "Bot" && status.creator.databaseId === args.serverBotId);
+  const terminal = statuses.filter((status) => status.state === "success" || status.state === "failure" || status.state === "inactive").sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id - b.id)[0];
+  if (terminal)
+    return { kind: "terminal", state: terminal.state, at: terminal.createdAt, description: terminal.description, reason: terminalReason(terminal.description) };
+  const latestQueued = statuses.filter((status) => status.state === "queued").sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.id - a.id)[0];
+  return latestQueued?.description ? { kind: "active", waitingReason: latestQueued.description } : { kind: "active" };
+}
+function canCancelReservation(args) {
+  return args.commenterId === args.reservationMergerId || args.trustedMergerIds.includes(args.commenterId);
+}
+var AUTOMERGE_LABEL = "csm-ci/automerge";
+function automergeMarker(deploymentId, event) {
+  return `<!-- csm-ci:automerge:${deploymentId}:${event} -->`;
+}
+function truncateDeploymentDescription(description) {
+  const characters = Array.from(description);
+  return characters.length <= 140 ? description : `${characters.slice(0, 139).join("")}…`;
+}
 
-// src/lib/policy-check.ts
-var ALWAYS = [{ type: "signed-commits" }, { type: "trusted-committers" }];
-function effectivePolicies(config, repository) {
-  const override = repositoryEntry(config, repository)?.sensitive_paths;
-  const configured = config.policies.filter((policy) => !ALWAYS.some((always) => always.type === policy.type)).map((policy) => {
-    if (policy.type !== "sensitive-paths")
-      return policy;
-    return { type: "sensitive-paths", paths: override?.paths ?? policy.paths, exempt: override?.exempt ?? policy.exempt };
-  });
-  if (!configured.some((policy) => policy.type === "sensitive-paths") && override !== undefined) {
-    configured.push({ type: "sensitive-paths", paths: override?.paths ?? [], exempt: override?.exempt ?? [] });
+// src/lib/automerge-github.ts
+var ENVIRONMENT = "csm-ci-automerge";
+var TASK = "csm-ci:automerge";
+var LOOKBACK_MS = 14 * 24 * 60 * 60 * 1000;
+var Creator = object({ __typename: string2(), databaseId: number2().int().positive().optional() }).nullable();
+var DeploymentNode = object({
+  id: string2().min(1),
+  databaseId: number2().int().positive(),
+  task: string2(),
+  payload: unknown(),
+  createdAt: exports_iso.datetime(),
+  creator: Creator,
+  statuses: unknown()
+});
+var DeploymentPage = object({ repository: object({ deployments: object({ nodes: array(DeploymentNode), pageInfo: object({ hasNextPage: boolean2(), endCursor: string2().nullable() }) }) }) });
+var GraphStatus = object({ id: string2().min(1), state: string2(), description: string2().nullable(), createdAt: exports_iso.datetime(), creator: Creator });
+var GraphStatuses = object({ nodes: array(GraphStatus), pageInfo: object({ hasNextPage: boolean2() }) });
+var RestStatus = object({
+  id: number2().int().positive(),
+  state: string2(),
+  description: string2().nullable(),
+  created_at: exports_iso.datetime(),
+  log_url: string2().nullable().optional(),
+  environment_url: string2().nullable().optional(),
+  creator: object({ id: number2().int().positive(), type: string2() }).nullable()
+});
+var CreatedDeployment = object({ id: number2().int().positive(), node_id: string2().min(1), task: string2(), created_at: exports_iso.datetime(), creator: object({ id: number2().int().positive(), type: string2() }).nullable() });
+var DEPLOYMENTS_QUERY = `query($owner:String!,$name:String!,$cursor:String){repository(owner:$owner,name:$name){deployments(environments:["${ENVIRONMENT}"],first:100,after:$cursor,orderBy:{field:CREATED_AT,direction:DESC}){pageInfo{hasNextPage endCursor}nodes{id databaseId task payload createdAt creator{__typename ... on Bot{databaseId}} statuses(first:100){pageInfo{hasNextPage}nodes{id state description createdAt creator{__typename ... on Bot{databaseId}}}}}}}}`;
+async function listReservations(args) {
+  const { owner, repo } = splitRepository(args.serverRepository);
+  const cutoff = args.now.getTime() - LOOKBACK_MS;
+  const nodes = [];
+  let cursor = null;
+  const seen = new Set;
+  do {
+    const response = await args.server.graphql(DEPLOYMENTS_QUERY, { owner, name: repo, cursor });
+    const page = DeploymentPage.parse(response).repository.deployments;
+    for (const node of page.nodes) {
+      if (Date.parse(node.createdAt) < cutoff)
+        return withStatuses(args, nodes);
+      nodes.push(node);
+    }
+    if (!page.pageInfo.hasNextPage)
+      break;
+    cursor = page.pageInfo.endCursor;
+    if (!cursor || seen.has(cursor))
+      throw new Error("GitHub returned a repeated deployment cursor");
+    seen.add(cursor);
+  } while (true);
+  return withStatuses(args, nodes);
+}
+async function findReservationsForPull(args) {
+  const { repositoryId, pullNumber, ...listArgs } = args;
+  return (await listReservations(listArgs)).filter((r) => r.payload.repository_id === repositoryId && r.payload.pull_number === pullNumber);
+}
+async function createReservation(args) {
+  const find = () => findReservationsForPull({ server: args.server, serverRepository: args.serverRepository, serverBotId: args.serverBotId, repositoryId: args.payload.repository_id, pullNumber: args.payload.pull_number, now: new Date });
+  const existing = await find();
+  const replay = existing.find((r) => r.payload.command_comment_id === args.payload.command_comment_id);
+  if (replay)
+    return replay;
+  const { owner, repo } = splitRepository(args.serverRepository);
+  try {
+    const { data } = await args.server.rest.repos.createDeployment({ owner, repo, ref: args.defaultBranch, task: TASK, environment: ENVIRONMENT, auto_merge: false, required_contexts: [], production_environment: false, transient_environment: false, description: `${args.payload.repository}#${args.payload.pull_number}`, payload: args.payload });
+    const created = CreatedDeployment.parse(data);
+    if (created.task !== TASK || created.creator?.type !== "Bot" || created.creator.id !== args.serverBotId)
+      throw new Error("created deployment identity does not match csm-ci automerge");
+    return { deploymentId: created.id, nodeId: created.node_id, createdAt: created.created_at, payload: args.payload, statuses: [], state: { kind: "active" } };
+  } catch (error) {
+    if (!ambiguousWrite(error))
+      throw error;
+    const created = (await find()).find((r) => r.payload.command_comment_id === args.payload.command_comment_id);
+    if (created)
+      return created;
+    throw error;
   }
-  return [...ALWAYS, ...configured];
 }
-async function evaluatePullPolicies(ctx, commandApproval) {
-  const trust = evaluateTrust(await fetchCommitFacts(ctx.server, ctx.repository, ctx.pull.number), ctx.pull.headSha, ctx.config);
-  const policies = effectivePolicies(ctx.config, ctx.repository);
-  return evaluatePolicies(policies, {
-    trust,
-    gh: ctx.server,
-    config: ctx.config,
-    repository: ctx.repository,
-    pullNumber: ctx.pull.number,
-    head: ctx.pull.headSha,
-    authorId: ctx.pull.authorId,
-    ...commandApproval ? { commandApproval } : {}
-  });
+async function createReservationStatus(args) {
+  const { owner, repo } = splitRepository(args.serverRepository);
+  const body = { owner, repo, deployment_id: args.deploymentId, state: args.state, description: truncateDeploymentDescription(args.description), log_url: args.serverRunUrl, environment_url: args.pullUrl, auto_inactive: false };
+  try {
+    await args.server.rest.repos.createDeploymentStatus(body);
+  } catch (error) {
+    if (!ambiguousWrite(error))
+      throw error;
+    const raw = await args.server.paginate(args.server.rest.repos.listDeploymentStatuses, { owner, repo, deployment_id: args.deploymentId, per_page: 100 });
+    if (raw.some((value) => {
+      const status = RestStatus.safeParse(value);
+      return status.success && status.data.state === args.state && status.data.description === body.description && status.data.creator?.type === "Bot" && status.data.creator.id === args.serverBotId && status.data.log_url === body.log_url && status.data.environment_url === body.environment_url;
+    }))
+      return;
+    throw error;
+  }
 }
-async function approverApprovedHead(server, config, repository, pull) {
-  const reviews = await server.paginate(server.rest.pulls.listReviews, { ...splitRepository(repository), pull_number: pull.number, per_page: 100 });
-  const latest = reviews.filter((r) => Number(r.user?.id) === config.approver.id && r.submitted_at).reduce((current, review) => {
-    if (!current || String(review.submitted_at) > String(current.submitted_at))
-      return review;
-    return String(review.submitted_at) === String(current.submitted_at) && Number(review.id) > Number(current.id) ? review : current;
-  }, undefined);
-  return latest?.state === "APPROVED" && latest.commit_id === pull.headSha;
+async function withStatuses(args, nodes) {
+  const records = [];
+  for (const node of nodes) {
+    if (node.task !== TASK || node.creator?.__typename !== "Bot" || node.creator.databaseId !== args.serverBotId)
+      continue;
+    const payload = parsePayload(node.payload);
+    if (!payload.success) {
+      console.warn(`ignoring automerge deployment ${node.databaseId} with invalid payload`);
+      continue;
+    }
+    records.push({ record: { deploymentId: node.databaseId, nodeId: node.id, createdAt: node.createdAt, payload: payload.data, statuses: [], state: { kind: "active" } }, statuses: node.statuses });
+  }
+  const selected = args.limit === undefined ? records : records.slice(0, args.limit);
+  const { owner, repo } = splitRepository(args.serverRepository);
+  for (const { record, statuses } of selected) {
+    const parsed = GraphStatuses.safeParse(statuses);
+    if (!parsed.success)
+      throw new Error(`GitHub returned an invalid deployment status for deployment ${record.deploymentId}`);
+    const trusted = parsed.data.nodes.filter((s) => s.creator?.__typename === "Bot" && s.creator.databaseId === args.serverBotId);
+    const timestamps = new Set(trusted.map((s) => Date.parse(s.createdAt)));
+    if (parsed.data.pageInfo.hasNextPage || timestamps.size !== trusted.length) {
+      const raw = await args.server.paginate(args.server.rest.repos.listDeploymentStatuses, { owner, repo, deployment_id: record.deploymentId, per_page: 100 });
+      record.statuses = raw.map((value) => {
+        const status = RestStatus.safeParse(value);
+        if (!status.success)
+          throw new Error(`GitHub returned an invalid deployment status for deployment ${record.deploymentId}`);
+        return mapStatus(status.data);
+      });
+    } else {
+      record.statuses = parsed.data.nodes.map((s, index) => mapStatus({ id: index + 1, state: s.state.toLowerCase(), description: s.description, created_at: s.createdAt, creator: s.creator?.__typename === "Bot" && s.creator.databaseId ? { type: "Bot", id: s.creator.databaseId } : null }));
+    }
+    record.state = reservationState({ statuses: record.statuses, serverBotId: args.serverBotId });
+  }
+  return selected.map(({ record }) => record);
 }
-// src/lib/merge.ts
-var DEADLINE_MINUTES = 60;
-var MERGEABLE = ["CLEAN", "UNSTABLE", "HAS_HOOKS"];
+function parsePayload(raw) {
+  let decoded = raw;
+  try {
+    for (let depth = 0;depth < 2 && typeof decoded === "string"; depth++)
+      decoded = JSON.parse(decoded);
+  } catch {
+    return ReservationPayloadSchema.safeParse(undefined);
+  }
+  return ReservationPayloadSchema.safeParse(decoded);
+}
+function mapStatus(s) {
+  const state = s.state === "queued" ? "queued" : s.state === "success" ? "success" : s.state === "failure" ? "failure" : s.state === "inactive" ? "inactive" : "error";
+  const creator = s.creator?.type === "Bot" ? { type: "Bot", databaseId: s.creator.id } : { type: "Other" };
+  return { id: s.id, state, description: s.description, createdAt: s.created_at, creator };
+}
+function ambiguousWrite(error) {
+  if (isNetworkFailure(error) || error instanceof Error && error.name === "TimeoutError")
+    return true;
+  return typeof error === "object" && error !== null && "status" in error && (error.status === 502 || error.status === 503 || error.status === 504);
+}
 
-class NotReady extends Error {
-}
+// src/lib/merge.ts
 async function pullFacts(server, repository, number) {
   const { data: p } = await server.rest.pulls.get({ ...splitRepository(repository), pull_number: number });
   return {
     number: p.number,
-    state: p.state,
+    state: p.state === "closed" ? "closed" : "open",
+    merged: p.merged === true,
     draft: p.draft === true,
     headSha: p.head.sha,
     headRepository: p.head.repo?.full_name ?? null,
     baseRepository: p.base.repo.full_name,
     baseRef: p.base.ref,
     defaultBranch: p.base.repo.default_branch,
-    authorId: Number(p.user.id)
+    authorId: Number(p.user.id),
+    repositoryId: Number(p.base.repo.id),
+    nodeId: p.node_id
   };
+}
+function status(error) {
+  return typeof error === "object" && error !== null && "status" in error && typeof error.status === "number" ? error.status : undefined;
 }
 function principal(user, allowed, role) {
   const match = user ? allowed.find((p) => p.id === user.id) : undefined;
@@ -37291,63 +37411,7 @@ function principal(user, allowed, role) {
     throw new Rejection(`${user?.login ?? "a deleted user"} is not one of the ${role}`);
   return match;
 }
-function status(error) {
-  return typeof error === "object" && error !== null && "status" in error && typeof error.status === "number" ? error.status : undefined;
-}
-function timedOut(error) {
-  if (!(error instanceof Error))
-    return false;
-  return error.name === "TimeoutError" || error.message === "GitHub request timed out" || "cause" in error && error.cause instanceof Error && error.cause.name === "TimeoutError";
-}
-async function reconcileMerge(ctx, pullNumber, head) {
-  const { data: pull } = await ctx.server.rest.pulls.get({ ...splitRepository(ctx.repository), pull_number: pullNumber });
-  if (pull.state !== "closed" || pull.head.sha !== head || !pull.merged || pull.merged_by?.id !== ctx.config.apps.server_bot_id || !pull.merge_commit_sha)
-    return;
-  return { result: "merged", head, mergeCommit: pull.merge_commit_sha };
-}
-async function checkBotMerger(ctx, pull, merger) {
-  if (pull.authorId !== merger.id)
-    throw new Rejection(`bot merger ${merger.login} can merge only its own pull request`);
-  const facts = await fetchCommitFacts(ctx.server, ctx.repository, pull.number);
-  const trust = evaluateTrust(facts, pull.headSha, ctx.config);
-  if (trust.problems.length)
-    throw new Rejection(`pull request trust failed: ${trust.problems.join("; ")}`);
-  for (const c of trust.commits) {
-    if (c.identity.kind !== "user" || c.identity.principal.id !== merger.id) {
-      throw new Rejection(`bot merger ${merger.login} can merge only commits by itself`);
-    }
-  }
-}
-async function verifyMerger(ctx, pull, comment) {
-  const author = comment.user;
-  if (!author)
-    throw new Rejection("the merge comment author was deleted");
-  if (author.type === "Bot") {
-    const bot = principal(author, ctx.config.trust.bot_mergers, "bot mergers");
-    if (repositoryEntry(ctx.config, ctx.repository)?.merge?.allow_bot_requests === false) {
-      throw new Rejection(`bot merge requests are disabled for repository ${ctx.repository}`);
-    }
-    await checkBotMerger(ctx, pull, bot);
-  } else if (author.type === "User") {
-    principal(author, ctx.config.trust.mergers, "mergers");
-  } else {
-    throw new Rejection(`${author.login} has unsupported account type ${author.type}`);
-  }
-}
-async function pinAndValidate(ctx, args, head) {
-  const pull = await pullFacts(ctx.server, ctx.repository, args.pull_number);
-  checkPullState(pull);
-  if (pull.headSha !== head)
-    throw new Rejection(`the head changed from ${head} to ${pull.headSha} while waiting`);
-  const comment = await fetchComment(ctx.server, ctx.repository, args.comment_id);
-  const command = validateComment(comment, ctx.repository, pull.number, ctx.now());
-  if (command.name !== "merge")
-    throw new Rejection(`comment ${comment.id} is no longer /merge`);
-  await checkHeadPredatesComment(ctx, pull, comment);
-  await verifyMerger(ctx, pull, comment);
-  return { pull, comment };
-}
-async function checkHeadPredatesComment(ctx, pull, comment) {
+async function validateHeadBeforeComment(ctx, pull, comment) {
   const repo = splitRepository(ctx.repository);
   const posted = new Date(comment.createdAt).getTime();
   const { data: head } = await ctx.server.rest.repos.getCommit({ ...repo, ref: pull.headSha });
@@ -37355,263 +37419,234 @@ async function checkHeadPredatesComment(ctx, pull, comment) {
   if (!date || new Date(date).getTime() > posted)
     throw new Rejection(`the head ${pull.headSha} is newer than comment ${comment.id}`);
   const events = await ctx.server.paginate(ctx.server.rest.issues.listEventsForTimeline, { ...repo, issue_number: pull.number, per_page: 100 });
-  const forced = events.some((e) => ("event" in e) && e.event === "head_ref_force_pushed" && ("created_at" in e) && new Date(String(e.created_at)).getTime() >= posted);
-  if (forced)
+  if (events.some((e) => ("event" in e) && e.event === "head_ref_force_pushed" && ("created_at" in e) && new Date(String(e.created_at)).getTime() >= posted)) {
     throw new Rejection(`#${pull.number} was force-pushed after comment ${comment.id}`);
-}
-async function requiredChecks(ctx, pull) {
-  const runs = await ctx.server.paginate(ctx.server.rest.checks.listForRef, { ...splitRepository(ctx.repository), ref: pull.headSha, per_page: 100 });
-  const problems = [];
-  for (const required of ctx.config.merge.required_checks) {
-    const latest = runs.filter((r) => r.name === required.name && r.app?.id === required.app_id).reduce((current, run) => {
-      if (!current || String(run.started_at ?? "") > String(current.started_at ?? ""))
-        return run;
-      return String(run.started_at ?? "") === String(current.started_at ?? "") && Number(run.id) > Number(current.id) ? run : current;
-    }, undefined);
-    if (!latest || latest.status !== "completed" || !["success", "skipped"].includes(latest.conclusion ?? "")) {
-      problems.push(`${required.name} from app ${required.app_id} is not success or skipped`);
-    }
   }
-  return { ok: problems.length === 0, problems };
 }
-async function ready(ctx, args, head) {
-  await refreshConfig(ctx);
-  const { pull } = await pinAndValidate(ctx, args, head);
-  const results = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull });
-  const trust = results.filter((r) => r.type === "signed-commits" || r.type === "trusted-committers");
-  const failedTrust = trust.filter((r) => !r.ok).flatMap((r) => r.problems.map((p) => `${r.type}: ${p}`));
-  if (failedTrust.length)
-    throw new Rejection(`pull request trust failed: ${failedTrust.join("; ")}`);
-  const policyErrors = results.filter((r) => !["signed-commits", "trusted-committers"].includes(r.type) && !r.ok).flatMap((r) => r.problems.map((p) => `${r.type}: ${p}`));
-  if (policyErrors.length)
-    throw new NotReady(`policies failed: ${policyErrors.join("; ")}`);
-  if (!await approverApprovedHead(ctx.server, ctx.config, ctx.repository, pull))
-    throw new NotReady(`the approver has not approved head ${head}`);
-  const checks = await requiredChecks(ctx, pull);
-  if (!checks.ok)
-    throw new NotReady(checks.problems.join("; "));
-}
-async function platformFallbackReason(ctx, pull) {
-  if (repositoryEntry(ctx.config, ctx.repository)?.merge?.use_platform_automerge === false)
-    return "use_platform_automerge is false for this repository";
-  const { owner, repo } = splitRepository(ctx.repository);
-  const { repository } = await ctx.server.graphql("query($owner:String!,$name:String!){repository(owner:$owner,name:$name){autoMergeAllowed}}", { owner, name: repo });
-  if (!repository.autoMergeAllowed)
-    return "auto-merge is not allowed in this repository";
-  const rules = await ctx.server.paginate(ctx.server.rest.repos.getBranchRules, { owner, repo, branch: pull.defaultBranch, per_page: 100 });
-  const review = rules.some((r) => r.type === "pull_request" && (r.parameters?.required_approving_review_count ?? 0) >= 1 && r.parameters?.dismiss_stale_reviews_on_push === true);
-  if (!review)
-    return `${pull.defaultBranch} does not require a fresh approval`;
-  const checks = rules.flatMap((r) => r.type === "required_status_checks" ? r.parameters?.required_status_checks ?? [] : []);
-  const missing = [{ name: "csm-ci/policy", app_id: ctx.config.apps.server_app_id }, ...ctx.config.merge.required_checks].filter((required) => !checks.some((c) => c.context === required.name && c.integration_id === required.app_id));
-  if (missing.length)
-    return `${pull.defaultBranch} does not require ${[...new Set(missing.map((m) => m.name))].join(", ")}`;
-  return;
-}
-async function autoMergeState(ctx, number) {
-  const { owner, repo } = splitRepository(ctx.repository);
-  const data = await ctx.server.graphql("query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){id mergeStateStatus autoMergeRequest{mergeMethod enabledBy{__typename ... on Bot{databaseId}}}}}}", { owner, name: repo, number });
-  return data.repository.pullRequest;
-}
-function enabledByServer(ctx, state, number) {
-  const request = state.autoMergeRequest;
-  if (!request)
+async function verifyBotCommits(ctx, pull, merger) {
+  if (pull.authorId !== merger.id)
     return false;
-  if (request.enabledBy?.__typename === "Bot" && request.enabledBy.databaseId === ctx.config.apps.server_bot_id && request.mergeMethod === "SQUASH")
-    return true;
-  throw new Rejection(`auto-merge on #${number} was enabled by another actor or merge method`);
-}
-async function enableAutoMerge(ctx, write, args, head) {
-  const state = await autoMergeState(ctx, args.pull_number);
-  if (enabledByServer(ctx, state, args.pull_number))
-    return true;
-  if (MERGEABLE.includes(state.mergeStateStatus))
-    return false;
-  await pinAndValidate(ctx, args, head);
-  const { title, message } = await commitText(ctx, args.pull_number);
-  try {
-    await write.graphql("mutation($id:ID!,$head:GitObjectID!,$title:String!,$body:String!){enablePullRequestAutoMerge(input:{pullRequestId:$id,mergeMethod:SQUASH,expectedHeadOid:$head,commitHeadline:$title,commitBody:$body}){clientMutationId}}", { id: state.id, head, title, body: message });
-  } catch (error) {
-    if (error instanceof Error && /\b(clean|unstable|has_hooks) status/i.test(error.message))
-      return false;
-    if (!enabledByServer(ctx, await autoMergeState(ctx, args.pull_number), args.pull_number))
-      throw error;
-  }
-  return true;
-}
-async function commitText(ctx, number) {
-  const { data: raw } = await ctx.server.rest.pulls.get({ ...splitRepository(ctx.repository), pull_number: number });
-  const seenCoauthors = new Set;
-  const message = (raw.body ?? "").split(/\r?\n/).filter((line) => {
-    if (!/^Co-authored-by:\s*.+$/i.test(line))
-      return true;
-    const key = line.toLowerCase();
-    if (seenCoauthors.has(key))
-      return false;
-    seenCoauthors.add(key);
-    return true;
-  }).join(`
-`);
-  return { title: `${raw.title} (#${number})`, message };
+  const facts = await fetchCommitFacts(ctx.server, ctx.repository, pull.number);
+  const trust = evaluateTrust(facts, pull.headSha, ctx.config);
+  return trust.problems.length === 0 && trust.commits.every((commit) => commit.identity.kind === "user" && commit.identity.principal.id === merger.id);
 }
 async function refreshConfig(ctx) {
-  if (ctx.reloadConfig)
-    ctx.config = await ctx.reloadConfig();
-  const entry = repositoryEntry(ctx.config, ctx.repository);
-  if (!entry)
-    throw new Rejection(`repository ${ctx.repository} is no longer managed by this server`);
-  if (!entry.ops.includes("merge"))
+  ctx.config = await ctx.reloadConfig();
+}
+function requireMergeEnabled(ctx) {
+  if (!repositoryEntry(ctx.config, ctx.repository)?.ops.includes("merge"))
     throw new Rejection(`repository ${ctx.repository} no longer enables merge`);
 }
-async function waitForMerge(ctx, args) {
-  await refreshConfig(ctx);
-  const pull = await pullFacts(ctx.server, ctx.repository, args.pull_number);
-  checkPullState(pull);
-  const comment = await fetchComment(ctx.server, ctx.repository, args.comment_id);
-  const command = validateComment(comment, ctx.repository, pull.number, ctx.now());
-  if (command.name !== "merge")
-    throw new Rejection(`comment ${comment.id} is not /merge`);
-  await verifyMerger(ctx, pull, comment);
-  const receipt = marker("merge", comment.id);
-  const comments = await ctx.server.paginate(ctx.server.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: pull.number, per_page: 100 });
-  if (hasServerMarker(comments, receipt, ctx.config.apps.server_bot_id))
-    throw new Rejection(`comment ${comment.id} was already handled`);
-  await checkHeadPredatesComment(ctx, pull, comment);
-  const notify = ctx.notify ?? ctx.write;
-  if (!notify)
-    throw new Error("notification token is required after accepting a merge command");
-  try {
-    await notify.rest.reactions.createForIssueComment({ ...splitRepository(ctx.repository), comment_id: args.comment_id, content: "rocket" });
-    ctx.onAccepted?.(pull.headSha);
-    const deadline = new Date(comment.createdAt).getTime() + DEADLINE_MINUTES * 60000;
-    const fallback = await platformFallbackReason(ctx, pull);
-    if (!fallback)
-      return { head: pull.headSha, platform: true };
-    await postReceipt(ctx, pull.number, marker("merge-wait", comment.id), `csm-ci: /merge is not using platform auto-merge because ${escapeHtml(fallback)}. csm-ci's own merge process is running: this pull request is squash-merged if approval and checks are ready by ${new Date(deadline).toISOString()}; otherwise /merge fails with a receipt.
+async function postAutomergeComment(ctx, record, event, text, head) {
+  const markerText = automergeMarker(record.deploymentId, event);
+  const comments = await ctx.notify.paginate(ctx.notify.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: record.payload.pull_number, per_page: 100 });
+  if (hasServerMarker(comments, markerText, ctx.config.apps.server_bot_id))
+    return;
+  const body = `csm-ci: ${escapeHtml(text)}
 
-${receiptFooter({ repository: ctx.repository, pullNumber: pull.number, commentId: comment.id, head: pull.headSha, serverRun: ctx.serverRun })}`);
-    let last;
-    while (ctx.now().getTime() <= deadline) {
-      try {
-        await ready(ctx, args, pull.headSha);
-        return { head: pull.headSha };
-      } catch (error) {
-        if (!(error instanceof NotReady))
-          throw error;
-        last = error;
-      }
-      const remaining = deadline - ctx.now().getTime();
-      if (remaining <= 0)
-        break;
-      await ctx.sleep(Math.min(30000, remaining));
-    }
-    throw new Rejection(`merge readiness deadline passed: ${last instanceof Error ? last.message : "not ready"}`);
+${receiptFooter({ repository: ctx.repository, pullNumber: record.payload.pull_number, commentId: record.payload.command_comment_id, head, serverRun: ctx.serverRun })}
+
+<a href="https://github.com/${ctx.serverRepository}/deployments/${record.deploymentId}">Automerge deployment ${record.deploymentId}</a>`;
+  try {
+    await postResult(ctx.notify, ctx.repository, record.payload.pull_number, markerText, body);
   } catch (error) {
-    await postFailureReceipt(ctx, args, pull.headSha, error);
-    throw error;
+    if (![502, 503, 504].includes(status(error) ?? 0) && !isNetworkFailure(error))
+      throw error;
+    const after = await ctx.notify.paginate(ctx.notify.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: record.payload.pull_number, per_page: 100 });
+    if (!hasServerMarker(after, markerText, ctx.config.apps.server_bot_id))
+      throw error;
   }
 }
-async function postReceipt(ctx, issueNumber, receipt, body) {
-  const write = ctx.notify ?? ctx.write;
-  if (!write)
-    throw new Error("write token is required to post a merge receipt");
-  const comments = await write.paginate(write.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: issueNumber, per_page: 100 });
+async function setLabel(ctx, pullNumber, shouldHave) {
+  const repo = splitRepository(ctx.repository);
+  const labels = await ctx.notify.paginate(ctx.notify.rest.issues.listLabelsOnIssue, { ...repo, issue_number: pullNumber, per_page: 100 });
+  const exists = labels.some((label) => label.name === AUTOMERGE_LABEL);
+  if (exists === shouldHave)
+    return;
+  if (shouldHave) {
+    try {
+      await ctx.notify.rest.issues.addLabels({ ...repo, issue_number: pullNumber, labels: [AUTOMERGE_LABEL] });
+    } catch (error) {
+      if (status(error) !== 422)
+        throw error;
+      await ctx.notify.rest.issues.createLabel({ ...repo, name: AUTOMERGE_LABEL, color: "0e8a16", description: "Merged or queued for merge by csm-ci" });
+      await ctx.notify.rest.issues.addLabels({ ...repo, issue_number: pullNumber, labels: [AUTOMERGE_LABEL] });
+    }
+  } else {
+    await ctx.notify.rest.issues.removeLabel({ ...repo, issue_number: pullNumber, name: AUTOMERGE_LABEL });
+  }
+}
+async function postCancelNoop(ctx, pullNumber, commentId, head) {
+  const receipt = `<!-- csm-ci:automerge:cancel:${commentId} -->`;
+  const comments = await ctx.notify.paginate(ctx.notify.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: pullNumber, per_page: 100 });
   if (hasServerMarker(comments, receipt, ctx.config.apps.server_bot_id))
     return;
-  try {
-    await postResult(write, ctx.repository, issueNumber, receipt, body);
-  } catch (error) {
-    if (![502, 503, 504].includes(status(error) ?? 0))
-      throw error;
-    const after = await write.paginate(write.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: issueNumber, per_page: 100 });
-    if (!hasServerMarker(after, receipt, ctx.config.apps.server_bot_id))
-      throw error;
-  }
-}
-async function postFailureReceipt(ctx, args, head, failure) {
-  const reason = failure instanceof Error ? failure.message : String(failure);
-  try {
-    await postMergeFailureReceipt(ctx, args, reason, head);
-  } catch (receiptError) {
-    const receiptReason = receiptError instanceof Error ? receiptError.message : String(receiptError);
-    throw new AggregateError([failure, receiptError], `${reason}; additionally failed to post the merge failure receipt: ${receiptReason}`);
-  }
-}
-async function postMergeFailureReceipt(ctx, args, message, head) {
-  await postReceipt(ctx, args.pull_number, marker("merge", args.comment_id), `csm-ci: /merge failed: ${escapeHtml(message)}
+  const body = `${receipt}
+csm-ci: no active merge reservation was found to cancel.
 
-Resolve the failure, confirm approval and checks for the current head, and post a new exact \`/merge\` comment.
-
-${receiptFooter({ repository: ctx.repository, pullNumber: args.pull_number, commentId: args.comment_id, head, serverRun: ctx.serverRun })}`);
+${receiptFooter({ repository: ctx.repository, pullNumber, commentId, head, serverRun: ctx.serverRun })}`;
+  await postResult(ctx.notify, ctx.repository, pullNumber, receipt, body);
 }
-async function runMerge(ctx, args, expected) {
-  const receipt = marker("merge", args.comment_id);
-  const write = ctx.write;
-  if (!write)
-    throw new Error("write token is required to merge");
-  try {
-    await refreshConfig(ctx);
-  } catch (error) {
-    await postFailureReceipt(ctx, args, expected.head, error);
-    throw error;
-  }
-  const existing = await ctx.server.paginate(ctx.server.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: args.pull_number, per_page: 100 });
-  if (hasServerMarker(existing, receipt, ctx.config.apps.server_bot_id))
-    throw new Rejection(`comment ${args.comment_id} was already handled`);
-  let outcome;
-  let uncertain = false;
-  try {
-    const optedOut = repositoryEntry(ctx.config, ctx.repository)?.merge?.use_platform_automerge === false;
-    if (expected.platform && !optedOut && await enableAutoMerge(ctx, write, args, expected.head)) {
-      outcome = { result: "auto-merge", head: expected.head };
-      await postReceipt(ctx, args.pull_number, receipt, `csm-ci: /merge enabled platform auto-merge for the pinned head. GitHub squash-merges it once approval and required checks pass; this is not a merge result.
+async function postCancelReceipt(ctx, record, commentId, message) {
+  const receipt = `<!-- csm-ci:automerge:cancel:${commentId} -->`;
+  const eventMarker = `<!-- csm-ci:automerge:${record.deploymentId}:cancelled -->`;
+  const comments = await ctx.notify.paginate(ctx.notify.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: record.payload.pull_number, per_page: 100 });
+  if (hasServerMarker(comments, receipt, ctx.config.apps.server_bot_id))
+    return;
+  const body = `${receipt}
+${eventMarker}
+${message}
 
-${receiptFooter({ repository: ctx.repository, pullNumber: args.pull_number, commentId: args.comment_id, head: expected.head, serverRun: ctx.serverRun })}`);
-      return outcome;
+${receiptFooter({ repository: ctx.repository, pullNumber: record.payload.pull_number, commentId, head: record.payload.accepted_head, serverRun: ctx.serverRun })}`;
+  await postResult(ctx.notify, ctx.repository, record.payload.pull_number, receipt, body);
+}
+async function acceptMerge(ctx, args) {
+  await refreshConfig(ctx);
+  const pull = await pullFacts(ctx.server, ctx.repository, args.pull_number);
+  const comment = await fetchComment(ctx.server, ctx.repository, args.comment_id);
+  const command = validateComment(comment, ctx.repository, pull.number, ctx.now());
+  if (command.name === "merge-cancel")
+    return cancelReservation(ctx, pull, comment, args);
+  if (command.name !== "merge")
+    throw new Rejection(`comment ${comment.id} is not /merge`);
+  const existing = await findReservationsForPull({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, repositoryId: pull.repositoryId, pullNumber: pull.number, now: ctx.now() });
+  const replay = existing.find((record) => record.payload.command_comment_id === comment.id);
+  if (replay) {
+    if (replay.state.kind === "active") {
+      await postAutomergeComment(ctx, replay, "accepted", `Merge reserved until ${replay.payload.expires_at}. It follows head changes and requires approval and checks for the current head. Cancel with /merge cancel. The ${AUTOMERGE_LABEL} label shows the reservation state.`, replay.payload.accepted_head);
+      await setLabel(ctx, pull.number, true);
     }
-    await ready(ctx, args, expected.head);
-    const pull = await pullFacts(ctx.server, ctx.repository, args.pull_number);
-    const { title, message: commitMessage } = await commitText(ctx, pull.number);
-    for (let attempt = 0;; attempt++) {
-      let data;
-      try {
-        ({ data } = await write.rest.pulls.merge({ ...splitRepository(ctx.repository), pull_number: pull.number, sha: expected.head, merge_method: "squash", commit_title: title, commit_message: commitMessage }));
-      } catch (error) {
-        if (status(error) === 409)
-          throw new Rejection(`pull request #${pull.number} cannot merge because its base changed`);
-        const code = status(error);
-        const retryable = [405, 422, 503].includes(code ?? 0);
-        if (!retryable && code !== 502 && code !== 504 && !timedOut(error) && !isNetworkFailure(error))
-          throw error;
-        uncertain = true;
-        try {
-          outcome = await reconcileMerge(ctx, pull.number, expected.head);
-        } catch (reconcileError) {
-          throw new AggregateError([error, reconcileError], "merge response was ambiguous and GitHub state could not be reconciled");
-        }
-        uncertain = false;
-        if (outcome)
-          break;
-        if (!retryable || attempt >= 2)
-          throw error;
-        await ready(ctx, args, expected.head);
-        continue;
+    return { kind: "replay", reservation: replay };
+  }
+  const oldReceipts = await ctx.server.paginate(ctx.server.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: pull.number, per_page: 100 });
+  if (hasServerMarker(oldReceipts, marker("merge", comment.id), ctx.config.apps.server_bot_id))
+    throw new Rejection(`comment ${comment.id} was already handled`);
+  requireMergeEnabled(ctx);
+  checkPullState(pull, true);
+  await validateHeadBeforeComment(ctx, pull, comment);
+  const author = comment.user;
+  if (!author)
+    throw new Rejection("the merge comment author was deleted");
+  let merger;
+  let mode;
+  if (author.type === "Bot") {
+    merger = principal(author, ctx.config.trust.bot_mergers, "bot mergers");
+    if (repositoryEntry(ctx.config, ctx.repository)?.merge?.allow_bot_requests === false)
+      throw new Rejection(`bot merge requests are disabled for repository ${ctx.repository}`);
+    if (!await verifyBotCommits(ctx, pull, merger))
+      throw new Rejection(`bot merger ${merger.login} can merge only its own pull request and commits`);
+    mode = "bot";
+  } else if (author.type === "User") {
+    merger = principal(author, ctx.config.trust.mergers, "mergers");
+    mode = "human";
+  } else
+    throw new Rejection(`${author.login} has unsupported account type ${author.type}`);
+  const active = existing.find((record) => record.state.kind === "active");
+  if (active) {
+    const markerText = `<!-- csm-ci:automerge:merge:${comment.id}:rejected -->`;
+    const comments = await ctx.notify.paginate(ctx.notify.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: pull.number, per_page: 100 });
+    if (!hasServerMarker(comments, markerText, ctx.config.apps.server_bot_id)) {
+      const body = `${markerText}
+Pull request is already reserved by ${active.payload.merger.login}.
+
+${receiptFooter({ repository: ctx.repository, pullNumber: pull.number, commentId: comment.id, head: pull.headSha, serverRun: ctx.serverRun })}`;
+      await postResult(ctx.notify, ctx.repository, pull.number, markerText, body);
+    }
+    throw new Rejection(`pull request #${pull.number} already has an active merge reservation`);
+  }
+  const acceptedAt = ctx.now();
+  const payload = ReservationPayloadSchema.parse({
+    version: 1,
+    repository_id: pull.repositoryId,
+    repository: ctx.repository,
+    pull_number: pull.number,
+    pull_node_id: pull.nodeId,
+    base_ref: pull.baseRef,
+    merger: { id: merger.id, login: merger.login, type: author.type },
+    mode,
+    command_comment_id: comment.id,
+    accepted_head: pull.headSha,
+    accepted_at: acceptedAt.toISOString(),
+    expires_at: new Date(acceptedAt.getTime() + 7 * 24 * 60 * 60000).toISOString()
+  });
+  const { data: serverRepo } = await ctx.deployments.rest.repos.get(splitRepository(ctx.serverRepository));
+  const record = await createReservation({ server: ctx.deployments, serverRepository: ctx.serverRepository, defaultBranch: serverRepo.default_branch, serverBotId: ctx.config.apps.server_bot_id, payload });
+  await createReservationStatus({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, deploymentId: record.deploymentId, serverRunUrl: runUrl(ctx.serverRun), pullUrl: pullUrl(ctx.serverRun.serverUrl, ctx.repository, pull.number), state: "queued", description: `waiting for approval of ${pull.headSha.slice(0, 7)}` });
+  await ctx.notify.rest.reactions.createForIssueComment({ ...splitRepository(ctx.repository), comment_id: comment.id, content: "rocket" });
+  await postAutomergeComment(ctx, record, "accepted", `Merge reserved until ${payload.expires_at}. It follows head changes and requires approval and checks for the current head. Cancel with /merge cancel. The ${AUTOMERGE_LABEL} label shows the reservation state.`, pull.headSha);
+  await setLabel(ctx, pull.number, true);
+  return { kind: "accepted", reservation: record };
+}
+async function cancelReservation(ctx, pull, comment, args) {
+  const author = comment.user;
+  if (!author || author.type !== "User")
+    throw new Rejection("only the reserving User or a trusted merger can cancel a merge reservation");
+  const trusted = ctx.config.trust.mergers;
+  const records = await findReservationsForPull({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, repositoryId: pull.repositoryId, pullNumber: pull.number, now: ctx.now() });
+  const active = records.find((record) => record.state.kind === "active");
+  if (!active) {
+    const previous = records.find((record) => record.payload.merger.id === author.id);
+    const cancelledByThisComment = records.find((record) => record.state.kind === "terminal" && record.state.reason === "cancelled" && cancellationCommandId(record) === args.comment_id);
+    const replayingOwnCancellation = cancelledByThisComment !== undefined && cancellationAuthorId(cancelledByThisComment) === author.id;
+    if (!trusted.some((principal) => principal.id === author.id) && !previous && !replayingOwnCancellation)
+      throw new Rejection(`${author.login} is not one of the mergers`);
+    const receipt = `<!-- csm-ci:automerge:cancel:${args.comment_id} -->`;
+    const comments = await ctx.notify.paginate(ctx.notify.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: pull.number, per_page: 100 });
+    if (hasServerMarker(comments, receipt, ctx.config.apps.server_bot_id))
+      return { kind: "cancel-noop", ...previous ? { reservation: previous } : {} };
+    if (cancelledByThisComment) {
+      const cancellingLogin = cancelledByThisComment.state.kind === "terminal" ? cancelledByThisComment.state.description?.match(/\bcancelled by @([^;|]+)/)?.[1]?.trim() : undefined;
+      await postCancelReceipt(ctx, cancelledByThisComment, args.comment_id, `Merge reservation cancelled by @${cancellingLogin ?? author.login}.`);
+      await setLabel(ctx, pull.number, false);
+      return { kind: "cancelled", reservation: cancelledByThisComment };
+    }
+    if (pull.merged) {
+      if (!hasServerMarker(comments, receipt, ctx.config.apps.server_bot_id)) {
+        const body = `${receipt}
+csm-ci: pull request #${pull.number} has already merged.
+
+${receiptFooter({ repository: ctx.repository, pullNumber: pull.number, commentId: args.comment_id, head: pull.headSha, serverRun: ctx.serverRun })}`;
+        await postResult(ctx.notify, ctx.repository, pull.number, receipt, body);
       }
-      if (!data.merged || !data.sha)
-        throw new Rejection(`GitHub did not merge pull request #${pull.number}`);
-      outcome = { result: "merged", head: expected.head, mergeCommit: data.sha };
-      break;
+      return { kind: "cancel-noop" };
     }
-    const mergeCommit = outcome.result === "merged" ? outcome.mergeCommit : "";
-    await postReceipt(ctx, pull.number, receipt, `csm-ci: /merge succeeded. Squash-merged this pull request.
-
-${receiptFooter({ repository: ctx.repository, pullNumber: pull.number, commentId: args.comment_id, head: expected.head, serverRun: ctx.serverRun, mergeCommit })}`);
-    return outcome;
-  } catch (error) {
-    if (!outcome && !uncertain)
-      await postFailureReceipt(ctx, args, expected.head, error);
-    throw error;
+    await ctx.notify.rest.reactions.createForIssueComment({ ...splitRepository(ctx.repository), comment_id: args.comment_id, content: "rocket" });
+    await postCancelNoop(ctx, pull.number, args.comment_id, pull.headSha);
+    return { kind: "cancel-noop" };
   }
+  if (!canCancelReservation({ commenterId: author.id, trustedMergerIds: trusted.map((item) => item.id), reservationMergerId: active.payload.merger.id }))
+    throw new Rejection(`${author.login} cannot cancel this merge reservation`);
+  const receipt = `<!-- csm-ci:automerge:cancel:${args.comment_id} -->`;
+  const comments = await ctx.notify.paginate(ctx.notify.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: pull.number, per_page: 100 });
+  if (hasServerMarker(comments, receipt, ctx.config.apps.server_bot_id))
+    return { kind: "cancelled", reservation: active };
+  if (pull.merged) {
+    await postCancelReceipt(ctx, active, args.comment_id, `csm-ci: pull request #${pull.number} has already merged.`);
+    return { kind: "cancel-noop", reservation: active };
+  }
+  await createReservationStatus({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, deploymentId: active.deploymentId, serverRunUrl: runUrl(ctx.serverRun), pullUrl: pullUrl(ctx.serverRun.serverUrl, ctx.repository, pull.number), state: "inactive", description: terminalDescription("cancelled", `cancelled by @${author.login}; cancelled_by_id=${author.id}; cancel_comment_id=${args.comment_id}`) });
+  await ctx.notify.rest.reactions.createForIssueComment({ ...splitRepository(ctx.repository), comment_id: args.comment_id, content: "rocket" });
+  await postCancelReceipt(ctx, active, args.comment_id, `Merge reservation cancelled by @${author.login}.`);
+  await setLabel(ctx, pull.number, false);
+  return { kind: "cancelled", reservation: active };
+}
+function cancellationCommandId(record) {
+  if (record.state.kind !== "terminal")
+    return;
+  const match = record.state.description?.match(/\bcancel_comment_id=(\d+)(?:\D|$)/);
+  return match ? Number(match[1]) : undefined;
+}
+function cancellationAuthorId(record) {
+  if (record.state.kind !== "terminal")
+    return;
+  const match = record.state.description?.match(/\bcancelled_by_id=(\d+)(?:\D|$)/);
+  return match ? Number(match[1]) : undefined;
+}
+function runUrl(run) {
+  return `${run.serverUrl}/${run.repository}/actions/runs/${run.id}/attempts/${run.attempt}`;
+}
+function pullUrl(serverUrl, repository, number) {
+  return `${serverUrl}/${repository}/pull/${number}`;
 }
 
 // src/server-merge/main.ts
@@ -37622,53 +37657,27 @@ function env(name) {
   return value;
 }
 async function main() {
-  const read = github(getInput("server-token", { required: true }));
-  const workflowRepository = env("GITHUB_REPOSITORY");
-  const configPath = getInput("config-path", { required: true });
+  if (getInput("mode", { required: true }) !== "accept")
+    throw new Error("unknown merge action mode");
+  const serverRepository = env("GITHUB_REPOSITORY");
   const configReader = github(getInput("github-token", { required: true }));
-  const config = await loadConfig(configReader, workflowRepository, env("GITHUB_SHA"), configPath);
-  const args = JSON.parse(getInput("args", { required: true }));
+  const configPath = getInput("config-path", { required: true });
+  const config = await loadCurrentServerConfig(configReader, serverRepository, configPath);
   const ctx = {
-    server: read,
+    server: github(getInput("server-token", { required: true })),
+    deployments: github(getInput("deployments-token", { required: true })),
     notify: github(getInput("notification-token", { required: true })),
-    ...getInput("mode") === "merge" ? { write: github(getInput("write-token", { required: true })) } : {},
     config,
-    reloadConfig: () => loadCurrentServerConfig(configReader, workflowRepository, configPath),
-    repository: getInput("repository", { required: true }),
-    serverRun: { serverUrl: env("GITHUB_SERVER_URL"), repository: env("GITHUB_REPOSITORY"), id: env("GITHUB_RUN_ID"), attempt: env("GITHUB_RUN_ATTEMPT") },
-    now: () => new Date,
-    sleep: async (milliseconds) => {
-      await sleep(milliseconds);
-    }
+    reloadConfig: () => loadCurrentServerConfig(configReader, serverRepository, configPath),
+    repository: getInput("repository", { required: true }).toLowerCase(),
+    serverRepository,
+    serverRun: { serverUrl: env("GITHUB_SERVER_URL"), repository: serverRepository, id: env("GITHUB_RUN_ID"), attempt: env("GITHUB_RUN_ATTEMPT") },
+    now: () => new Date
   };
-  const mode = getInput("mode", { required: true });
-  if (mode === "wait") {
-    ctx.onAccepted = (head) => {
-      setOutput("accepted", "true");
-      setOutput("head", head);
-    };
-    try {
-      const ready = await waitForMerge(ctx, args);
-      setOutput("ready", "true");
-      setOutput("head", ready.head);
-      setOutput("platform", String(ready.platform === true));
-      info(`pull request is ready at ${ready.head}`);
-    } catch (error) {
-      setOutput("error", error instanceof Error ? error.message : String(error));
-      throw error;
-    }
-    return;
-  }
-  if (mode === "failure-receipt") {
-    await postMergeFailureReceipt(ctx, args, getInput("failure-message", { required: true }), getInput("head", { required: true }));
-    return;
-  }
-  if (mode !== "merge")
-    throw new Error(`unknown merge action mode: ${mode}`);
-  const outcome = await runMerge(ctx, args, { head: getInput("head", { required: true }), platform: getInput("platform") === "true" });
-  setOutput("result", outcome.result);
-  if (outcome.result === "merged")
-    setOutput("merge-commit", outcome.mergeCommit);
-  info(outcome.result === "merged" ? `merged at ${outcome.mergeCommit}` : `auto-merge enabled at ${outcome.head}`);
+  const args = JSON.parse(getInput("args", { required: true }));
+  const result = await acceptMerge(ctx, args);
+  if (result.reservation)
+    setOutput("reservation-id", String(result.reservation.deploymentId));
+  info(`merge command ${result.kind}`);
 }
-main().catch((e) => setFailed(e instanceof Error ? e.message : String(e)));
+main().catch((error) => setFailed(error instanceof Error ? error.message : String(error)));

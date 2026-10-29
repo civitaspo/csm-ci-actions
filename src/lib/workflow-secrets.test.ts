@@ -21,6 +21,8 @@ const contracts: [string, Record<string, { required: boolean }>][] = [
   ["server.yml", serverContract],
   ["server-repo-settings.yml", settingsContract],
   ["server-repo-settings-target.yml", settingsContract],
+  ["server-automerge.yml", { [serverSecret]: { required: true } }],
+  ["server-automerge-evaluate.yml", { [serverSecret]: { required: true } }],
   ["server-check.yml", {}],
 ];
 
@@ -45,6 +47,7 @@ describe("explicit reusable workflow secret contracts", () => {
       if (typeof job.uses !== "string" || !job.uses.includes("/csm-ci-actions/.github/workflows/")) continue;
       const names = job.uses.includes("/client-") ? [clientSecret]
         : job.uses.includes("/server.yml@") ? [serverSecret, approverSecret, ...providerSecrets]
+        : job.uses.includes("/server-automerge.yml@") ? [serverSecret]
         : job.uses.includes("/server-repo-settings") ? [serverSecret, approverSecret] : [];
       expect(job.secrets ?? {}).toEqual(mapping(names));
     }

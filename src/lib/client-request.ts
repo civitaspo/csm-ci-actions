@@ -115,7 +115,7 @@ export function prepareClientRequest(
         return skip(`comment author association ${parsed.data.comment.author_association} is not allowed`);
       }
     }
-    if (parsed.data.comment.body !== "/merge") return skip("comment body is not exactly /merge");
+    if (parsed.data.comment.body !== "/merge" && parsed.data.comment.body !== "/merge cancel") return skip("comment body is not exactly /merge or /merge cancel");
     return {
       status: "send",
       request: { kind: "merge", numbers: [parsed.data.issue.number, parsed.data.comment.id] },
