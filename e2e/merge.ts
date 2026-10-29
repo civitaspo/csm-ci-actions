@@ -633,11 +633,15 @@ export const merge: Scenario[] = [
           const opened = await openBotPr(ctx, prCase(ctx, "own-pr"));
           botPr = opened.pr;
           await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: botPr.number } }, opened.since, "success");
-          const { comment, requestInfo } = await postBotMergeRequest(ctx, botPr);
+          const { requestInfo } = await postBotMergeRequest(ctx, botPr);
           await expectOp(ctx, requestInfo.match, requestInfo.since, "success");
-          const { data } = await ctx.gh.rest.pulls.get({ owner: "civitaspo", repo: "testing-csm-ci-client", pull_number: botPr.number });
-          assert(data.merged && data.merge_commit_sha, `test bot's pull request #${botPr.number} was not merged`);
-          assert((await serverComments(ctx, botPr)).some((body) => body.includes(marker("merge", comment.id)) && body.includes("Squash-merged")), "test bot merge has no success receipt");
+          await waitForCsmMerge(ctx, botPr, botPr.head);
+          const record = await until(`successful reservation for pull request #${botPr.number}`, async () => {
+            const current = await awaitReservation(ctx, opened.pr);
+            return terminalStatus(current)?.state === "SUCCESS" ? current : undefined;
+          });
+          await until(`merge receipt for pull request #${botPr.number}`, async () =>
+            (await serverComments(ctx, opened.pr)).some((body) => body.includes(automergeMarker(record.databaseId, "merged")) && body.includes("squash-merged")) ? true : undefined);
         } finally {
           if (botPr) await closePr(ctx, botPr);
         }
