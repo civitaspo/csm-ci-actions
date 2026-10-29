@@ -3,10 +3,11 @@ import type { ReservationRecord } from "../lib/automerge-github.ts";
 export function activeSweepReservations(reservations: readonly ReservationRecord[]): ReservationRecord[] {
   const latestByPull = new Map<string, ReservationRecord>();
   for (const record of reservations) {
+    if (record.state.kind !== "active") continue;
     const key = `${record.payload.repository_id}#${record.payload.pull_number}`;
     if (!latestByPull.has(key)) latestByPull.set(key, record);
   }
-  return [...latestByPull.values()].filter((record) => record.state.kind === "active").reverse();
+  return [...latestByPull.values()].reverse();
 }
 
 export function installedRepositoryId(repositories: readonly { id: number | bigint; full_name: string }[], name: string): number | undefined {

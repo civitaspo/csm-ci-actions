@@ -28,6 +28,7 @@ function reservation(deploymentId: number, pullNumber: number, state: Reservatio
 
 test("sweep selects only the newest active reservation for each pull request", () => {
   const records = [
+    reservation(6, 12, { kind: "terminal", state: "failure", at: "2026-10-29T00:00:00.000Z", description: "rejected", reason: "rejected" }),
     reservation(5, 10, { kind: "active" }),
     reservation(4, 11, { kind: "terminal", state: "success", at: "2026-10-29T00:00:00.000Z", description: "merged", reason: "merged" }),
     reservation(3, 10, { kind: "active" }),

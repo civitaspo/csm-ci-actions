@@ -428,6 +428,33 @@ describe("mergeReservation", () => {
     expect(notifyFetch.calls).toContain(`DELETE ${P}/issues/12/labels/csm-ci%2Fautomerge`);
   });
 
+  test("keeps the reservation queued when the head changes during the merge write", async () => {
+    const original = pull();
+    const moved = { ...original, head: { ...original.head, sha: nextSha } };
+    const { ctx, record, deploymentsFetch, notifyFetch } = readyReservation({ labelExists: true, pullThen: [original, original, original, moved] });
+    const writeFetch = fakeFetch([{ method: "PUT", path: `${P}/pulls/12/merge`, status: 409, body: { message: "Conflict" } }]);
+    ctx.write = github("write", writeFetch);
+    await expect(mergeReservation(ctx, record, sha)).rejects.toThrow("head changed; waiting for evaluation of bbbbbbb");
+    expect(writeFetch.calls).toEqual([`PUT ${P}/pulls/12/merge`]);
+    expect(deploymentsFetch.requests.some(({ body }) => body?.includes('"state":"queued"') && body.includes("waiting for evaluation of bbbbbbb"))).toBe(true);
+    expect(deploymentsFetch.requests.some(({ body }) => body?.includes('"state":"failure"'))).toBe(false);
+    expect(notifyFetch.calls).not.toContain(`DELETE ${P}/issues/12/labels/csm-ci%2Fautomerge`);
+  });
+
+  test.each([
+    ["closed", { state: "closed" }, "inactive"],
+    ["merged", { state: "closed", merged: true }, "success"],
+    ["changed identity", { node_id: "other" }, "inactive"],
+  ] as const)("rechecks a %s pull request after a conflict", async (_case, change, expectedState) => {
+    const original = pull();
+    const changed = { ...original, ...change };
+    const { ctx, record, deploymentsFetch } = readyReservation({ labelExists: true, pullThen: [original, original, original, changed] });
+    ctx.write = github("write", fakeFetch([{ method: "PUT", path: `${P}/pulls/12/merge`, status: 409, body: { message: "Conflict" } }]));
+    await expect(mergeReservation(ctx, record, sha)).rejects.toThrow("pull request state changed after the merge conflict");
+    expect(deploymentsFetch.requests.some(({ body }) => body?.includes(`"state":"${expectedState}"`))).toBe(true);
+    expect(deploymentsFetch.requests.some(({ body }) => body?.includes('"state":"failure"'))).toBe(false);
+  });
+
   test.each([
     ["not ready", { reviews: [] }, sha, "merge readiness changed before the final write"],
     ["different head", { pull: { head: { sha: nextSha, repo: { full_name: "owner/repo" } } } }, sha, "merge readiness changed before the final write"],

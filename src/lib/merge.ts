@@ -386,6 +386,16 @@ export async function mergeReservation(ctx: MergeContext, record: ReservationRec
     } catch (error) {
       const code = status(error);
       if (code === 409) {
+        const current = await pullFacts(ctx.server, evaluated.repository, pull.number);
+        if (current.state !== "open" || current.merged || current.repositoryId !== record.payload.repository_id || current.nodeId !== record.payload.pull_node_id) {
+          await evaluateReservation(targetContext, record);
+          throw new Rejection("pull request state changed after the merge conflict");
+        }
+        if (current.headSha !== head) {
+          const reason = `head changed; waiting for evaluation of ${current.headSha.slice(0, 7)}`;
+          await createReservationStatus({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, deploymentId: record.deploymentId, serverRunUrl: runUrl(ctx.serverRun), pullUrl: pullUrl(ctx.serverRun.serverUrl, evaluated.repository, pull.number), state: "queued", description: reason });
+          throw new Rejection(reason);
+        }
         const message = `pull request #${pull.number} cannot merge because its base changed`;
         await createReservationStatus({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, deploymentId: record.deploymentId, serverRunUrl: runUrl(ctx.serverRun), pullUrl: pullUrl(ctx.serverRun.serverUrl, evaluated.repository, pull.number), state: "failure", description: terminalDescription("rejected", message) });
         await postAutomergeComment(targetContext, evaluated.reservation, "rejected", message, head);
