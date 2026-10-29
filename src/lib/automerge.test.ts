@@ -6,6 +6,7 @@ import {
   canCancelReservation,
   decide,
   reservationState,
+  terminalDescription,
   truncateDeploymentDescription,
 } from "./automerge.ts";
 import type { DeploymentStatus, ReservationPayload, ReservationState, TerminalState } from "./automerge.ts";
@@ -106,7 +107,7 @@ describe("reservation state", () => {
         status({ id: 4, state: "inactive", createdAt: "2026-01-02T00:00:00.000Z", description: "tie wins" }),
       ],
     });
-    expect(terminal).toEqual({ kind: "terminal", state: "inactive", at: "2026-01-02T00:00:00.000Z", description: "tie wins" });
+    expect(terminal).toEqual({ kind: "terminal", state: "inactive", at: "2026-01-02T00:00:00.000Z", description: "tie wins", reason: "other" });
   });
 
   test.each<TerminalState>(["success", "failure", "inactive"])("recognizes %s as terminal", (state) => {
@@ -147,8 +148,27 @@ describe("reservation decisions", () => {
     ["pull request closed", "inactive", "none"],
     ["rejected", "failure", "complete"],
   ] as const)("retains an existing terminal status (%s) without repeating skipped comments", (description, stateName, comment) => {
-    const state: ReservationState = { kind: "terminal", state: stateName, at: acceptedAt, description };
-    expect(decide(facts({ reservation: { state, payload }, pull: { ...facts().pull, merged: true } }))).toEqual({ kind: "terminal", state: stateName, description, comment });
+    const reason = description === "merged outside csm-ci" ? "external-merge" : description === "pull request closed" ? "closed" : "other";
+    const state: ReservationState = { kind: "terminal", state: stateName, at: acceptedAt, description, reason };
+    expect(decide(facts({ reservation: { state, payload }, pull: { ...facts().pull, merged: true } }))).toEqual({ kind: "terminal", state: stateName, reason, description, comment });
+  });
+
+  test("terminal comment policy follows typed reason, not display text", () => {
+    const state: ReservationState = { kind: "terminal", state: "success", at: acceptedAt, description: "renamed display text", reason: "external-merge" };
+    expect(decide(facts({ reservation: { state, payload } }))).toMatchObject({ kind: "terminal", reason: "external-merge", comment: "none" });
+  });
+
+  test("durable terminal reason is encoded independently of display wording", () => {
+    const description = terminalDescription("external-merge", "wording can change");
+    const state = reservationState({ serverBotId: 10, statuses: [status({ state: "success", description })] });
+    expect(state).toMatchObject({ kind: "terminal", reason: "external-merge", description });
+    expect(decide(facts({ reservation: { state, payload } }))).toMatchObject({ kind: "terminal", comment: "none" });
+  });
+
+  test("unknown durable terminal reason fails closed to a commented result", () => {
+    const state = reservationState({ serverBotId: 10, statuses: [status({ state: "success", description: "csm-ci:automerge:reason=future-code| text" })] });
+    expect(state).toMatchObject({ kind: "terminal", reason: "other" });
+    expect(decide(facts({ reservation: { state, payload } }))).toMatchObject({ kind: "terminal", comment: "complete" });
   });
 });
 

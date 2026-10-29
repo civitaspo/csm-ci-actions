@@ -5,7 +5,7 @@ import { fetchComment } from "./approve.ts";
 import { escapeHtml, hasServerMarker, marker, postResult, receiptFooter, type ServerRun } from "./notify.ts";
 import { Rejection } from "./request.ts";
 import { evaluateTrust, fetchCommitFacts } from "./trust.ts";
-import { AUTOMERGE_LABEL, automergeMarker, canCancelReservation, decide, ReservationPayloadSchema, type Decision, type ReservationPayload } from "./automerge.ts";
+import { AUTOMERGE_LABEL, automergeMarker, canCancelReservation, decide, ReservationPayloadSchema, terminalDescription, type Decision, type ReservationPayload } from "./automerge.ts";
 import { createReservation, createReservationStatus, findReservationsForPull, type ReservationRecord } from "./automerge-github.ts";
 import { type GitHub, isNetworkFailure, splitRepository } from "./github.ts";
 
@@ -122,6 +122,15 @@ async function postCancelNoop(ctx: MergeContext, pullNumber: number, commentId: 
   await postResult(ctx.notify, ctx.repository, pullNumber, receipt, body);
 }
 
+async function postCancelReceipt(ctx: MergeContext, record: ReservationRecord, commentId: number, message: string): Promise<void> {
+  const receipt = `<!-- csm-ci:automerge:cancel:${commentId} -->`;
+  const eventMarker = `<!-- csm-ci:automerge:${record.deploymentId}:cancelled -->`;
+  const comments = await ctx.notify.paginate(ctx.notify.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: record.payload.pull_number, per_page: 100 });
+  if (hasServerMarker(comments, receipt, ctx.config.apps.server_bot_id)) return;
+  const body = `${receipt}\n${eventMarker}\n${message}\n\n${receiptFooter({ repository: ctx.repository, pullNumber: record.payload.pull_number, commentId, head: record.payload.accepted_head, serverRun: ctx.serverRun })}`;
+  await postResult(ctx.notify, ctx.repository, record.payload.pull_number, receipt, body);
+}
+
 async function requiredChecks(ctx: MergeContext, pull: PullFacts): Promise<{ ok: boolean; problems: string[] }> {
   const runs = await ctx.server.paginate(ctx.server.rest.checks.listForRef, { ...splitRepository(ctx.repository), ref: pull.headSha, per_page: 100 });
   const problems: string[] = [];
@@ -180,7 +189,12 @@ export async function acceptMerge(ctx: MergeContext, args: MergeArgs): Promise<{
 
   const active = existing.find((record) => record.state.kind === "active");
   if (active) {
-    await postAutomergeComment(ctx, active, "rejected", `Pull request is already reserved by ${active.payload.merger.login}.`, active.payload.accepted_head);
+    const markerText = `<!-- csm-ci:automerge:merge:${comment.id}:rejected -->`;
+    const comments = await ctx.notify.paginate(ctx.notify.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: pull.number, per_page: 100 });
+    if (!hasServerMarker(comments, markerText, ctx.config.apps.server_bot_id)) {
+      const body = `${markerText}\nPull request is already reserved by ${active.payload.merger.login}.\n\n${receiptFooter({ repository: ctx.repository, pullNumber: pull.number, commentId: comment.id, head: pull.headSha, serverRun: ctx.serverRun })}`;
+      await postResult(ctx.notify, ctx.repository, pull.number, markerText, body);
+    }
     throw new Rejection(`pull request #${pull.number} already has an active merge reservation`);
   }
   const acceptedAt = ctx.now();
@@ -214,31 +228,76 @@ async function cancelReservation(ctx: MergeContext, pull: Awaited<ReturnType<typ
   const records = await findReservationsForPull({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, repositoryId: pull.repositoryId, pullNumber: pull.number, now: ctx.now() });
   const active = records.find((record) => record.state.kind === "active");
   if (!active) {
-    if (!trusted.some((principal) => principal.id === author.id)) throw new Rejection(`${author.login} is not one of the mergers`);
-    if (pull.merged) throw new Rejection(`pull request #${pull.number} has already merged`);
+    const previous = records.find((record) => record.payload.merger.id === author.id);
+    const cancelledByThisComment = records.find((record) => record.state.kind === "terminal" && record.state.reason === "cancelled" && cancellationCommandId(record) === args.comment_id);
+    const replayingOwnCancellation = cancelledByThisComment !== undefined && cancellationAuthorId(cancelledByThisComment) === author.id;
+    if (!trusted.some((principal) => principal.id === author.id) && !previous && !replayingOwnCancellation) throw new Rejection(`${author.login} is not one of the mergers`);
+    const receipt = `<!-- csm-ci:automerge:cancel:${args.comment_id} -->`;
+    const comments = await ctx.notify.paginate(ctx.notify.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: pull.number, per_page: 100 });
+    if (hasServerMarker(comments, receipt, ctx.config.apps.server_bot_id)) return { kind: "cancel-noop", ...(previous ? { reservation: previous } : {}) };
+    if (cancelledByThisComment) {
+      const cancellingLogin = cancelledByThisComment.state.kind === "terminal" ? cancelledByThisComment.state.description?.match(/\bcancelled by @([^;|]+)/)?.[1]?.trim() : undefined;
+      await postCancelReceipt(ctx, cancelledByThisComment, args.comment_id, `Merge reservation cancelled by @${cancellingLogin ?? author.login}.`);
+      await setLabel(ctx, pull.number, false);
+      return { kind: "cancelled", reservation: cancelledByThisComment };
+    }
+    if (pull.merged) {
+      if (!hasServerMarker(comments, receipt, ctx.config.apps.server_bot_id)) {
+        const body = `${receipt}\ncsm-ci: pull request #${pull.number} has already merged.\n\n${receiptFooter({ repository: ctx.repository, pullNumber: pull.number, commentId: args.comment_id, head: pull.headSha, serverRun: ctx.serverRun })}`;
+        await postResult(ctx.notify, ctx.repository, pull.number, receipt, body);
+      }
+      return { kind: "cancel-noop" };
+    }
     await ctx.notify.rest.reactions.createForIssueComment({ ...splitRepository(ctx.repository), comment_id: args.comment_id, content: "rocket" });
     await postCancelNoop(ctx, pull.number, args.comment_id, pull.headSha);
     return { kind: "cancel-noop" };
   }
   if (!canCancelReservation({ commenterId: author.id, trustedMergerIds: trusted.map((item) => item.id), reservationMergerId: active.payload.merger.id })) throw new Rejection(`${author.login} cannot cancel this merge reservation`);
-  if (pull.merged) throw new Rejection(`pull request #${pull.number} has already merged`);
-  await createReservationStatus({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, deploymentId: active.deploymentId, serverRunUrl: runUrl(ctx.serverRun), pullUrl: pullUrl(ctx.serverRun.serverUrl, ctx.repository, pull.number), state: "inactive", description: `cancelled by @${author.login}` });
+  const receipt = `<!-- csm-ci:automerge:cancel:${args.comment_id} -->`;
+  const comments = await ctx.notify.paginate(ctx.notify.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: pull.number, per_page: 100 });
+  if (hasServerMarker(comments, receipt, ctx.config.apps.server_bot_id)) return { kind: "cancelled", reservation: active };
+  if (pull.merged) {
+    await postCancelReceipt(ctx, active, args.comment_id, `csm-ci: pull request #${pull.number} has already merged.`);
+    return { kind: "cancel-noop", reservation: active };
+  }
+  await createReservationStatus({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, deploymentId: active.deploymentId, serverRunUrl: runUrl(ctx.serverRun), pullUrl: pullUrl(ctx.serverRun.serverUrl, ctx.repository, pull.number), state: "inactive", description: terminalDescription("cancelled", `cancelled by @${author.login}; cancelled_by_id=${author.id}; cancel_comment_id=${args.comment_id}`) });
   await ctx.notify.rest.reactions.createForIssueComment({ ...splitRepository(ctx.repository), comment_id: args.comment_id, content: "rocket" });
-  await postAutomergeComment(ctx, active, "cancelled", `Merge reservation cancelled by @${author.login}.`, active.payload.accepted_head);
+  await postCancelReceipt(ctx, active, args.comment_id, `Merge reservation cancelled by @${author.login}.`);
   await setLabel(ctx, pull.number, false);
   return { kind: "cancelled", reservation: active };
 }
 
 export async function evaluateReservation(ctx: MergeContext, record: ReservationRecord): Promise<Evaluation> {
   ctx.config = await ctx.reloadConfig();
-  const { data: targetRepo } = await ctx.server.request("GET /repositories/{repository_id}", { repository_id: record.payload.repository_id });
-  const targetContext = { ...ctx, repository: targetRepo.full_name };
-  const entry = repositoryEntry(ctx.config, targetContext.repository);
-  const pull = await pullFacts(ctx.server, targetContext.repository, record.payload.pull_number);
-  if (pull.repositoryId !== record.payload.repository_id || pull.nodeId !== record.payload.pull_node_id) throw new Rejection("reservation repository or pull request identity changed");
   const current = await findReservationsForPull({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, repositoryId: record.payload.repository_id, pullNumber: record.payload.pull_number, now: ctx.now() });
   const latest = current.find((item) => item.deploymentId === record.deploymentId);
   if (!latest) throw new Rejection("merge reservation no longer exists");
+  if (latest.state.kind === "active" && ctx.now().getTime() >= Date.parse(latest.payload.expires_at)) {
+    const decision: Decision = { kind: "terminal", state: "inactive", reason: "expired", description: "expired", comment: "complete" };
+    return persistTerminal(ctx, latest, ctx.repository, decision, current);
+  }
+  let targetRepo: { full_name: string };
+  try {
+    ({ data: targetRepo } = await ctx.server.request("GET /repositories/{repository_id}", { repository_id: record.payload.repository_id }));
+  } catch (error) {
+    if (status(error) !== 404) throw error;
+    const decision = latest.state.kind === "terminal" ? terminalDecision(latest) : { kind: "terminal" as const, state: "inactive" as const, reason: "invalidated" as const, description: "reservation target is unavailable", comment: "complete" as const };
+    return persistTerminal(ctx, latest, ctx.repository, decision, current, true);
+  }
+  const targetContext = { ...ctx, repository: targetRepo.full_name };
+  const entry = repositoryEntry(ctx.config, targetContext.repository);
+  let pull: MergePullFacts;
+  try {
+    pull = await pullFacts(ctx.server, targetContext.repository, record.payload.pull_number);
+  } catch (error) {
+    if (status(error) !== 404) throw error;
+    const decision = latest.state.kind === "terminal" ? terminalDecision(latest) : { kind: "terminal" as const, state: "inactive" as const, reason: "invalidated" as const, description: "reservation target is unavailable", comment: "complete" as const };
+    return persistTerminal(ctx, latest, targetContext.repository, decision, current, true);
+  }
+  if (pull.repositoryId !== record.payload.repository_id || pull.nodeId !== record.payload.pull_node_id) {
+    const decision = latest.state.kind === "terminal" ? terminalDecision(latest) : { kind: "terminal" as const, state: "inactive" as const, reason: "invalidated" as const, description: "reservation identity changed", comment: "complete" as const };
+    return persistTerminal(ctx, latest, targetContext.repository, decision, current, true);
+  }
   const mergerStillTrusted = record.payload.mode === "bot"
     ? ctx.config.trust.bot_mergers.some((item) => item.id === record.payload.merger.id)
     : ctx.config.trust.mergers.some((item) => item.id === record.payload.merger.id);
@@ -254,17 +313,57 @@ export async function evaluateReservation(ctx: MergeContext, record: Reservation
     await postAutomergeComment(targetContext, latest, "accepted", `Merge reserved until ${latest.payload.expires_at}. It follows head changes and requires approval and checks for the current head. Cancel with /merge cancel. The ${AUTOMERGE_LABEL} label shows the reservation state.`, latest.payload.accepted_head);
   }
   const statusValue = decision.kind === "terminal" ? decision.state : "queued";
-  const description = decision.kind === "terminal" ? decision.description : decision.kind === "wait" ? `waiting: ${decision.reason}` : `ready to merge ${decision.head.slice(0, 7)}`;
-  if (latest.state.kind === "active" && (statusValue !== "queued" || latest.state.waitingReason !== description)) {
-    await createReservationStatus({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, deploymentId: latest.deploymentId, serverRunUrl: runUrl(ctx.serverRun), pullUrl: pullUrl(ctx.serverRun.serverUrl, targetContext.repository, pull.number), state: statusValue, description });
+  const description = decision.kind === "terminal" ? decision.description : decision.kind === "wait" ? decision.reason : undefined;
+  if (latest.state.kind === "active" && decision.kind !== "merge" && (statusValue !== "queued" || latest.state.waitingReason !== description)) {
+    const statusDescription = decision.kind === "terminal" ? terminalDescription(decision.reason, description ?? "") : description ?? "";
+    await createReservationStatus({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, deploymentId: latest.deploymentId, serverRunUrl: runUrl(ctx.serverRun), pullUrl: pullUrl(ctx.serverRun.serverUrl, targetContext.repository, pull.number), state: statusValue, description: statusDescription });
   }
   if (decision.kind === "terminal" && decision.comment === "complete") {
     const event = eventFor(decision);
-    await postAutomergeComment(targetContext, latest, event, decision.description, pull.headSha);
+    await postAutomergeComment(targetContext, latest, event, humanTerminalDescription(decision.description), pull.headSha);
   }
   const newerActive = current.some((item) => item.deploymentId !== latest.deploymentId && item.state.kind === "active" && Date.parse(item.createdAt) > Date.parse(latest.createdAt));
   await setLabel(targetContext, pull.number, newerActive || decision.kind !== "terminal" || decision.state === "success");
   return { decision, ready: decision.kind === "merge", head: decision.kind === "merge" ? decision.head : pull.headSha, reservation: latest, repository: targetContext.repository };
+}
+
+async function persistTerminal(ctx: MergeContext, record: ReservationRecord, repository: string, decision: Extract<Decision, { kind: "terminal" }>, current: readonly ReservationRecord[], suppressClientWrites = false): Promise<Evaluation> {
+  const targetContext = { ...ctx, repository };
+  if (record.state.kind === "active") {
+    await createReservationStatus({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, deploymentId: record.deploymentId, serverRunUrl: runUrl(ctx.serverRun), pullUrl: pullUrl(ctx.serverRun.serverUrl, repository, record.payload.pull_number), state: decision.state, description: terminalDescription(decision.reason, decision.description) });
+  }
+  if (!suppressClientWrites && decision.comment === "complete") {
+    await postAutomergeComment(targetContext, record, eventFor(decision), humanTerminalDescription(decision.description), record.payload.accepted_head);
+  }
+  const newerActive = current.some((item) => item.deploymentId !== record.deploymentId && item.state.kind === "active" && Date.parse(item.createdAt) > Date.parse(record.createdAt));
+  if (!suppressClientWrites) {
+    await setLabel(targetContext, record.payload.pull_number, newerActive || decision.state === "success");
+  }
+  return { decision, ready: false, head: record.payload.accepted_head, reservation: record, repository };
+}
+
+function cancellationCommandId(record: ReservationRecord): number | undefined {
+  if (record.state.kind !== "terminal") return undefined;
+  const match = record.state.description?.match(/\bcancel_comment_id=(\d+)(?:\D|$)/);
+  return match ? Number(match[1]) : undefined;
+}
+
+function cancellationAuthorId(record: ReservationRecord): number | undefined {
+  if (record.state.kind !== "terminal") return undefined;
+  const match = record.state.description?.match(/\bcancelled_by_id=(\d+)(?:\D|$)/);
+  return match ? Number(match[1]) : undefined;
+}
+
+function terminalDecision(record: ReservationRecord): Extract<Decision, { kind: "terminal" }> {
+  if (record.state.kind !== "terminal") throw new Error("reservation is not terminal");
+  const description = humanTerminalDescription(record.state.description ?? "");
+  return { kind: "terminal", state: record.state.state, reason: record.state.reason, description, comment: record.state.reason === "external-merge" || record.state.reason === "closed" ? "none" : "complete" };
+}
+
+function humanTerminalDescription(description: string): string {
+  return description
+    .replace(/^csm-ci:automerge:reason=[a-z-]+\|\s*/, "")
+    .replace(/; (?:cancelled_by_id=\d+; )?cancel_comment_id=\d+$/, "");
 }
 
 export async function mergeReservation(ctx: MergeContext, record: ReservationRecord, head: string): Promise<MergeOutcome> {
@@ -286,7 +385,13 @@ export async function mergeReservation(ctx: MergeContext, record: ReservationRec
       break;
     } catch (error) {
       const code = status(error);
-      if (code === 409) throw new Rejection(`pull request #${pull.number} cannot merge because its base changed`);
+      if (code === 409) {
+        const message = `pull request #${pull.number} cannot merge because its base changed`;
+        await createReservationStatus({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, deploymentId: record.deploymentId, serverRunUrl: runUrl(ctx.serverRun), pullUrl: pullUrl(ctx.serverRun.serverUrl, evaluated.repository, pull.number), state: "failure", description: terminalDescription("rejected", message) });
+        await postAutomergeComment(targetContext, evaluated.reservation, "rejected", message, head);
+        await setLabel(targetContext, pull.number, false);
+        throw new Rejection(message);
+      }
       if ([502, 503, 504].includes(code ?? 0) || isNetworkFailure(error)) {
         const after = await pullFacts(ctx.server, evaluated.repository, pull.number);
         if (after.merged) {
@@ -302,7 +407,7 @@ export async function mergeReservation(ctx: MergeContext, record: ReservationRec
     }
   }
   if (!mergedSha) throw new Error("merge completed without a commit SHA");
-  await createReservationStatus({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, deploymentId: record.deploymentId, serverRunUrl: runUrl(ctx.serverRun), pullUrl: pullUrl(ctx.serverRun.serverUrl, evaluated.repository, pull.number), state: "success", description: `merged as ${mergedSha.slice(0, 7)}` });
+  await createReservationStatus({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, deploymentId: record.deploymentId, serverRunUrl: runUrl(ctx.serverRun), pullUrl: pullUrl(ctx.serverRun.serverUrl, evaluated.repository, pull.number), state: "success", description: terminalDescription("merged", `merged as ${mergedSha.slice(0, 7)}`) });
   await postAutomergeComment(targetContext, record, "merged", `Pull request squash-merged as ${mergedSha}.`, head);
   await setLabel(targetContext, pull.number, true);
   return { result: "merged", head, mergeCommit: mergedSha };
@@ -336,10 +441,10 @@ async function commitText(ctx: MergeContext, number: number): Promise<{ title: s
 }
 
 function eventFor(decision: Extract<Decision, { kind: "terminal" }>): Parameters<typeof automergeMarker>[1] {
-  if (decision.state === "success") return "merged";
-  if (decision.state === "inactive" && decision.description.startsWith("cancelled by ")) return "cancelled";
-  if (decision.description === "expired") return "expired";
-  if (decision.state === "failure") return "rejected";
+  if (decision.reason === "merged" || decision.reason === "external-merge") return "merged";
+  if (decision.reason === "cancelled") return "cancelled";
+  if (decision.reason === "expired") return "expired";
+  if (decision.reason === "rejected") return "rejected";
   return "invalidated";
 }
 

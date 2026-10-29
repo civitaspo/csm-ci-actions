@@ -32643,11 +32643,20 @@ var ReservationPayloadSchema = strictObject({
   message: "mode must match the merger type",
   path: ["mode"]
 });
+var terminalReasonPrefix = "csm-ci:automerge:reason=";
+var terminalReasons = ["external-merge", "closed", "expired", "invalidated", "rejected", "merged", "cancelled", "other"];
+function terminalReason(description) {
+  const match = description?.match(/^csm-ci:automerge:reason=([a-z-]+)\|/);
+  return terminalReasons.find((reason) => reason === match?.[1]) ?? "other";
+}
+function terminalDescription(reason, description) {
+  return `${terminalReasonPrefix}${reason}| ${description}`;
+}
 function reservationState(args) {
   const statuses = args.statuses.filter((status) => status.creator.type === "Bot" && status.creator.databaseId === args.serverBotId);
   const terminal = statuses.filter((status) => status.state === "success" || status.state === "failure" || status.state === "inactive").sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id - b.id)[0];
   if (terminal)
-    return { kind: "terminal", state: terminal.state, at: terminal.createdAt, description: terminal.description };
+    return { kind: "terminal", state: terminal.state, at: terminal.createdAt, description: terminal.description, reason: terminalReason(terminal.description) };
   const latestQueued = statuses.filter((status) => status.state === "queued").sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.id - a.id)[0];
   return latestQueued?.description ? { kind: "active", waitingReason: latestQueued.description } : { kind: "active" };
 }
@@ -32655,25 +32664,25 @@ function decide(args) {
   const { state, payload } = args.reservation;
   if (state.kind === "terminal") {
     const description = state.description ?? "";
-    const noComment = description === "merged outside csm-ci" || description === "pull request closed";
-    return { kind: "terminal", state: state.state, description, comment: noComment ? "none" : "complete" };
+    const noComment = state.reason === "external-merge" || state.reason === "closed";
+    return { kind: "terminal", state: state.state, reason: state.reason, description, comment: noComment ? "none" : "complete" };
   }
   if (args.pull.merged)
-    return { kind: "terminal", state: "success", description: "merged outside csm-ci", comment: "none" };
+    return { kind: "terminal", state: "success", reason: "external-merge", description: "merged outside csm-ci", comment: "none" };
   if (args.pull.state === "closed")
-    return { kind: "terminal", state: "inactive", description: "pull request closed", comment: "none" };
+    return { kind: "terminal", state: "inactive", reason: "closed", description: "pull request closed", comment: "none" };
   if (args.now.getTime() >= Date.parse(payload.expires_at))
-    return { kind: "terminal", state: "inactive", description: "expired", comment: "complete" };
+    return { kind: "terminal", state: "inactive", reason: "expired", description: "expired", comment: "complete" };
   if (!args.trustValid)
-    return { kind: "terminal", state: "inactive", description: "merger is no longer trusted", comment: "complete" };
+    return { kind: "terminal", state: "inactive", reason: "invalidated", description: "merger is no longer trusted", comment: "complete" };
   if (!args.mergeEnabled)
-    return { kind: "terminal", state: "inactive", description: "merge is disabled", comment: "complete" };
+    return { kind: "terminal", state: "inactive", reason: "invalidated", description: "merge is disabled", comment: "complete" };
   if (payload.mode === "bot" && !args.allowBotRequests)
-    return { kind: "terminal", state: "inactive", description: "bot merge requests are disabled", comment: "complete" };
+    return { kind: "terminal", state: "inactive", reason: "invalidated", description: "bot merge requests are disabled", comment: "complete" };
   if (args.pull.baseRef !== payload.base_ref)
-    return { kind: "terminal", state: "inactive", description: "base branch changed", comment: "complete" };
+    return { kind: "terminal", state: "inactive", reason: "invalidated", description: "base branch changed", comment: "complete" };
   if (payload.mode === "bot" && !args.botCommitsValid)
-    return { kind: "terminal", state: "failure", description: `a commit is not authored by ${payload.merger.login}`, comment: "complete" };
+    return { kind: "terminal", state: "failure", reason: "rejected", description: `a commit is not authored by ${payload.merger.login}`, comment: "complete" };
   if (args.pull.draft)
     return { kind: "wait", reason: "draft" };
   if (args.readiness.kind === "waiting")
@@ -37097,8 +37106,8 @@ var RestStatus = object({
   state: string2(),
   description: string2().nullable(),
   created_at: exports_iso.datetime(),
-  log_url: string2().optional(),
-  environment_url: string2().optional(),
+  log_url: string2().nullable().optional(),
+  environment_url: string2().nullable().optional(),
   creator: object({ id: number2().int().positive(), type: string2() }).nullable()
 });
 var CreatedDeployment = object({ id: number2().int().positive(), node_id: string2().min(1), task: string2(), created_at: exports_iso.datetime(), creator: object({ id: number2().int().positive(), type: string2() }).nullable() });
@@ -37163,9 +37172,11 @@ async function withStatuses(args, nodes) {
   const { owner, repo } = splitRepository(args.serverRepository);
   for (const record of selected) {
     const raw = await args.server.paginate(args.server.rest.repos.listDeploymentStatuses, { owner, repo, deployment_id: record.deploymentId, per_page: 100 });
-    record.statuses = raw.flatMap((value) => {
+    record.statuses = raw.map((value) => {
       const parsed = RestStatus.safeParse(value);
-      return parsed.success ? [mapStatus(parsed.data)] : [];
+      if (!parsed.success)
+        throw new Error(`GitHub returned an invalid deployment status for deployment ${record.deploymentId}`);
+      return mapStatus(parsed.data);
     });
     record.state = reservationState({ statuses: record.statuses, serverBotId: args.serverBotId });
   }
@@ -37537,16 +37548,38 @@ async function readiness(ctx, pull) {
 }
 async function evaluateReservation(ctx, record) {
   ctx.config = await ctx.reloadConfig();
-  const { data: targetRepo } = await ctx.server.request("GET /repositories/{repository_id}", { repository_id: record.payload.repository_id });
-  const targetContext = { ...ctx, repository: targetRepo.full_name };
-  const entry = repositoryEntry(ctx.config, targetContext.repository);
-  const pull = await pullFacts(ctx.server, targetContext.repository, record.payload.pull_number);
-  if (pull.repositoryId !== record.payload.repository_id || pull.nodeId !== record.payload.pull_node_id)
-    throw new Rejection("reservation repository or pull request identity changed");
   const current = await findReservationsForPull({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, repositoryId: record.payload.repository_id, pullNumber: record.payload.pull_number, now: ctx.now() });
   const latest = current.find((item) => item.deploymentId === record.deploymentId);
   if (!latest)
     throw new Rejection("merge reservation no longer exists");
+  if (latest.state.kind === "active" && ctx.now().getTime() >= Date.parse(latest.payload.expires_at)) {
+    const decision = { kind: "terminal", state: "inactive", reason: "expired", description: "expired", comment: "complete" };
+    return persistTerminal(ctx, latest, ctx.repository, decision, current);
+  }
+  let targetRepo;
+  try {
+    ({ data: targetRepo } = await ctx.server.request("GET /repositories/{repository_id}", { repository_id: record.payload.repository_id }));
+  } catch (error) {
+    if (status(error) !== 404)
+      throw error;
+    const decision = latest.state.kind === "terminal" ? terminalDecision(latest) : { kind: "terminal", state: "inactive", reason: "invalidated", description: "reservation target is unavailable", comment: "complete" };
+    return persistTerminal(ctx, latest, ctx.repository, decision, current, true);
+  }
+  const targetContext = { ...ctx, repository: targetRepo.full_name };
+  const entry = repositoryEntry(ctx.config, targetContext.repository);
+  let pull;
+  try {
+    pull = await pullFacts(ctx.server, targetContext.repository, record.payload.pull_number);
+  } catch (error) {
+    if (status(error) !== 404)
+      throw error;
+    const decision = latest.state.kind === "terminal" ? terminalDecision(latest) : { kind: "terminal", state: "inactive", reason: "invalidated", description: "reservation target is unavailable", comment: "complete" };
+    return persistTerminal(ctx, latest, targetContext.repository, decision, current, true);
+  }
+  if (pull.repositoryId !== record.payload.repository_id || pull.nodeId !== record.payload.pull_node_id) {
+    const decision = latest.state.kind === "terminal" ? terminalDecision(latest) : { kind: "terminal", state: "inactive", reason: "invalidated", description: "reservation identity changed", comment: "complete" };
+    return persistTerminal(ctx, latest, targetContext.repository, decision, current, true);
+  }
   const mergerStillTrusted = record.payload.mode === "bot" ? ctx.config.trust.bot_mergers.some((item) => item.id === record.payload.merger.id) : ctx.config.trust.mergers.some((item) => item.id === record.payload.merger.id);
   const botCheckRequired = record.payload.mode === "bot" && latest.state.kind === "active" && pull.state === "open" && ctx.now().getTime() < Date.parse(record.payload.expires_at) && mergerStillTrusted && entry?.ops.includes("merge") === true && entry.merge?.allow_bot_requests !== false && pull.baseRef === record.payload.base_ref;
   const botCommitsValid = !botCheckRequired || await verifyBotCommits(targetContext, pull, record.payload.merger);
@@ -37559,17 +37592,41 @@ async function evaluateReservation(ctx, record) {
     await postAutomergeComment(targetContext, latest, "accepted", `Merge reserved until ${latest.payload.expires_at}. It follows head changes and requires approval and checks for the current head. Cancel with /merge cancel. The ${AUTOMERGE_LABEL} label shows the reservation state.`, latest.payload.accepted_head);
   }
   const statusValue = decision.kind === "terminal" ? decision.state : "queued";
-  const description = decision.kind === "terminal" ? decision.description : decision.kind === "wait" ? `waiting: ${decision.reason}` : `ready to merge ${decision.head.slice(0, 7)}`;
-  if (latest.state.kind === "active" && (statusValue !== "queued" || latest.state.waitingReason !== description)) {
-    await createReservationStatus({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, deploymentId: latest.deploymentId, serverRunUrl: runUrl(ctx.serverRun), pullUrl: pullUrl(ctx.serverRun.serverUrl, targetContext.repository, pull.number), state: statusValue, description });
+  const description = decision.kind === "terminal" ? decision.description : decision.kind === "wait" ? decision.reason : undefined;
+  if (latest.state.kind === "active" && decision.kind !== "merge" && (statusValue !== "queued" || latest.state.waitingReason !== description)) {
+    const statusDescription = decision.kind === "terminal" ? terminalDescription(decision.reason, description ?? "") : description ?? "";
+    await createReservationStatus({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, deploymentId: latest.deploymentId, serverRunUrl: runUrl(ctx.serverRun), pullUrl: pullUrl(ctx.serverRun.serverUrl, targetContext.repository, pull.number), state: statusValue, description: statusDescription });
   }
   if (decision.kind === "terminal" && decision.comment === "complete") {
     const event = eventFor(decision);
-    await postAutomergeComment(targetContext, latest, event, decision.description, pull.headSha);
+    await postAutomergeComment(targetContext, latest, event, humanTerminalDescription(decision.description), pull.headSha);
   }
   const newerActive = current.some((item) => item.deploymentId !== latest.deploymentId && item.state.kind === "active" && Date.parse(item.createdAt) > Date.parse(latest.createdAt));
   await setLabel(targetContext, pull.number, newerActive || decision.kind !== "terminal" || decision.state === "success");
   return { decision, ready: decision.kind === "merge", head: decision.kind === "merge" ? decision.head : pull.headSha, reservation: latest, repository: targetContext.repository };
+}
+async function persistTerminal(ctx, record, repository, decision, current, suppressClientWrites = false) {
+  const targetContext = { ...ctx, repository };
+  if (record.state.kind === "active") {
+    await createReservationStatus({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, deploymentId: record.deploymentId, serverRunUrl: runUrl(ctx.serverRun), pullUrl: pullUrl(ctx.serverRun.serverUrl, repository, record.payload.pull_number), state: decision.state, description: terminalDescription(decision.reason, decision.description) });
+  }
+  if (!suppressClientWrites && decision.comment === "complete") {
+    await postAutomergeComment(targetContext, record, eventFor(decision), humanTerminalDescription(decision.description), record.payload.accepted_head);
+  }
+  const newerActive = current.some((item) => item.deploymentId !== record.deploymentId && item.state.kind === "active" && Date.parse(item.createdAt) > Date.parse(record.createdAt));
+  if (!suppressClientWrites) {
+    await setLabel(targetContext, record.payload.pull_number, newerActive || decision.state === "success");
+  }
+  return { decision, ready: false, head: record.payload.accepted_head, reservation: record, repository };
+}
+function terminalDecision(record) {
+  if (record.state.kind !== "terminal")
+    throw new Error("reservation is not terminal");
+  const description = humanTerminalDescription(record.state.description ?? "");
+  return { kind: "terminal", state: record.state.state, reason: record.state.reason, description, comment: record.state.reason === "external-merge" || record.state.reason === "closed" ? "none" : "complete" };
+}
+function humanTerminalDescription(description) {
+  return description.replace(/^csm-ci:automerge:reason=[a-z-]+\|\s*/, "").replace(/; (?:cancelled_by_id=\d+; )?cancel_comment_id=\d+$/, "");
 }
 async function mergeReservation(ctx, record, head) {
   if (!ctx.write)
@@ -37594,8 +37651,13 @@ async function mergeReservation(ctx, record, head) {
       break;
     } catch (error) {
       const code = status(error);
-      if (code === 409)
-        throw new Rejection(`pull request #${pull.number} cannot merge because its base changed`);
+      if (code === 409) {
+        const message = `pull request #${pull.number} cannot merge because its base changed`;
+        await createReservationStatus({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, deploymentId: record.deploymentId, serverRunUrl: runUrl(ctx.serverRun), pullUrl: pullUrl(ctx.serverRun.serverUrl, evaluated.repository, pull.number), state: "failure", description: terminalDescription("rejected", message) });
+        await postAutomergeComment(targetContext, evaluated.reservation, "rejected", message, head);
+        await setLabel(targetContext, pull.number, false);
+        throw new Rejection(message);
+      }
       if ([502, 503, 504].includes(code ?? 0) || isNetworkFailure(error)) {
         const after = await pullFacts(ctx.server, evaluated.repository, pull.number);
         if (after.merged) {
@@ -37615,7 +37677,7 @@ async function mergeReservation(ctx, record, head) {
   }
   if (!mergedSha)
     throw new Error("merge completed without a commit SHA");
-  await createReservationStatus({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, deploymentId: record.deploymentId, serverRunUrl: runUrl(ctx.serverRun), pullUrl: pullUrl(ctx.serverRun.serverUrl, evaluated.repository, pull.number), state: "success", description: `merged as ${mergedSha.slice(0, 7)}` });
+  await createReservationStatus({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, deploymentId: record.deploymentId, serverRunUrl: runUrl(ctx.serverRun), pullUrl: pullUrl(ctx.serverRun.serverUrl, evaluated.repository, pull.number), state: "success", description: terminalDescription("merged", `merged as ${mergedSha.slice(0, 7)}`) });
   await postAutomergeComment(targetContext, record, "merged", `Pull request squash-merged as ${mergedSha}.`, head);
   await setLabel(targetContext, pull.number, true);
   return { result: "merged", head, mergeCommit: mergedSha };
@@ -37651,13 +37713,13 @@ async function commitText(ctx, number) {
   return { title: `${data.title} (#${number})`, message };
 }
 function eventFor(decision) {
-  if (decision.state === "success")
+  if (decision.reason === "merged" || decision.reason === "external-merge")
     return "merged";
-  if (decision.state === "inactive" && decision.description.startsWith("cancelled by "))
+  if (decision.reason === "cancelled")
     return "cancelled";
-  if (decision.description === "expired")
+  if (decision.reason === "expired")
     return "expired";
-  if (decision.state === "failure")
+  if (decision.reason === "rejected")
     return "rejected";
   return "invalidated";
 }
@@ -37666,6 +37728,57 @@ function runUrl(run) {
 }
 function pullUrl(serverUrl, repository, number) {
   return `${serverUrl}/${repository}/pull/${number}`;
+}
+
+// src/server-automerge/sweep.ts
+function activeSweepReservations(reservations) {
+  const latestByPull = new Map;
+  for (const record of reservations) {
+    const key = `${record.payload.repository_id}#${record.payload.pull_number}`;
+    if (!latestByPull.has(key))
+      latestByPull.set(key, record);
+  }
+  return [...latestByPull.values()].filter((record) => record.state.kind === "active").reverse();
+}
+function installedRepositoryId(repositories, name) {
+  const id = repositories.find((repository) => repository.full_name.toLowerCase() === name.toLowerCase())?.id;
+  return id === undefined ? undefined : Number(id);
+}
+function installedRepository(repositories, repositoryId) {
+  return repositories.find((repository) => Number(repository.id) === repositoryId)?.full_name;
+}
+function resolveRepositoryName(args) {
+  if (!args.deploymentId)
+    return args.repository.toLowerCase();
+  if (args.repositoryId === undefined)
+    return;
+  return installedRepository(args.repositories, args.repositoryId);
+}
+function activeReservationForPullByRepositoryId(reservations, repositoryId, pullNumber) {
+  return reservations.find((record) => record.payload.repository_id === repositoryId && record.payload.pull_number === pullNumber && record.state.kind === "active");
+}
+function evaluationReservation(reservations, deploymentId) {
+  return deploymentId ? reservations.find((record) => String(record.deploymentId) === deploymentId) : reservations[0];
+}
+function partitionSweepRepositories(reservations, repositories, now) {
+  const ready = [];
+  const expire = [];
+  const unavailable = [];
+  for (const record of reservations) {
+    const repository = repositories.get(record.payload.repository_id);
+    if (repository)
+      ready.push({ record, repository });
+    else if (Date.parse(record.payload.expires_at) <= now.getTime())
+      expire.push(record);
+    else {
+      unavailable.push(record);
+      ready.push({ record, repository: record.payload.repository });
+    }
+  }
+  return { ready, expire, unavailable };
+}
+function sweepBatch(items, limit = 256) {
+  return items.slice(0, limit);
 }
 
 // src/server-automerge/main.ts
@@ -37687,31 +37800,31 @@ async function main() {
     const reservations = await listReservations(listArgs);
     const discovery = github(getInput("discovery-token", { required: true }));
     const installed = await discovery.paginate("GET /installation/repositories", { per_page: 100 });
-    const repositories = new Map(installed.map((repo) => [repo.id, repo.full_name]));
-    const latestByPull = new Map;
-    for (const record of reservations) {
-      const key = `${record.payload.repository_id}#${record.payload.pull_number}`;
-      if (!latestByPull.has(key))
-        latestByPull.set(key, record);
+    const repositories = new Map(installed.map((repo) => [Number(repo.id), repo.full_name]));
+    const latest = activeSweepReservations(reservations);
+    const serverRun = { serverUrl: env("GITHUB_SERVER_URL"), repository: serverRepository, id: env("GITHUB_RUN_ID"), attempt: env("GITHUB_RUN_ATTEMPT") };
+    const { ready, expire, unavailable } = partitionSweepRepositories(latest, repositories, new Date);
+    if (unavailable.length > 0)
+      warning(`${unavailable.length} active automerge reservations are outside the server owner's discovery scope; evaluation will resolve them with owner-scoped tokens`);
+    for (const record of expire) {
+      await createReservationStatus({
+        server: deployments,
+        serverRepository,
+        serverBotId: config.apps.server_bot_id,
+        deploymentId: record.deploymentId,
+        serverRunUrl: `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`,
+        pullUrl: `${serverRun.serverUrl}/${record.payload.repository}/pull/${record.payload.pull_number}`,
+        state: "inactive",
+        description: terminalDescription("expired", "reservation expired while client repository was unavailable; notification unavailable")
+      });
     }
-    const latest = [...latestByPull.values()].reverse();
-    const selected = latest.flatMap((record) => {
-      const repository = repositories.get(record.payload.repository_id);
-      if (!repository) {
-        warning(`Automerge repository ID ${record.payload.repository_id} is not installed; skipping reservation ${record.deploymentId}`);
-        return [];
-      }
-      return [{ record, repository }];
-    });
-    if (selected.length > 256)
-      warning(`Automerge sweep has ${selected.length} reservations; evaluating the first 256`);
-    const matrix = selected.slice(0, 256).map(({ record, repository }) => ({
+    if (ready.length > 256)
+      warning(`Automerge sweep has ${ready.length} active reservations; evaluating the first 256`);
+    const matrix = sweepBatch(ready).map(({ record, repository }) => ({
       repository,
       repository_owner: splitRepository(repository).owner,
-      repository_name: splitRepository(repository).repo,
       pull_number: record.payload.pull_number,
-      deployment_id: record.deploymentId,
-      concurrency_key: automergeConcurrencyKey(repository, record.payload.pull_number)
+      deployment_id: record.deploymentId
     }));
     setOutput("matrix", JSON.stringify(matrix));
     setOutput("count", String(matrix.length));
@@ -37723,9 +37836,48 @@ async function main() {
     throw new Error("pull-number must be a positive integer");
   const id = getInput("deployment-id");
   const serverRun = { serverUrl: env("GITHUB_SERVER_URL"), repository: serverRepository, id: env("GITHUB_RUN_ID"), attempt: env("GITHUB_RUN_ATTEMPT") };
+  if (mode === "resolve") {
+    if (!id) {
+      const repository = getInput("repository", { required: true }).toLowerCase();
+      const parts = splitRepository(repository);
+      setOutput("resolved", "true");
+      setOutput("repository", repository);
+      setOutput("repository-owner", parts.owner);
+      setOutput("repository-name", parts.repo);
+      setOutput("concurrency-key", automergeConcurrencyKey(repository, pullNumber));
+      return;
+    }
+    const records = await listReservations(listArgs);
+    const record = id ? records.find((item) => String(item.deploymentId) === id && item.payload.pull_number === pullNumber && item.state.kind === "active") : undefined;
+    if (!record) {
+      setOutput("resolved", "false");
+      return;
+    }
+    const discovery = github(getInput("discovery-token", { required: true }));
+    const installed = await discovery.paginate("GET /installation/repositories", { per_page: 100 });
+    const repository = resolveRepositoryName({ deploymentId: id, repository: getInput("repository"), repositoryId: record.payload.repository_id, repositories: installed });
+    if (!repository) {
+      setOutput("resolved", "false");
+      return;
+    }
+    const parts = splitRepository(repository);
+    setOutput("resolved", "true");
+    setOutput("repository", repository);
+    setOutput("repository-owner", parts.owner);
+    setOutput("repository-name", parts.repo);
+    setOutput("concurrency-key", automergeConcurrencyKey(repository, pullNumber));
+    return;
+  }
   if (mode === "error-status") {
     const records = await listReservations(listArgs);
-    const record = id ? records.find((item) => String(item.deploymentId) === id && item.payload.pull_number === pullNumber) : records.find((item) => item.payload.repository.toLowerCase() === repository && item.payload.pull_number === pullNumber && item.state.kind === "active");
+    let record = id ? records.find((item) => String(item.deploymentId) === id && item.payload.pull_number === pullNumber) : undefined;
+    if (!id) {
+      const discovery = github(getInput("discovery-token", { required: true }));
+      const installed = await discovery.paginate("GET /installation/repositories", { per_page: 100 });
+      const repositoryId = installedRepositoryId(installed, repository);
+      if (repositoryId !== undefined)
+        record = activeReservationForPullByRepositoryId(records, repositoryId, pullNumber);
+    }
     if (record && record.state.kind === "active")
       await createReservationStatus({ server: deployments, serverRepository, serverBotId: config.apps.server_bot_id, deploymentId: record.deploymentId, serverRunUrl: `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, pullUrl: `${serverRun.serverUrl}/${repository}/pull/${pullNumber}`, state: "error", description: getInput("failure-message") || "evaluation failed" });
     return;
@@ -37733,7 +37885,7 @@ async function main() {
   const server = github(getInput("server-token", { required: true }));
   const { data: repo } = await server.rest.repos.get(splitRepository(repository));
   const records = await findReservationsForPull({ ...listArgs, repositoryId: Number(repo.id), pullNumber });
-  const record = id ? records.find((item) => String(item.deploymentId) === id) : records.find((item) => item.state.kind === "active");
+  const record = evaluationReservation(records, id);
   if (!record) {
     setOutput("ready", "false");
     return;

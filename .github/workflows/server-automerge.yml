@@ -37,7 +37,7 @@ jobs:
           private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
-          permission-deployments: read
+          permission-deployments: write
       - id: discovery-token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
@@ -68,10 +68,8 @@ jobs:
     with:
       repository: ${{ matrix.reservation.repository }}
       repository-owner: ${{ matrix.reservation.repository_owner }}
-      repository-name: ${{ matrix.reservation.repository_name }}
       pull-number: ${{ matrix.reservation.pull_number }}
       deployment-id: ${{ matrix.reservation.deployment_id }}
-      concurrency-key: ${{ matrix.reservation.concurrency_key }}
       config-path: ${{ inputs.config-path }}
     secrets:
       CSM_CI_SERVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}

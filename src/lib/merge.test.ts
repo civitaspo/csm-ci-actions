@@ -13,15 +13,16 @@ function pull() {
   return { number: 12, state: "open", merged: false, merged_by: null, merge_commit_sha: null, draft: false, node_id: "PR_node", title: "Example (#12)", body: "Description", user: { id: 10, login: "alice", type: "User" }, head: { sha, repo: { full_name: "owner/repo" } }, base: { ref: "main", repo: { id: 123, full_name: "owner/repo", default_branch: "main" } } };
 }
 
-function setup(body: string, author = { id: 10, login: "alice", type: "User" }, activeReservation = false, options: { pull?: Record<string, unknown>; pullThen?: unknown[]; commentId?: number; editedAt?: string | null; payload?: Record<string, unknown>; headDate?: string; timeline?: unknown[]; reviews?: unknown[]; reviewsThen?: unknown[]; checks?: unknown[]; checksThen?: unknown[]; commits?: unknown[]; legacyReceipt?: "server" | "forged"; statuses?: unknown[] } = {}) {
-  const comment = { id: 9, node_id: "IC_node", body, issue_url: "https://api.github.com/repos/owner/repo/issues/12", created_at: "2026-10-24T11:30:00Z", updated_at: "2026-10-24T11:30:00Z", user: author };
+function setup(body: string, author = { id: 10, login: "alice", type: "User" }, activeReservation = false, options: { pull?: Record<string, unknown>; pullThen?: unknown[]; pullStatus?: number; repositoryStatus?: number; labelExists?: boolean; commentId?: number; editedAt?: string | null; payload?: Record<string, unknown>; headDate?: string; timeline?: unknown[]; reviews?: unknown[]; reviewsThen?: unknown[]; checks?: unknown[]; checksThen?: unknown[]; commits?: unknown[]; legacyReceipt?: "server" | "forged"; statuses?: unknown[]; cancelReceipt?: boolean } = {}) {
+  const commentId = options.commentId ?? 9;
+  const comment = { id: commentId, node_id: "IC_node", body, issue_url: "https://api.github.com/repos/owner/repo/issues/12", created_at: "2026-10-24T11:30:00Z", updated_at: "2026-10-24T11:30:00Z", user: author };
   const payload = { version: 1, repository_id: 123, repository: "owner/repo", pull_number: 12, pull_node_id: "PR_node", base_ref: "main", merger: { id: 10, login: "alice", type: "User" }, mode: "human", command_comment_id: options.commentId ?? 88, accepted_head: sha, accepted_at: "2026-10-20T00:00:00.000Z", expires_at: "2026-10-27T00:00:00.000Z", ...options.payload };
   const deploymentNodes = activeReservation ? [{ id: "D_node", databaseId: 77, task: "csm-ci:automerge", payload, createdAt: "2026-10-20T00:00:00Z", creator: { __typename: "Bot", databaseId: 3000 } }] : [];
   const emptyDeployments = { data: { node: { databaseId: 9, lastEditedAt: options.editedAt ?? null }, repository: { deployments: { nodes: deploymentNodes, pageInfo: { hasNextPage: false, endCursor: null } }, pullRequest: { id: "PR_node", autoMergeRequest: null } } } };
   const serverFetch = fakeFetch([
-    { method: "GET", path: `${P}/pulls/12`, body: { ...pull(), ...options.pull }, ...(options.pullThen ? { then: options.pullThen } : {}) },
-    { method: "GET", path: "/repositories/123", body: { id: 123, full_name: "owner/repo" } },
-    { method: "GET", path: `${P}/issues/comments/9`, body: comment },
+    { method: "GET", path: `${P}/pulls/12`, ...(options.pullStatus ? { status: options.pullStatus } : {}), body: { ...pull(), ...options.pull }, ...(options.pullThen ? { then: options.pullThen } : {}) },
+    { method: "GET", path: "/repositories/123", ...(options.repositoryStatus ? { status: options.repositoryStatus } : {}), body: { id: 123, full_name: "owner/repo" } },
+    { method: "GET", path: `${P}/issues/comments/${commentId}`, body: comment },
     { method: "GET", path: `${P}/issues/12/comments`, body: options.legacyReceipt ? [{ user: { id: options.legacyReceipt === "server" ? 3000 : 99, type: "Bot" }, body: marker("merge", 9) }] : [] },
     { method: "POST", path: "/graphql", body: emptyDeployments },
     { method: "GET", path: `${P}/commits/${sha}`, body: { sha, commit: { committer: { date: options.headDate ?? "2026-10-24T11:00:00Z" } } } },
@@ -31,11 +32,12 @@ function setup(body: string, author = { id: 10, login: "alice", type: "User" }, 
     { method: "GET", path: `${P}/commits/${sha}/check-runs`, body: options.checks ?? [{ id: 7, name: "status-check", app: { id: 15368 }, status: "completed", conclusion: "success", started_at: "2026-10-24T11:10:00Z" }], ...(options.checksThen ? { then: options.checksThen } : {}) },
   ]);
   const notifyFetch = fakeFetch([
-    { method: "POST", path: `${P}/issues/comments/9/reactions`, status: 201, body: { id: 1 } },
-    { method: "GET", path: `${P}/issues/12/comments`, body: [] },
+    { method: "POST", path: `${P}/issues/comments/${commentId}/reactions`, status: 201, body: { id: 1 } },
+    { method: "GET", path: `${P}/issues/12/comments`, body: options.cancelReceipt ? [{ user: { id: 3000, type: "Bot" }, body: "<!-- csm-ci:automerge:cancel:9 -->" }] : [] },
     { method: "POST", path: `${P}/issues/12/comments`, status: 201, body: { id: 90 } },
-    { method: "GET", path: `${P}/issues/12/labels`, body: [] },
+    { method: "GET", path: `${P}/issues/12/labels`, body: options.labelExists ? [{ name: "csm-ci/automerge" }] : [] },
     { method: "POST", path: `${P}/issues/12/labels`, status: 200, body: [{ name: "csm-ci/automerge" }] },
+    { method: "DELETE", path: `${P}/issues/12/labels/csm-ci%2Fautomerge`, status: 200, body: { name: "csm-ci/automerge" } },
   ]);
   const deploymentsFetch = fakeFetch([
     { method: "POST", path: "/graphql", body: emptyDeployments },
@@ -118,9 +120,10 @@ describe("acceptMerge", () => {
   });
 
   test("rejects a second active reservation for the same pull request", async () => {
-    const { ctx, deploymentsFetch } = setup("/merge", { id: 10, login: "alice", type: "User" }, true);
+    const { ctx, deploymentsFetch, notifyFetch } = setup("/merge", { id: 10, login: "alice", type: "User" }, true);
     await expect(acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow("pull request #12 already has an active merge reservation");
     expect(deploymentsFetch.calls).not.toContain("POST /repos/owner/server/deployments");
+    expect(notifyFetch.calls).toContain("POST /repos/owner/repo/issues/12/comments");
   });
 
   test.each([
@@ -170,17 +173,59 @@ describe("acceptMerge", () => {
 
   test.each([
     ["unrelated User", { id: 99, login: "stranger", type: "User" }, { merged: false }, "stranger cannot cancel this merge reservation"],
-    ["reservation owner after merge", { id: 10, login: "alice", type: "User" }, { merged: true }, "pull request #12 has already merged"],
   ] as const)("rejects cancellation by %s", async (_case, author, pullUpdate, message) => {
     const { ctx, deploymentsFetch } = setup("/merge cancel", author, true, { pull: pullUpdate });
     await expect(acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow(message);
     expect(deploymentsFetch.calls).not.toContain("POST /repos/owner/server/deployments/77/statuses");
   });
 
-  test("rejects cancellation explicitly when the reserved pull is already merged", async () => {
+  test("reports an already merged reservation without changing its status", async () => {
     const { ctx, deploymentsFetch, notifyFetch } = setup("/merge cancel", { id: 10, login: "alice", type: "User" }, true, { pull: { merged: true, state: "closed" } });
-    await expect(acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow("pull request #12 has already merged");
+    expect(await acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).toMatchObject({ kind: "cancel-noop", reservation: { deploymentId: 77 } });
     expect(deploymentsFetch.calls).not.toContain("POST /repos/owner/server/deployments/77/statuses");
+    expect(notifyFetch.calls).toContain("POST /repos/owner/repo/issues/12/comments");
+  });
+
+  test("reports an already merged pull request when no reservation remains", async () => {
+    const { ctx, notifyFetch } = setup("/merge cancel", { id: 10, login: "alice", type: "User" }, false, { pull: { merged: true, state: "closed" } });
+    expect(await acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).toEqual({ kind: "cancel-noop" });
+    expect(notifyFetch.calls).toContain("POST /repos/owner/repo/issues/12/comments");
+  });
+
+  test("replays a successful cancellation receipt for the same command", async () => {
+    const { ctx, deploymentsFetch, notifyFetch } = setup("/merge cancel", { id: 10, login: "alice", type: "User" }, false, { cancelReceipt: true });
+    expect(await acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).toEqual({ kind: "cancel-noop" });
+    expect(deploymentsFetch.calls).not.toContain("POST /repos/owner/server/deployments/77/statuses");
+    expect(notifyFetch.calls).not.toContain("POST /repos/owner/repo/issues/12/comments");
+  });
+
+  test("reconstructs a cancellation receipt after its status was written", async () => {
+    const cancellation = { id: 99, state: "inactive", description: "csm-ci:automerge:reason=cancelled| cancelled by @alice; cancel_comment_id=9", created_at: "2026-10-24T11:30:00Z", creator: { id: 3000, type: "Bot" } };
+    const { ctx, notifyFetch } = setup("/merge cancel", { id: 10, login: "alice", type: "User" }, true, { statuses: [cancellation] });
+    expect(await acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).toMatchObject({ kind: "cancelled", reservation: { deploymentId: 77 } });
+    expect(notifyFetch.calls).toContain("POST /repos/owner/repo/issues/12/comments");
+  });
+
+  test("replays a trusted merger's cancellation after trust changes", async () => {
+    const cancellation = { id: 99, state: "inactive", description: "csm-ci:automerge:reason=cancelled| cancelled by @alice; cancelled_by_id=10; cancel_comment_id=9", created_at: "2026-10-24T11:30:00Z", creator: { id: 3000, type: "Bot" } };
+    const { ctx, notifyFetch } = setup("/merge cancel", { id: 10, login: "alice", type: "User" }, true, { statuses: [cancellation], payload: { merger: { id: 20, login: "bob", type: "User" } } });
+    ctx.config.trust.mergers = [];
+    expect(await acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).toMatchObject({ kind: "cancelled", reservation: { deploymentId: 77 } });
+    expect(notifyFetch.calls).toContain("POST /repos/owner/repo/issues/12/comments");
+  });
+
+  test("does not replay a cancellation receipt for a different command comment ID", async () => {
+    const cancellation = { id: 99, state: "inactive", description: "csm-ci:automerge:reason=cancelled| cancelled by @alice; cancelled_by_id=10; cancel_comment_id=90", created_at: "2026-10-24T11:30:00Z", creator: { id: 3000, type: "Bot" } };
+    const { ctx, notifyFetch } = setup("/merge cancel", { id: 10, login: "alice", type: "User" }, true, { statuses: [cancellation], payload: { merger: { id: 20, login: "bob", type: "User" } } });
+    ctx.config.trust.mergers = [{ id: 10, login: "alice" }];
+    expect(await acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).toEqual({ kind: "cancel-noop" });
+    expect(notifyFetch.requests.at(-1)?.body).toContain("no active merge reservation");
+    expect(notifyFetch.requests.at(-1)?.body).not.toContain("Merge reservation cancelled");
+  });
+
+  test("rejects a Bot cancellation because reservation ownership is a User identity", async () => {
+    const { ctx, notifyFetch } = setup("/merge cancel", { id: 20, login: "renovate[bot]", type: "Bot" }, true, { payload: { merger: { id: 20, login: "renovate[bot]", type: "Bot" } } });
+    await expect(acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow("only the reserving User or a trusted merger can cancel a merge reservation");
     expect(notifyFetch.calls).toEqual([]);
   });
 });
@@ -199,6 +244,57 @@ describe("evaluateReservation", () => {
     expect(deploymentsFetch.calls).toContain("POST /repos/owner/server/deployments/77/statuses");
   });
 
+  test("expires a reservation before looking up its target repository", async () => {
+    const { ctx, serverFetch, deploymentsFetch, notifyFetch, payload } = setup("/merge", { id: 10, login: "alice", type: "User" }, true, {
+      payload: { accepted_at: "2026-10-17T11:30:00.000Z", expires_at: "2026-10-24T11:30:00.000Z" },
+    });
+    const record = { deploymentId: 77, nodeId: "D_node", createdAt: "2026-10-20T00:00:00Z", payload: payload as never, statuses: [], state: { kind: "active" as const } };
+    const result = await evaluateReservation(ctx, record);
+    expect(result.decision).toMatchObject({ kind: "terminal", state: "inactive", reason: "expired" });
+    expect(serverFetch.calls).not.toContain("GET /repositories/123");
+    expect(serverFetch.calls).not.toContain(`GET ${P}/pulls/12`);
+    expect(deploymentsFetch.calls).toContain("POST /repos/owner/server/deployments/77/statuses");
+    expect(notifyFetch.calls).toContain(`POST ${P}/issues/12/comments`);
+  });
+
+  test("uses the workflow's current repository name for expiry receipts", async () => {
+    const { ctx, deploymentsFetch, payload } = setup("/merge", { id: 10, login: "alice", type: "User" }, true, {
+      payload: { accepted_at: "2026-10-17T11:30:00.000Z", expires_at: "2026-10-24T11:30:00.000Z" },
+    });
+    const notifyFetch = fakeFetch([
+      { method: "GET", path: "/repos/owner/current/issues/12/comments", body: [] },
+      { method: "POST", path: "/repos/owner/current/issues/12/comments", status: 201, body: { id: 90 } },
+      { method: "GET", path: "/repos/owner/current/issues/12/labels", body: [] },
+    ]);
+    ctx.repository = "owner/current";
+    ctx.notify = github("notify", notifyFetch);
+    const record = { deploymentId: 77, nodeId: "D_node", createdAt: "2026-10-20T00:00:00Z", payload: payload as never, statuses: [], state: { kind: "active" as const } };
+    const result = await evaluateReservation(ctx, record);
+    expect(result.repository).toBe("owner/current");
+    expect(notifyFetch.calls).toContain("POST /repos/owner/current/issues/12/comments");
+    expect(deploymentsFetch.requests.at(-1)?.body).toContain("owner/current/pull/12");
+  });
+
+  test.each([
+    ["repository lookup", { repositoryStatus: 404 }],
+    ["pull request lookup", { pullStatus: 404 }],
+  ] as const)("terminalizes an inaccessible target after %s returns 404", async (_case, options) => {
+    const { ctx, deploymentsFetch, notifyFetch, payload } = setup("/merge", { id: 10, login: "alice", type: "User" }, true, options);
+    const record = { deploymentId: 77, nodeId: "D_node", createdAt: "2026-10-20T00:00:00Z", payload: payload as never, statuses: [], state: { kind: "active" as const } };
+    const result = await evaluateReservation(ctx, record);
+    expect(result.decision).toMatchObject({ kind: "terminal", state: "inactive", reason: "invalidated" });
+    expect(deploymentsFetch.calls).toContain("POST /repos/owner/server/deployments/77/statuses");
+    expect(notifyFetch.calls).toEqual([]);
+  });
+
+  test("keeps non-404 target API errors retryable", async () => {
+    const { ctx, serverFetch, deploymentsFetch, payload } = setup("/merge", { id: 10, login: "alice", type: "User" }, true, { repositoryStatus: 500 });
+    const record = { deploymentId: 77, nodeId: "D_node", createdAt: "2026-10-20T00:00:00Z", payload: payload as never, statuses: [], state: { kind: "active" as const } };
+    await expect(evaluateReservation(ctx, record)).rejects.toThrow();
+    expect(serverFetch.calls).toContain("GET /repositories/123");
+    expect(deploymentsFetch.calls).not.toContain("POST /repos/owner/server/deployments/77/statuses");
+  });
+
   test("keeps an active reservation queued while the current head lacks approval", async () => {
     const { ctx, deploymentsFetch, notifyFetch, payload } = setup("/merge", { id: 10, login: "alice", type: "User" }, true, { reviews: [] });
     const record = { deploymentId: 77, nodeId: "D_node", createdAt: "2026-10-20T00:00:00Z", payload: payload as never, statuses: [], state: { kind: "active" as const } };
@@ -206,7 +302,18 @@ describe("evaluateReservation", () => {
     expect(result.decision).toMatchObject({ kind: "wait", reason: `waiting for approval of ${sha.slice(0, 7)}` });
     expect(result.ready).toBe(false);
     expect(deploymentsFetch.calls).toContain("POST /repos/owner/server/deployments/77/statuses");
+    expect(deploymentsFetch.requests.at(-1)?.body).toContain("waiting for approval of aaaaaaa");
+    expect(deploymentsFetch.requests.at(-1)?.body).not.toContain("waiting: waiting");
     expect(notifyFetch.calls).toContain(`POST ${P}/issues/12/comments`);
+  });
+
+  test("does not publish a queued status when the reservation is ready to merge", async () => {
+    const waitingStatus = { id: 98, state: "queued", description: "waiting for approval of aaaaaaa", created_at: "2026-10-24T11:00:00Z", creator: { id: 3000, type: "Bot" } };
+    const { ctx, deploymentsFetch, payload } = setup("/merge", { id: 10, login: "alice", type: "User" }, true, { statuses: [waitingStatus] });
+    const record = { deploymentId: 77, nodeId: "D_node", createdAt: "2026-10-20T00:00:00Z", payload: payload as never, statuses: [], state: { kind: "active" as const } };
+    const result = await evaluateReservation(ctx, record);
+    expect(result.decision).toMatchObject({ kind: "merge", head: sha });
+    expect(deploymentsFetch.calls).not.toContain("POST /repos/owner/server/deployments/77/statuses");
   });
 
   test.each([
@@ -232,7 +339,7 @@ describe("evaluateReservation", () => {
   });
 
   test("does not add a result comment for an external merge, including on later sweeps", async () => {
-    const externalStatus = { id: 98, state: "success", description: "merged outside csm-ci", created_at: "2026-10-24T11:00:00Z", creator: { id: 3000, type: "Bot" } };
+    const externalStatus = { id: 98, state: "success", description: "csm-ci:automerge:reason=external-merge| merged outside csm-ci", created_at: "2026-10-24T11:00:00Z", creator: { id: 3000, type: "Bot" } };
     const { ctx, notifyFetch, payload } = setup("/merge", { id: 10, login: "alice", type: "User" }, true, {
       pull: { state: "closed", merged: true }, statuses: [externalStatus],
     });
@@ -243,23 +350,39 @@ describe("evaluateReservation", () => {
   });
 
   test("does not add a result comment for an already-terminal closed pull request", async () => {
-    const closedStatus = { id: 98, state: "inactive", description: "pull request closed", created_at: "2026-10-24T11:00:00Z", creator: { id: 3000, type: "Bot" } };
+    const closedStatus = { id: 98, state: "inactive", description: "csm-ci:automerge:reason=closed| pull request closed", created_at: "2026-10-24T11:00:00Z", creator: { id: 3000, type: "Bot" } };
     const { ctx, notifyFetch, payload } = setup("/merge", { id: 10, login: "alice", type: "User" }, true, {
       pull: { state: "closed" }, statuses: [closedStatus],
     });
     const record = { deploymentId: 77, nodeId: "D_node", createdAt: "2026-10-20T00:00:00Z", payload: payload as never, statuses: [], state: { kind: "active" as const } };
     const result = await evaluateReservation(ctx, record);
-    expect(result.decision).toMatchObject({ kind: "terminal", state: "inactive", description: "pull request closed", comment: "none" });
+    expect(result.decision).toMatchObject({ kind: "terminal", state: "inactive", reason: "closed", comment: "none" });
     expect(notifyFetch.calls).not.toContain(`POST ${P}/issues/12/comments`);
+  });
+
+  test("repairs a cancellation result without exposing durable replay metadata", async () => {
+    const cancellation = { id: 98, state: "inactive", description: "csm-ci:automerge:reason=cancelled| cancelled by @alice; cancelled_by_id=10; cancel_comment_id=9", created_at: "2026-10-24T11:00:00Z", creator: { id: 3000, type: "Bot" } };
+    const { ctx, notifyFetch, payload } = setup("/merge", { id: 10, login: "alice", type: "User" }, true, { statuses: [cancellation] });
+    const record = { deploymentId: 77, nodeId: "D_node", createdAt: "2026-10-20T00:00:00Z", payload: payload as never, statuses: [], state: { kind: "active" as const } };
+    const result = await evaluateReservation(ctx, record);
+    expect(result.decision).toMatchObject({ kind: "terminal", reason: "cancelled" });
+    const posted = notifyFetch.requests.find((request) => request.method === "POST" && request.path === `${P}/issues/12/comments`);
+    const body = JSON.parse(posted?.body ?? "{}") as { body?: string };
+    expect(body.body).toContain("cancelled by @alice");
+    expect(body.body).not.toContain("cancelled_by_id");
+    expect(body.body).not.toContain("cancel_comment_id");
   });
 
   test.each([
     ["repository ID", { base: { ref: "main", repo: { id: 999, full_name: "owner/repo", default_branch: "main" } } }],
     ["pull node ID", { node_id: "different-node" }],
-  ])("rejects changed immutable %s identity", async (_label, pullUpdate) => {
-    const { ctx, payload } = setup("/merge", { id: 10, login: "alice", type: "User" }, true, { pull: pullUpdate });
+  ])("terminalizes changed immutable %s identity", async (_label, pullUpdate) => {
+    const { ctx, deploymentsFetch, notifyFetch, payload } = setup("/merge", { id: 10, login: "alice", type: "User" }, true, { pull: pullUpdate });
     const record = { deploymentId: 77, nodeId: "D_node", createdAt: "2026-10-20T00:00:00Z", payload: payload as never, statuses: [], state: { kind: "active" as const } };
-    await expect(evaluateReservation(ctx, record)).rejects.toThrow("reservation repository or pull request identity changed");
+    const result = await evaluateReservation(ctx, record);
+    expect(result.decision).toMatchObject({ kind: "terminal", state: "inactive", reason: "invalidated" });
+    expect(deploymentsFetch.calls).toContain("POST /repos/owner/server/deployments/77/statuses");
+    expect(notifyFetch.calls).toEqual([]);
   });
 
   test("rejects a reservation missing from current server state", async () => {
@@ -271,13 +394,13 @@ describe("evaluateReservation", () => {
 
 describe("mergeReservation", () => {
   function readyReservation(options: Parameters<typeof setup>[3] = {}) {
-    const { ctx, deploymentsFetch, serverFetch, payload } = setup("/merge", { id: 10, login: "alice", type: "User" }, true, {
+    const { ctx, deploymentsFetch, serverFetch, notifyFetch, payload } = setup("/merge", { id: 10, login: "alice", type: "User" }, true, {
       ...options,
       commentId: 9,
       payload: { merger: { id: 10, login: "alice", type: "User" }, ...(options.payload ?? {}) },
     });
     const record = { deploymentId: 77, nodeId: "D_node", createdAt: "2026-10-20T00:00:00Z", payload: payload as never, statuses: [], state: { kind: "active" as const } };
-    return { ctx, deploymentsFetch, serverFetch, record };
+    return { ctx, deploymentsFetch, serverFetch, notifyFetch, record };
   }
 
   test("final revalidation passes current approval, policy and required check before squash merge", async () => {
@@ -290,11 +413,15 @@ describe("mergeReservation", () => {
   });
 
   test("fails HTTP 409 without retrying the protected merge write", async () => {
-    const { ctx, record } = readyReservation();
+    const { ctx, record, deploymentsFetch, notifyFetch } = readyReservation({ labelExists: true });
     const writeFetch = fakeFetch([{ method: "PUT", path: `${P}/pulls/12/merge`, status: 409, body: { message: "Conflict" } }]);
     ctx.write = github("write", writeFetch);
     await expect(mergeReservation(ctx, record, sha)).rejects.toThrow("base changed");
     expect(writeFetch.calls).toEqual([`PUT ${P}/pulls/12/merge`]);
+    expect(deploymentsFetch.calls).toContain("POST /repos/owner/server/deployments/77/statuses");
+    expect(deploymentsFetch.requests.some(({ body }) => body?.includes('"state":"failure"') && body.includes("reason=rejected"))).toBe(true);
+    expect(notifyFetch.calls).toContain(`POST ${P}/issues/12/comments`);
+    expect(notifyFetch.calls).toContain(`DELETE ${P}/issues/12/labels/csm-ci%2Fautomerge`);
   });
 
   test.each([

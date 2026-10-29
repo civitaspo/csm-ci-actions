@@ -32,13 +32,27 @@ type DeploymentStatus = {
 };
 type ReservationState =
   | { kind: "active"; waitingReason?: string }
-  | { kind: "terminal"; state: TerminalState; at: string; description: string | null };
+  | { kind: "terminal"; state: TerminalState; at: string; description: string | null; reason: TerminalReason };
+
+type TerminalReason = "external-merge" | "closed" | "expired" | "invalidated" | "rejected" | "merged" | "cancelled" | "other";
+
+const terminalReasonPrefix = "csm-ci:automerge:reason=";
+const terminalReasons: readonly TerminalReason[] = ["external-merge", "closed", "expired", "invalidated", "rejected", "merged", "cancelled", "other"];
+
+function terminalReason(description: string | null): TerminalReason {
+  const match = description?.match(/^csm-ci:automerge:reason=([a-z-]+)\|/);
+  return terminalReasons.find((reason) => reason === match?.[1]) ?? "other";
+}
+
+function terminalDescription(reason: TerminalReason, description: string): string {
+  return `${terminalReasonPrefix}${reason}| ${description}`;
+}
 
 function reservationState(args: { statuses: readonly DeploymentStatus[]; serverBotId: number }): ReservationState {
   const statuses = args.statuses.filter((status) => status.creator.type === "Bot" && status.creator.databaseId === args.serverBotId);
   const terminal = statuses.filter((status): status is DeploymentStatus & { state: TerminalState } => status.state === "success" || status.state === "failure" || status.state === "inactive")
     .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id - b.id)[0];
-  if (terminal) return { kind: "terminal", state: terminal.state, at: terminal.createdAt, description: terminal.description };
+  if (terminal) return { kind: "terminal", state: terminal.state, at: terminal.createdAt, description: terminal.description, reason: terminalReason(terminal.description) };
   const latestQueued = statuses.filter((status): status is DeploymentStatus & { state: "queued" } => status.state === "queued")
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.id - a.id)[0];
   return latestQueued?.description ? { kind: "active", waitingReason: latestQueued.description } : { kind: "active" };
@@ -53,7 +67,7 @@ type PullFacts = {
 };
 type Readiness = { kind: "ready" } | { kind: "waiting"; reason: string };
 type Decision =
-  | { kind: "terminal"; state: TerminalState; description: string; comment: "none" | "complete" }
+  | { kind: "terminal"; state: TerminalState; reason: TerminalReason; description: string; comment: "none" | "complete" }
   | { kind: "wait"; reason: string }
   | { kind: "merge"; head: string };
 
@@ -70,17 +84,17 @@ function decide(args: {
   const { state, payload } = args.reservation;
   if (state.kind === "terminal") {
     const description = state.description ?? "";
-    const noComment = description === "merged outside csm-ci" || description === "pull request closed";
-    return { kind: "terminal", state: state.state, description, comment: noComment ? "none" : "complete" };
+    const noComment = state.reason === "external-merge" || state.reason === "closed";
+    return { kind: "terminal", state: state.state, reason: state.reason, description, comment: noComment ? "none" : "complete" };
   }
-  if (args.pull.merged) return { kind: "terminal", state: "success", description: "merged outside csm-ci", comment: "none" };
-  if (args.pull.state === "closed") return { kind: "terminal", state: "inactive", description: "pull request closed", comment: "none" };
-  if (args.now.getTime() >= Date.parse(payload.expires_at)) return { kind: "terminal", state: "inactive", description: "expired", comment: "complete" };
-  if (!args.trustValid) return { kind: "terminal", state: "inactive", description: "merger is no longer trusted", comment: "complete" };
-  if (!args.mergeEnabled) return { kind: "terminal", state: "inactive", description: "merge is disabled", comment: "complete" };
-  if (payload.mode === "bot" && !args.allowBotRequests) return { kind: "terminal", state: "inactive", description: "bot merge requests are disabled", comment: "complete" };
-  if (args.pull.baseRef !== payload.base_ref) return { kind: "terminal", state: "inactive", description: "base branch changed", comment: "complete" };
-  if (payload.mode === "bot" && !args.botCommitsValid) return { kind: "terminal", state: "failure", description: `a commit is not authored by ${payload.merger.login}`, comment: "complete" };
+  if (args.pull.merged) return { kind: "terminal", state: "success", reason: "external-merge", description: "merged outside csm-ci", comment: "none" };
+  if (args.pull.state === "closed") return { kind: "terminal", state: "inactive", reason: "closed", description: "pull request closed", comment: "none" };
+  if (args.now.getTime() >= Date.parse(payload.expires_at)) return { kind: "terminal", state: "inactive", reason: "expired", description: "expired", comment: "complete" };
+  if (!args.trustValid) return { kind: "terminal", state: "inactive", reason: "invalidated", description: "merger is no longer trusted", comment: "complete" };
+  if (!args.mergeEnabled) return { kind: "terminal", state: "inactive", reason: "invalidated", description: "merge is disabled", comment: "complete" };
+  if (payload.mode === "bot" && !args.allowBotRequests) return { kind: "terminal", state: "inactive", reason: "invalidated", description: "bot merge requests are disabled", comment: "complete" };
+  if (args.pull.baseRef !== payload.base_ref) return { kind: "terminal", state: "inactive", reason: "invalidated", description: "base branch changed", comment: "complete" };
+  if (payload.mode === "bot" && !args.botCommitsValid) return { kind: "terminal", state: "failure", reason: "rejected", description: `a commit is not authored by ${payload.merger.login}`, comment: "complete" };
   if (args.pull.draft) return { kind: "wait", reason: "draft" };
   if (args.readiness.kind === "waiting") return { kind: "wait", reason: args.readiness.reason };
   return { kind: "merge", head: args.pull.headSha };
@@ -107,6 +121,7 @@ export {
   canCancelReservation,
   decide,
   reservationState,
+  terminalDescription,
   truncateDeploymentDescription,
 };
-export type { Decision, DeploymentStatus, ReservationPayload, ReservationState, TerminalState };
+export type { Decision, DeploymentStatus, ReservationPayload, ReservationState, TerminalReason, TerminalState };

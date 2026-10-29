@@ -37,7 +37,6 @@ jobs:
       name: ${{ steps.intake.outputs.name }}
       args: ${{ steps.intake.outputs.args }}
       concurrency-key: ${{ steps.intake.outputs.concurrency-key }}
-      automerge-concurrency-key: ${{ steps.intake.outputs.automerge-concurrency-key }}
       release: ${{ steps.intake.outputs.release }}
       server-bot-id: ${{ steps.intake.outputs.server-bot-id }}
     steps:
@@ -61,7 +60,7 @@ jobs:
     # Keyed on the normalized repository and number from intake, so spelling variants share a group. /approve and policy-check
     # share it because both publish policy checks and reports; merge acceptance keeps its own group so it does not block them.
     concurrency:
-      group: csm-ci-${{ needs.intake.outputs.kind == 'merge' && needs.intake.outputs.automerge-concurrency-key || needs.intake.outputs.concurrency-key }}
+      group: csm-ci-${{ needs.intake.outputs.concurrency-key }}
       cancel-in-progress: false
     permissions:
       contents: read
@@ -263,10 +262,8 @@ jobs:
     with:
       repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
       repository-owner: ${{ needs.intake.outputs.owner }}
-      repository-name: ${{ needs.intake.outputs.name }}
       pull-number: ${{ fromJSON(needs.intake.outputs.args).pull_number }}
       deployment-id: ''
-      concurrency-key: ${{ needs.intake.outputs.automerge-concurrency-key }}
       config-path: ${{ inputs.config-path }}
     secrets:
       CSM_CI_SERVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}

@@ -37205,11 +37205,20 @@ var ReservationPayloadSchema = strictObject({
   message: "mode must match the merger type",
   path: ["mode"]
 });
+var terminalReasonPrefix = "csm-ci:automerge:reason=";
+var terminalReasons = ["external-merge", "closed", "expired", "invalidated", "rejected", "merged", "cancelled", "other"];
+function terminalReason(description) {
+  const match = description?.match(/^csm-ci:automerge:reason=([a-z-]+)\|/);
+  return terminalReasons.find((reason) => reason === match?.[1]) ?? "other";
+}
+function terminalDescription(reason, description) {
+  return `${terminalReasonPrefix}${reason}| ${description}`;
+}
 function reservationState(args) {
   const statuses = args.statuses.filter((status) => status.creator.type === "Bot" && status.creator.databaseId === args.serverBotId);
   const terminal = statuses.filter((status) => status.state === "success" || status.state === "failure" || status.state === "inactive").sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id - b.id)[0];
   if (terminal)
-    return { kind: "terminal", state: terminal.state, at: terminal.createdAt, description: terminal.description };
+    return { kind: "terminal", state: terminal.state, at: terminal.createdAt, description: terminal.description, reason: terminalReason(terminal.description) };
   const latestQueued = statuses.filter((status) => status.state === "queued").sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.id - a.id)[0];
   return latestQueued?.description ? { kind: "active", waitingReason: latestQueued.description } : { kind: "active" };
 }
@@ -37244,8 +37253,8 @@ var RestStatus = object({
   state: string2(),
   description: string2().nullable(),
   created_at: exports_iso.datetime(),
-  log_url: string2().optional(),
-  environment_url: string2().optional(),
+  log_url: string2().nullable().optional(),
+  environment_url: string2().nullable().optional(),
   creator: object({ id: number2().int().positive(), type: string2() }).nullable()
 });
 var CreatedDeployment = object({ id: number2().int().positive(), node_id: string2().min(1), task: string2(), created_at: exports_iso.datetime(), creator: object({ id: number2().int().positive(), type: string2() }).nullable() });
@@ -37332,9 +37341,11 @@ async function withStatuses(args, nodes) {
   const { owner, repo } = splitRepository(args.serverRepository);
   for (const record of selected) {
     const raw = await args.server.paginate(args.server.rest.repos.listDeploymentStatuses, { owner, repo, deployment_id: record.deploymentId, per_page: 100 });
-    record.statuses = raw.flatMap((value) => {
+    record.statuses = raw.map((value) => {
       const parsed = RestStatus.safeParse(value);
-      return parsed.success ? [mapStatus(parsed.data)] : [];
+      if (!parsed.success)
+        throw new Error(`GitHub returned an invalid deployment status for deployment ${record.deploymentId}`);
+      return mapStatus(parsed.data);
     });
     record.state = reservationState({ statuses: record.statuses, serverBotId: args.serverBotId });
   }
@@ -37464,6 +37475,19 @@ csm-ci: no active merge reservation was found to cancel.
 ${receiptFooter({ repository: ctx.repository, pullNumber, commentId, head, serverRun: ctx.serverRun })}`;
   await postResult(ctx.notify, ctx.repository, pullNumber, receipt, body);
 }
+async function postCancelReceipt(ctx, record, commentId, message) {
+  const receipt = `<!-- csm-ci:automerge:cancel:${commentId} -->`;
+  const eventMarker = `<!-- csm-ci:automerge:${record.deploymentId}:cancelled -->`;
+  const comments = await ctx.notify.paginate(ctx.notify.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: record.payload.pull_number, per_page: 100 });
+  if (hasServerMarker(comments, receipt, ctx.config.apps.server_bot_id))
+    return;
+  const body = `${receipt}
+${eventMarker}
+${message}
+
+${receiptFooter({ repository: ctx.repository, pullNumber: record.payload.pull_number, commentId, head: record.payload.accepted_head, serverRun: ctx.serverRun })}`;
+  await postResult(ctx.notify, ctx.repository, record.payload.pull_number, receipt, body);
+}
 async function acceptMerge(ctx, args) {
   await refreshConfig(ctx);
   const pull = await pullFacts(ctx.server, ctx.repository, args.pull_number);
@@ -37507,7 +37531,15 @@ async function acceptMerge(ctx, args) {
     throw new Rejection(`${author.login} has unsupported account type ${author.type}`);
   const active = existing.find((record) => record.state.kind === "active");
   if (active) {
-    await postAutomergeComment(ctx, active, "rejected", `Pull request is already reserved by ${active.payload.merger.login}.`, active.payload.accepted_head);
+    const markerText = `<!-- csm-ci:automerge:merge:${comment.id}:rejected -->`;
+    const comments = await ctx.notify.paginate(ctx.notify.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: pull.number, per_page: 100 });
+    if (!hasServerMarker(comments, markerText, ctx.config.apps.server_bot_id)) {
+      const body = `${markerText}
+Pull request is already reserved by ${active.payload.merger.login}.
+
+${receiptFooter({ repository: ctx.repository, pullNumber: pull.number, commentId: comment.id, head: pull.headSha, serverRun: ctx.serverRun })}`;
+      await postResult(ctx.notify, ctx.repository, pull.number, markerText, body);
+    }
     throw new Rejection(`pull request #${pull.number} already has an active merge reservation`);
   }
   const acceptedAt = ctx.now();
@@ -37541,23 +37573,62 @@ async function cancelReservation(ctx, pull, comment, args) {
   const records = await findReservationsForPull({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, repositoryId: pull.repositoryId, pullNumber: pull.number, now: ctx.now() });
   const active = records.find((record) => record.state.kind === "active");
   if (!active) {
-    if (!trusted.some((principal) => principal.id === author.id))
+    const previous = records.find((record) => record.payload.merger.id === author.id);
+    const cancelledByThisComment = records.find((record) => record.state.kind === "terminal" && record.state.reason === "cancelled" && cancellationCommandId(record) === args.comment_id);
+    const replayingOwnCancellation = cancelledByThisComment !== undefined && cancellationAuthorId(cancelledByThisComment) === author.id;
+    if (!trusted.some((principal) => principal.id === author.id) && !previous && !replayingOwnCancellation)
       throw new Rejection(`${author.login} is not one of the mergers`);
-    if (pull.merged)
-      throw new Rejection(`pull request #${pull.number} has already merged`);
+    const receipt = `<!-- csm-ci:automerge:cancel:${args.comment_id} -->`;
+    const comments = await ctx.notify.paginate(ctx.notify.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: pull.number, per_page: 100 });
+    if (hasServerMarker(comments, receipt, ctx.config.apps.server_bot_id))
+      return { kind: "cancel-noop", ...previous ? { reservation: previous } : {} };
+    if (cancelledByThisComment) {
+      const cancellingLogin = cancelledByThisComment.state.kind === "terminal" ? cancelledByThisComment.state.description?.match(/\bcancelled by @([^;|]+)/)?.[1]?.trim() : undefined;
+      await postCancelReceipt(ctx, cancelledByThisComment, args.comment_id, `Merge reservation cancelled by @${cancellingLogin ?? author.login}.`);
+      await setLabel(ctx, pull.number, false);
+      return { kind: "cancelled", reservation: cancelledByThisComment };
+    }
+    if (pull.merged) {
+      if (!hasServerMarker(comments, receipt, ctx.config.apps.server_bot_id)) {
+        const body = `${receipt}
+csm-ci: pull request #${pull.number} has already merged.
+
+${receiptFooter({ repository: ctx.repository, pullNumber: pull.number, commentId: args.comment_id, head: pull.headSha, serverRun: ctx.serverRun })}`;
+        await postResult(ctx.notify, ctx.repository, pull.number, receipt, body);
+      }
+      return { kind: "cancel-noop" };
+    }
     await ctx.notify.rest.reactions.createForIssueComment({ ...splitRepository(ctx.repository), comment_id: args.comment_id, content: "rocket" });
     await postCancelNoop(ctx, pull.number, args.comment_id, pull.headSha);
     return { kind: "cancel-noop" };
   }
   if (!canCancelReservation({ commenterId: author.id, trustedMergerIds: trusted.map((item) => item.id), reservationMergerId: active.payload.merger.id }))
     throw new Rejection(`${author.login} cannot cancel this merge reservation`);
-  if (pull.merged)
-    throw new Rejection(`pull request #${pull.number} has already merged`);
-  await createReservationStatus({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, deploymentId: active.deploymentId, serverRunUrl: runUrl(ctx.serverRun), pullUrl: pullUrl(ctx.serverRun.serverUrl, ctx.repository, pull.number), state: "inactive", description: `cancelled by @${author.login}` });
+  const receipt = `<!-- csm-ci:automerge:cancel:${args.comment_id} -->`;
+  const comments = await ctx.notify.paginate(ctx.notify.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: pull.number, per_page: 100 });
+  if (hasServerMarker(comments, receipt, ctx.config.apps.server_bot_id))
+    return { kind: "cancelled", reservation: active };
+  if (pull.merged) {
+    await postCancelReceipt(ctx, active, args.comment_id, `csm-ci: pull request #${pull.number} has already merged.`);
+    return { kind: "cancel-noop", reservation: active };
+  }
+  await createReservationStatus({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, deploymentId: active.deploymentId, serverRunUrl: runUrl(ctx.serverRun), pullUrl: pullUrl(ctx.serverRun.serverUrl, ctx.repository, pull.number), state: "inactive", description: terminalDescription("cancelled", `cancelled by @${author.login}; cancelled_by_id=${author.id}; cancel_comment_id=${args.comment_id}`) });
   await ctx.notify.rest.reactions.createForIssueComment({ ...splitRepository(ctx.repository), comment_id: args.comment_id, content: "rocket" });
-  await postAutomergeComment(ctx, active, "cancelled", `Merge reservation cancelled by @${author.login}.`, active.payload.accepted_head);
+  await postCancelReceipt(ctx, active, args.comment_id, `Merge reservation cancelled by @${author.login}.`);
   await setLabel(ctx, pull.number, false);
   return { kind: "cancelled", reservation: active };
+}
+function cancellationCommandId(record) {
+  if (record.state.kind !== "terminal")
+    return;
+  const match = record.state.description?.match(/\bcancel_comment_id=(\d+)(?:\D|$)/);
+  return match ? Number(match[1]) : undefined;
+}
+function cancellationAuthorId(record) {
+  if (record.state.kind !== "terminal")
+    return;
+  const match = record.state.description?.match(/\bcancelled_by_id=(\d+)(?:\D|$)/);
+  return match ? Number(match[1]) : undefined;
 }
 function runUrl(run) {
   return `${run.serverUrl}/${run.repository}/actions/runs/${run.id}/attempts/${run.attempt}`;

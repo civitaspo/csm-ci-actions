@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import * as core from "@actions/core";
 import { splitRepository, github } from "../lib/github.ts";
 import { runIntake } from "../lib/intake.ts";
-import { automergeConcurrencyKey, concurrencyKey } from "../lib/request.ts";
+import { concurrencyKey } from "../lib/request.ts";
 
 function env(name: string): string {
   const value = process.env[name];
@@ -25,7 +25,6 @@ async function main(): Promise<void> {
   core.setOutput("name", repo);
   core.setOutput("args", JSON.stringify(request.args));
   core.setOutput("concurrency-key", concurrencyKey(request));
-  if ("pull_number" in request.args) core.setOutput("automerge-concurrency-key", automergeConcurrencyKey(request.repository, request.args.pull_number));
   core.setOutput("release", release ? JSON.stringify(release) : "");
   core.setOutput("server-bot-id", String(serverBotId));
   core.info(`accepted ${request.kind} for ${request.repository} ${JSON.stringify(request.args)}`);

@@ -117,8 +117,8 @@ test("automerge mints client write permissions only after readiness and pins the
   expect(readToken?.with).toEqual({
     "client-id": "${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}",
     "private-key": "${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}",
-    owner: "${{ inputs.repository-owner }}",
-    repositories: "${{ inputs.repository-name }}",
+    owner: "${{ needs.resolve.outputs.repository-owner }}",
+    repositories: "${{ needs.resolve.outputs.repository-name }}",
     "permission-contents": "read",
     "permission-pull-requests": "read",
     "permission-checks": "read",
@@ -134,4 +134,34 @@ test("automerge mints client write permissions only after readiness and pins the
   expect(merge?.with?.["write-token"]).toBe("${{ steps.write-token.outputs.token }}");
   expect(merge?.with?.head).toBe("${{ steps.readiness.outputs.head }}");
   expect(merge?.with?.["deployment-id"]).toBe("${{ steps.readiness.outputs.deployment-id || inputs.deployment-id }}");
+});
+
+test("automerge resolves immutable repository identity before canonical concurrency and client tokens", () => {
+  const workflow = z.object({
+    jobs: z.object({
+      resolve: z.object({
+        outputs: z.record(z.string(), z.string()),
+        steps: z.array(stepSchema),
+      }),
+      evaluate: z.object({
+        needs: z.array(z.string()),
+        if: z.string(),
+        concurrency: z.object({ group: z.string() }),
+        steps: z.array(stepSchema),
+      }),
+    }),
+  }).parse(readYaml(".github/workflows/server-automerge-evaluate.yml"));
+  const resolve = workflow.jobs.resolve;
+  const evaluation = workflow.jobs.evaluate;
+  expect(resolve.outputs).toMatchObject({
+    resolved: "${{ steps.resolve.outputs.resolved }}",
+    repository: "${{ steps.resolve.outputs.repository }}",
+    "concurrency-key": "${{ steps.resolve.outputs.concurrency-key }}",
+  });
+  expect(resolve.steps.find((step) => step.with?.mode === "resolve")?.with?.["deployment-id"]).toBe("${{ inputs.deployment-id }}");
+  expect(evaluation.needs).toEqual(["resolve"]);
+  expect(evaluation.if).toBe("needs.resolve.outputs.resolved == 'true'");
+  expect(evaluation.concurrency.group).toBe("csm-ci-${{ needs.resolve.outputs.concurrency-key }}");
+  expect(evaluation.steps.find((step) => step.id === "read-token")?.if).toBeUndefined();
+  expect(evaluation.steps.find((step) => step.id === "read-token")?.with?.owner).toBe("${{ needs.resolve.outputs.repository-owner }}");
 });

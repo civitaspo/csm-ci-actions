@@ -14,10 +14,6 @@ on:
         description: Owner of the client repository.
         type: string
         required: true
-      repository-name:
-        description: Name of the client repository.
-        type: string
-        required: true
       pull-number:
         description: Pull request number to evaluate.
         type: number
@@ -26,10 +22,6 @@ on:
         description: Deployment ID for a scheduled reservation, if known.
         type: string
         required: false
-      concurrency-key:
-        description: Shared normalized key for event and sweep evaluation of this pull request.
-        type: string
-        required: true
       config-path:
         description: Path of csm-ci.yaml in the server repository.
         type: string
@@ -38,12 +30,71 @@ on:
 permissions: {}
 
 jobs:
+  resolve:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    environment: csm-ci
+    permissions:
+      contents: read
+    outputs:
+      resolved: ${{ steps.resolve.outputs.resolved }}
+      repository: ${{ steps.resolve.outputs.repository }}
+      repository-owner: ${{ steps.resolve.outputs.repository-owner }}
+      repository-name: ${{ steps.resolve.outputs.repository-name }}
+      concurrency-key: ${{ steps.resolve.outputs.concurrency-key }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .csm-ci-actions
+          persist-credentials: false
+      - id: deployments-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-deployments: write
+      - id: discovery-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          # jactionlint ignore=github-app
+          owner: ${{ inputs.repository-owner }}
+          permission-metadata: read
+      - id: resolve
+        uses: ./.csm-ci-actions/actions/server/automerge
+        with:
+          mode: resolve
+          config-path: ${{ inputs.config-path }}
+          deployments-token: ${{ steps.deployments-token.outputs.token }}
+          discovery-token: ${{ steps.discovery-token.outputs.token }}
+          repository: ${{ inputs.repository }}
+          pull-number: ${{ inputs.pull-number }}
+          deployment-id: ${{ inputs.deployment-id }}
+      - if: failure()
+        continue-on-error: true
+        uses: ./.csm-ci-actions/actions/server/automerge
+        with:
+          mode: error-status
+          config-path: ${{ inputs.config-path }}
+          deployments-token: ${{ steps.deployments-token.outputs.token }}
+          discovery-token: ${{ steps.discovery-token.outputs.token }}
+          deployment-id: ${{ inputs.deployment-id }}
+          repository: ${{ inputs.repository }}
+          pull-number: ${{ inputs.pull-number }}
+
   evaluate:
+    needs: [resolve]
+    if: needs.resolve.outputs.resolved == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     environment: csm-ci
     concurrency:
-      group: csm-ci-${{ inputs.concurrency-key }}
+      group: csm-ci-${{ needs.resolve.outputs.concurrency-key }}
       cancel-in-progress: false
     permissions:
       contents: read
@@ -62,13 +113,21 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-deployments: write
+      - id: discovery-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          # jactionlint ignore=github-app
+          owner: ${{ needs.resolve.outputs.repository-owner }}
+          permission-metadata: read
       - id: read-token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
-          owner: ${{ inputs.repository-owner }}
-          repositories: ${{ inputs.repository-name }}
+          owner: ${{ needs.resolve.outputs.repository-owner }}
+          repositories: ${{ needs.resolve.outputs.repository-name }}
           permission-contents: read
           permission-pull-requests: read
           permission-checks: read
@@ -78,8 +137,8 @@ jobs:
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
-          owner: ${{ inputs.repository-owner }}
-          repositories: ${{ inputs.repository-name }}
+          owner: ${{ needs.resolve.outputs.repository-owner }}
+          repositories: ${{ needs.resolve.outputs.repository-name }}
           permission-issues: write
           permission-pull-requests: write
       - id: readiness
@@ -90,7 +149,7 @@ jobs:
           deployments-token: ${{ steps.deployments-token.outputs.token }}
           server-token: ${{ steps.read-token.outputs.token }}
           notification-token: ${{ steps.notification-token.outputs.token }}
-          repository: ${{ inputs.repository }}
+          repository: ${{ needs.resolve.outputs.repository }}
           pull-number: ${{ inputs.pull-number }}
           deployment-id: ${{ inputs.deployment-id }}
       - id: write-token
@@ -99,8 +158,8 @@ jobs:
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
-          owner: ${{ inputs.repository-owner }}
-          repositories: ${{ inputs.repository-name }}
+          owner: ${{ needs.resolve.outputs.repository-owner }}
+          repositories: ${{ needs.resolve.outputs.repository-name }}
           permission-contents: write
           permission-pull-requests: write
           permission-workflows: write
@@ -114,7 +173,7 @@ jobs:
           server-token: ${{ steps.read-token.outputs.token }}
           notification-token: ${{ steps.notification-token.outputs.token }}
           write-token: ${{ steps.write-token.outputs.token }}
-          repository: ${{ inputs.repository }}
+          repository: ${{ needs.resolve.outputs.repository }}
           pull-number: ${{ inputs.pull-number }}
           deployment-id: ${{ steps.readiness.outputs.deployment-id || inputs.deployment-id }}
           head: ${{ steps.readiness.outputs.head }}
@@ -126,6 +185,7 @@ jobs:
           config-path: ${{ inputs.config-path }}
           server-token: ${{ steps.read-token.outputs.token }}
           deployments-token: ${{ steps.deployments-token.outputs.token }}
+          discovery-token: ${{ steps.discovery-token.outputs.token }}
           deployment-id: ${{ steps.readiness.outputs.deployment-id || inputs.deployment-id }}
-          repository: ${{ inputs.repository }}
+          repository: ${{ needs.resolve.outputs.repository }}
           pull-number: ${{ inputs.pull-number }}

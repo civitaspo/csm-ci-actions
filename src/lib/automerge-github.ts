@@ -14,7 +14,7 @@ const DeploymentNode = z.object({
 const DeploymentPage = z.object({ repository: z.object({ deployments: z.object({ nodes: z.array(DeploymentNode), pageInfo: z.object({ hasNextPage: z.boolean(), endCursor: z.string().nullable() }) }) }) });
 const RestStatus = z.object({
   id: z.number().int().positive(), state: z.string(), description: z.string().nullable(), created_at: z.iso.datetime(),
-  log_url: z.string().optional(), environment_url: z.string().optional(),
+  log_url: z.string().nullable().optional(), environment_url: z.string().nullable().optional(),
   creator: z.object({ id: z.number().int().positive(), type: z.string() }).nullable(),
 });
 const CreatedDeployment = z.object({ id: z.number().int().positive(), node_id: z.string().min(1), task: z.string(), created_at: z.iso.datetime(), creator: z.object({ id: z.number().int().positive(), type: z.string() }).nullable() });
@@ -106,9 +106,10 @@ async function withStatuses(args: ListArgs, nodes: readonly z.infer<typeof Deplo
   const { owner, repo } = splitRepository(args.serverRepository);
   for (const record of selected) {
     const raw: unknown[] = await args.server.paginate(args.server.rest.repos.listDeploymentStatuses, { owner, repo, deployment_id: record.deploymentId, per_page: 100 });
-    record.statuses = raw.flatMap((value) => {
+    record.statuses = raw.map((value) => {
       const parsed = RestStatus.safeParse(value);
-      return parsed.success ? [mapStatus(parsed.data)] : [];
+      if (!parsed.success) throw new Error(`GitHub returned an invalid deployment status for deployment ${record.deploymentId}`);
+      return mapStatus(parsed.data);
     });
     record.state = reservationState({ statuses: record.statuses, serverBotId: args.serverBotId });
   }

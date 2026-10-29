@@ -32,7 +32,7 @@ function deployment(id: number, createdAt: string, overrides: Record<string, unk
   };
 }
 
-function harness() {
+function harness(options: { malformedDeploymentOneStatus?: boolean } = {}) {
   const deployments = [
     deployment(1, "2026-10-15T00:00:00.000Z", { payload: JSON.stringify(JSON.stringify(payload)) }),
     deployment(2, "2026-10-28T00:00:00.000Z", { payload: { ...payload, pull_number: 99 } }),
@@ -78,8 +78,12 @@ function harness() {
     }
     if (/^\/repos\/owner\/server\/deployments\/\d+\/statuses$/.test(path) && method === "GET") {
       const deploymentId = Number(path.split("/")[5]);
+      if (deploymentId === 1 && options.malformedDeploymentOneStatus) return answer([
+        { id: 2, state: "success", description: "merged", created_at: "2026-10-29T00:00:02.000Z", creator: { id: serverBotId, type: "Bot" } },
+        { state: "failure", description: "malformed terminal status", created_at: "2026-10-29T00:00:03.000Z", creator: { id: serverBotId, type: "Bot" } },
+      ]);
       if (deploymentId === 1) return answer([
-        { id: 1, state: "queued", description: "waiting", created_at: "2026-10-29T00:00:01.000Z", creator: { id: serverBotId, type: "Bot" } },
+        { id: 1, state: "queued", description: "waiting", created_at: "2026-10-29T00:00:01.000Z", log_url: null, environment_url: null, creator: { id: serverBotId, type: "Bot" } },
         { id: 2, state: "success", description: "merged", created_at: "2026-10-29T00:00:02.000Z", creator: { id: serverBotId, type: "Bot" } },
       ]);
       return answer(statuses);
@@ -102,8 +106,13 @@ test("lists only valid Server-created reservations and reads REST status history
   const result = await listReservations({ server: h.server, serverRepository, serverBotId, now });
   expect(result.map((reservation) => reservation.deploymentId)).toEqual([1, 2, 6]);
   expect(result[0]?.statuses.map((item) => item.state)).toEqual(["queued", "success"]);
-  expect(result[0]?.state).toEqual({ kind: "terminal", state: "success", at: "2026-10-29T00:00:02.000Z", description: "merged" });
+  expect(result[0]?.state).toEqual({ kind: "terminal", state: "success", at: "2026-10-29T00:00:02.000Z", description: "merged", reason: "other" });
   expect(h.graphQueries.every(({ query }) => !query.includes("statuses"))).toBe(true);
+});
+
+test("rejects an unparseable status instead of treating the reservation as active", async () => {
+  const h = harness({ malformedDeploymentOneStatus: true });
+  await expect(listReservations({ server: h.server, serverRepository, serverBotId, now })).rejects.toThrow("GitHub returned an invalid deployment status for deployment 1");
 });
 
 test("finds every reservation matching the repository ID and pull number", async () => {
