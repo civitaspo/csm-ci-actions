@@ -37341,13 +37341,14 @@ async function withStatuses(args, nodes) {
   return selected;
 }
 function parsePayload(raw) {
-  if (typeof raw !== "string")
-    return ReservationPayloadSchema.safeParse(raw);
+  let decoded = raw;
   try {
-    return ReservationPayloadSchema.safeParse(JSON.parse(raw));
+    for (let depth = 0;depth < 2 && typeof decoded === "string"; depth++)
+      decoded = JSON.parse(decoded);
   } catch {
     return ReservationPayloadSchema.safeParse(undefined);
   }
+  return ReservationPayloadSchema.safeParse(decoded);
 }
 function mapStatus(s) {
   const state = s.state === "queued" ? "queued" : s.state === "success" ? "success" : s.state === "failure" ? "failure" : s.state === "inactive" ? "inactive" : "error";

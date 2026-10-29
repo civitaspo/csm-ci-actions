@@ -27,13 +27,19 @@ function fromComment(pr: Pr, comment: { id: number; since: Date }): MergeRequest
 type AutomergeStatus = { databaseId: number; state: string; description: string | null; createdAt: string; creator: { __typename: string; databaseId: number } | null };
 type AutomergeRecord = { id: string; databaseId: number; task: string; payload: unknown; createdAt: string; creator: { __typename: string; databaseId: number } | null; statuses: { nodes: AutomergeStatus[] } };
 
+export function parseAutomergePayload(raw: unknown): unknown {
+  let decoded = raw;
+  for (let depth = 0; depth < 2 && typeof decoded === "string"; depth++) decoded = JSON.parse(decoded) as unknown;
+  return decoded;
+}
+
 async function reservations(ctx: Parameters<Scenario["run"]>[0], pr: Pr): Promise<AutomergeRecord[]> {
   const data = await ctx.gh.graphql<{ client: { databaseId: number }; server: { deployments: { nodes: Omit<AutomergeRecord, "statuses">[] } } }>(
     "query{client:repository(owner:\"civitaspo\",name:\"testing-csm-ci-client\"){databaseId} server:repository(owner:\"civitaspo\",name:\"testing-csm-ci-server\"){deployments(environments:[\"csm-ci-automerge\"],first:100,orderBy:{field:CREATED_AT,direction:DESC}){nodes{id databaseId task payload createdAt creator{__typename ... on Bot{databaseId}}}}}}",
   );
   const matching = data.server.deployments.nodes.filter((deployment) => {
     try {
-      const payload = (typeof deployment.payload === "string" ? JSON.parse(deployment.payload) : deployment.payload) as { repository_id?: number; pull_number?: number };
+      const payload = parseAutomergePayload(deployment.payload) as { repository_id?: number; pull_number?: number };
       return deployment.task === "csm-ci:automerge" && deployment.creator?.__typename === "Bot" && deployment.creator.databaseId === SERVER_BOT_ID && payload.repository_id === data.client.databaseId && payload.pull_number === pr.number;
     } catch { return false; }
   });

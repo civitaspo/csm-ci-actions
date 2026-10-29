@@ -34,7 +34,7 @@ function deployment(id: number, createdAt: string, overrides: Record<string, unk
 
 function harness() {
   const deployments = [
-    deployment(1, "2026-10-15T00:00:00.000Z", { payload: JSON.stringify(payload) }),
+    deployment(1, "2026-10-15T00:00:00.000Z", { payload: JSON.stringify(JSON.stringify(payload)) }),
     deployment(2, "2026-10-28T00:00:00.000Z", { payload: { ...payload, pull_number: 99 } }),
     deployment(3, "2026-10-29T00:00:00.000Z", { creator: { __typename: "User" } }),
     deployment(4, "2026-10-29T00:00:00.000Z", { payload: "{invalid json" }),
@@ -54,7 +54,7 @@ function harness() {
       const body = JSON.parse(String(init?.body ?? "{}")) as { query: string; variables: Record<string, unknown> };
       graphQueries.push(body);
       const cursor = body.variables.cursor;
-      return answer({ data: { repository: { deployments: { nodes: cursor ? [deployment(6, "2026-10-28T00:00:00.000Z", { payload: { ...payload, pull_number: 99 } })] : deployments.slice(0, 4), pageInfo: { hasNextPage: !cursor, endCursor: cursor ? null : "deploy-next" } } } } });
+      return answer({ data: { repository: { deployments: { nodes: cursor ? [deployment(6, "2026-10-28T00:00:00.000Z", { payload: { ...payload, pull_number: 99 } }), deployment(7, "2026-10-28T00:00:00.000Z", { payload: JSON.stringify(JSON.stringify(JSON.stringify(payload))) })] : deployments.slice(0, 4), pageInfo: { hasNextPage: !cursor, endCursor: cursor ? null : "deploy-next" } } } } });
     }
     if (path === "/repos/owner/server/deployments" && method === "POST") {
       const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;

@@ -116,12 +116,13 @@ async function withStatuses(args: ListArgs, nodes: readonly z.infer<typeof Deplo
 }
 
 function parsePayload(raw: unknown): ReturnType<typeof ReservationPayloadSchema.safeParse> {
-  if (typeof raw !== "string") return ReservationPayloadSchema.safeParse(raw);
+  let decoded = raw;
   try {
-    return ReservationPayloadSchema.safeParse(JSON.parse(raw) as unknown);
+    for (let depth = 0; depth < 2 && typeof decoded === "string"; depth++) decoded = JSON.parse(decoded) as unknown;
   } catch {
     return ReservationPayloadSchema.safeParse(undefined);
   }
+  return ReservationPayloadSchema.safeParse(decoded);
 }
 
 function mapStatus(s: z.infer<typeof RestStatus>): DeploymentStatus {
