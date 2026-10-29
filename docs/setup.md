@@ -11,7 +11,7 @@ Create the server repository, for example `csm-ci-server`. The client repositori
 Follow the [`csm-ci-setup` skill](../.agents/skills/csm-ci-setup/SKILL.md). It lists the Apps, their permissions and installation targets, and the credentials to store. These steps happen:
 
 1. Create the environment `csm-ci` in the server repository. Only `main` can deploy to it.
-2. Register `csm-ci-server` and install it on the server and every client repository.
+2. Register `csm-ci-server` and install it on the server and every client repository. Grant Deployments read and write on the server repository for automerge reservations.
 3. Register `csm-ci-client` and install it on the server repository only.
 4. Register `csm-ci-approver` and install it on every client repository.
 5. Store the client IDs as variables and the private keys as secrets:
@@ -162,6 +162,24 @@ jobs:
       contents: read
 ```
 
+Add a scheduled caller for automerge. The cron expression sets the requested sweep interval. GitHub accepts schedules no more frequent than every five minutes and can delay runs during high load.
+
+```yaml
+name: csm-ci-automerge
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+permissions: {}
+jobs:
+  sweep:
+    uses: civitaspo/csm-ci-actions/.github/workflows/server-automerge.yml@<sha> # <version>
+    secrets:
+      CSM_CI_SERVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+```
+
+Map the environment-only secret explicitly. Do not use `secrets: inherit`.
+
 ## 5. Add the client workflows
 
 Each operation has a reusable client workflow. Pin it to a full commit SHA of csm-ci-actions.
@@ -228,7 +246,7 @@ jobs:
       CSM_CI_CLIENT_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}
 ```
 
-The command is exactly `/merge`. The server merges at once when ready, otherwise enables platform auto-merge, or falls back to waiting for the latest approver review, current policies, and configured checks; see [Merge](merge.md). After readiness succeeds, the workflow mints fresh read and notification tokens plus a contents, pull-requests and workflows write token, then revalidates and merges. If an accepted wait fails, the workflow mints a fresh notification token for the failure receipt.
+The client forwards exactly `/merge` and `/merge cancel`. `/merge` creates a reservation that csm-ci evaluates immediately and on scheduled sweeps. The reservation remains active for up to seven days and survives head changes. csm-ci merges only after approval, policy, and required checks pass for the current head. A trusted merger cancels it with `/merge cancel`; editing or deleting the original comment does not cancel it. See [Merge](merge.md).
 
 For releases, enable the `release` op and choose its build type in `csm-ci.yaml`. Add a caller that requests a release when a `release/next` pull request is merged:
 

@@ -1,6 +1,6 @@
 # Testing
 
-This page describes the testing environment, how to run and write live e2e scenarios, and GitHub behavior that the implementation relies on. Each behavior below was observed in real runs; verify again the same way before changing an assumption.
+This page describes the testing environment, how to run and write live e2e scenarios, and GitHub behavior that the implementation relies on. Each behavior below names its evidence and whether an Actions run verified it.
 
 ## Testing environment
 
@@ -13,7 +13,7 @@ This page describes the testing environment, how to run and write live e2e scena
 | App | App ID | Bot user ID | Installed on | Repository permissions |
 |---|---|---|---|---|
 | `testing-csm-ci-client` | 5455035 | 347395374 | testing server | Issues: write |
-| `testing-csm-ci-server` | 5455185 | 347400474 | testing server and client | Contents, Pull requests, Issues, Checks, Workflows, Administration, Attestations: write; Actions: read |
+| `testing-csm-ci-server` | 5455185 | 347400474 | testing server and client | Contents, Pull requests, Issues, Checks, Workflows, Administration, Attestations: write; Actions: read; Deployments: write required for automerge, not yet verified by App-backed e2e |
 | `testing-csm-ci-approver` | 5455223 | 347401524 | testing client | Pull requests: write, Contents: write |
 | `testing-csm-ci-untrusted-committer` | 5455256 | 347402450 | testing client | Contents: write, Pull requests: write |
 
@@ -61,6 +61,20 @@ The harness takes the lock, force-pushes this repository's `e2e` branch to `--re
 - Make trusted commits with GraphQL `createCommitOnBranch` (`openPr(ctx, "signed")`).
 
 ## GitHub behavior relied on
+
+### Ruleset update rules and auto-merge
+
+GitHub's platform auto-merge did not merge pull requests while an active `update` rule applied to the default branch, even when the Server App had a bypass actor. The behavior was reproduced with both `pull_request` and `always` bypass modes. With no `update` rule, the control pull request merged.
+
+| Ruleset condition | Pull request | Observation | Server runs |
+|---|---|---|---|
+| `update` rule with `pull_request` bypass | [testing-csm-ci-client#1370](https://github.com/civitaspo/testing-csm-ci-client/pull/1370) | Stayed `BLOCKED` for 180 seconds | [40748275509](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40748275509), [40748419876](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40748419876), [40748604775](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40748604775) |
+| `update` rule with `always` bypass | [testing-csm-ci-client#1372](https://github.com/civitaspo/testing-csm-ci-client/pull/1372) | Stayed `BLOCKED` for 180 seconds | [40829011414](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40829011414), [40829118541](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40829118541), [40829241748](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40829241748) |
+| No `update` rule | [testing-csm-ci-client#1371](https://github.com/civitaspo/testing-csm-ci-client/pull/1371) | Server Bot merged the control pull request | [40749355169](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40749355169), [40749541170](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40749541170), [40749706365](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40749706365) |
+
+The run evidence above covers the existing platform auto-merge flow. It does not verify deployment-based csm-ci automerge or the Server App's Deployments permission.
+
+The deployment API observations below came from a user-token experiment and have no Actions run URL. GitHub created the `csm-ci-automerge` environment when the first deployment was created. The payload had to be sent as an object to avoid double encoding. The tested GraphQL query returned the payload, creator type, deployment statuses, and their creators. A terminal `success` status did not cause an earlier success to become inactive during the observed interval. These observations do not prove that the Server App can perform the same operations. App-backed e2e must verify deployment creation, creator identity, status behavior, and cleanup before rollout.
 
 - **Reusable workflow context.** Inside a reusable workflow, `job.workflow_repository` and `job.workflow_sha` name the called workflow's repository and commit; `github.workflow_sha` is the caller's ([run](https://github.com/civitaspo/testing-csm-ci-client/actions/runs/40099821184)).
 - **Named secrets.** A reusable workflow can receive environment secrets through an explicit named mapping. A missing required mapping fails at startup with zero jobs and `Secret <NAME> is required, but not provided while calling.` ([positive](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40303489939), [missing](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40303734933)).
