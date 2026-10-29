@@ -1,5 +1,7 @@
 # Merge
 
+This page specifies the planned deployment-backed merge operation. Do not deploy it until a compatible runtime and reusable workflow have been released and installed. Earlier releases use the platform auto-merge and self-merge paths described in their versioned documentation.
+
 Reusable client callers declare and map only `CSM_CI_CLIENT_APP_PRIVATE_KEY`. See the [secret contract and staged migration](setup.md#explicit-secret-contract-migration) for server feature credentials and compatible caller pins.
 
 `/merge` reserves an open pull request for a csm-ci squash merge. The reservation applies to the pull request, not one head SHA. csm-ci merges when the current head has the required approval, policy result, and checks. The reservation expires seven days after acceptance. A trusted merger can cancel it with `/merge cancel`.

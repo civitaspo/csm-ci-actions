@@ -162,7 +162,7 @@ jobs:
       contents: read
 ```
 
-Add a scheduled caller for automerge. The cron expression sets the requested sweep interval. GitHub accepts schedules no more frequent than every five minutes and can delay runs during high load.
+The following automerge caller is planned. Add it only after a compatible runtime and reusable workflow have been released and installed. The cron expression sets the requested sweep interval. GitHub accepts schedules no more frequent than every five minutes and can delay runs during high load.
 
 ```yaml
 name: csm-ci-automerge

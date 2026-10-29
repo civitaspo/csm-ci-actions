@@ -21,7 +21,7 @@ repo_settings:
     .github/PULL_REQUEST_TEMPLATE.md: managed-files/pull-request-template.md
 ```
 
-Omitted repository settings remain unchanged. The merge-method settings accept only the values shown above. `allow_auto_merge` accepts either value. csm-ci does not enable GitHub auto-merge, so this setting does not control `/merge`.
+Omitted repository settings remain unchanged. The merge-method settings accept only the values shown above. `allow_auto_merge` accepts either value. The planned deployment-backed `/merge` does not enable GitHub auto-merge, so this setting will not control that operation. Earlier releases can use GitHub auto-merge; follow their versioned merge documentation until a compatible runtime and reusable workflow are released and installed.
 
 `has_wiki`, `has_projects`, and `allow_update_branch` are optional booleans. Each accepts `true` or `false`. The example disables Wiki and Projects and enables GitHub's suggestion to update pull request branches. `allow_update_branch` does not update branches or require branches to be up to date before merging. Existing merge, approval, required-check, and ruleset behavior remains unchanged.
 
