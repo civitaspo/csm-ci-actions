@@ -107,8 +107,7 @@ async function main(): Promise<void> {
     if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, "cancelled=true\n");
     console.log(message);
     if (prNumber && !process.env.E2E_PR_NUMBER && runner.kind === "ci") {
-      await actions.rest.issues.createComment({ ...splitRepository(ACTIONS), issue_number: Number(prNumber),
-        body: `e2e cancelled safely after cleanup. Run: ${runner.url}. The older reporting workflow will mark this intentional stop as failed.` });
+      console.log("The older reporting workflow marks this intentional stop as failed; see this log for the cancellation result.");
       process.exitCode = 1;
     }
   };
