@@ -296,6 +296,8 @@ export const merge: Scenario[] = [
     await noMerge(ctx, pr);
   }), "negative"),
   automergeScenario("cancel", "The merger can cancel an active reservation", async (ctx) => withSignedPr(ctx, async (pr) => {
+    const { data: pull } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
+    await ctx.gh.graphql("mutation($pull:ID!){convertPullRequestToDraft(input:{pullRequestId:$pull}){pullRequest{isDraft}}}", { pull: pull.node_id });
     const { record } = await reserve(ctx, pr);
     const comment = await postComment(ctx, pr, "/merge cancel");
     await expectOp(ctx, { kind: "merge-cancel", repository: CLIENT, args: { pull_number: pr.number, comment_id: comment.id } }, comment.since, "success");
@@ -307,6 +309,8 @@ export const merge: Scenario[] = [
   })),
   automergeScenario("cancel-unauthorized", "An untrusted requester cannot cancel another merger reservation", async (ctx) => withSignedPr(ctx, async (pr) => {
     assert(ctx.untrusted, "the untrusted test token is not configured");
+    const { data: pull } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
+    await ctx.gh.graphql("mutation($pull:ID!){convertPullRequestToDraft(input:{pullRequestId:$pull}){pullRequest{isDraft}}}", { pull: pull.node_id });
     await reserve(ctx, pr);
     const comment = await postComment(ctx, pr, "/merge cancel", ctx.untrusted);
     const info = await request(ctx, pr, comment.id, "merge-cancel");
@@ -314,6 +318,8 @@ export const merge: Scenario[] = [
     await assertReservation(ctx, pr, "QUEUED");
   }), "negative", true),
   automergeScenario("closed", "Closing a pull request ends its reservation without a comment", async (ctx) => withSignedPr(ctx, async (pr) => {
+    const { data: pull } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
+    await ctx.gh.graphql("mutation($pull:ID!){convertPullRequestToDraft(input:{pullRequestId:$pull}){pullRequest{isDraft}}}", { pull: pull.node_id });
     await reserve(ctx, pr);
     await ctx.gh.rest.pulls.update({ ...splitRepository(CLIENT), pull_number: pr.number, state: "closed" });
     const sweep = await dispatch(ctx, SERVER, "csm-ci-automerge.yml");
