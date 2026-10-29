@@ -39,7 +39,7 @@ Before merging, csm-ci reloads the reservation, configuration, pull request, app
 
 `/merge cancel` requires a fresh, unedited command comment on the same pull request. The commenter must be a trusted merger or the user who created the reservation. An unauthorized cancellation receives no receipt. If no active reservation exists, csm-ci writes a receipt that says so. Otherwise it marks the reservation `inactive`, removes the label, and posts a cancellation result.
 
-Cancellation and merge use separate concurrency groups. A cancellation that takes effect before the final merge validation prevents the merge. A cancellation submitted after that validation can race with the GitHub merge request and may not stop it. In that case the cancellation handler reports that the pull request has already merged. The GitHub API does not provide an atomic cancel-and-merge operation.
+Acceptance, cancellation, and evaluation for the same pull request share a concurrency group. A cancellation processed before the final merge validation prevents the merge. If the merge completes first, the cancellation handler reports that the pull request has already merged. GitHub does not provide an atomic cancel-and-merge operation.
 
 Disabling GitHub auto-merge immediately before the csm-ci merge does not guarantee that an earlier auto-merge request cannot merge first. The server checks the pull request state again during final validation and handles an already merged pull request as complete.
 
