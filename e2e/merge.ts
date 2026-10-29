@@ -278,7 +278,9 @@ export const merge: Scenario[] = [
     await waitForCsmMerge(ctx, pr, head);
     await assertReservation(ctx, pr, "SUCCESS");
   })),
-  { ...automergeScenario("head-change-needs-approval", "A reservation waits when its new head has not been approved", async (ctx) => withSignedPr(ctx, async (pr) => {
+  { ...automergeScenario("head-change-needs-approval", "A reservation waits when its new head has not been approved", async (ctx) => withRepositoryPolicy(ctx, { sensitive_paths: { paths: ["e2e/**"], exempt: [] } }, async () => withSignedPr(ctx, async (pr) => {
+    const approval = await postComment(ctx, pr, "/approve");
+    await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: approval.id } }, approval.since, "success");
     const { data: pull } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
     await ctx.gh.graphql("mutation($pull:ID!){convertPullRequestToDraft(input:{pullRequestId:$pull}){pullRequest{isDraft}}}", { pull: pull.node_id });
     await reserve(ctx, pr);
@@ -288,14 +290,13 @@ export const merge: Scenario[] = [
       return data.head.sha === head ? true : undefined;
     });
     await ctx.gh.graphql("mutation($pull:ID!){markPullRequestReadyForReview(input:{pullRequestId:$pull}){pullRequest{isDraft}}}", { pull: pull.node_id });
-    const sweep = await dispatch(ctx, SERVER, "csm-ci-automerge.yml");
-    assert(sweep.conclusion === "success", `automerge sweep concluded ${sweep.conclusion} (${sweep.html_url})`);
     await until(`queued reservation for changed head #${pr.number}`, async () => {
       const record = await awaitReservation(ctx, pr);
-      return record.statuses.nodes.some((status) => status.state === "QUEUED" && /approval/u.test(status.description ?? "")) ? record : undefined;
+      return record.statuses.nodes.some((status) => status.state === "QUEUED" && status.description === `waiting for approval of ${head.slice(0, 7)}`) ? record : undefined;
     });
+    assert(!(await approverReviews(ctx, pr)).some((review) => review.state === "APPROVED" && review.commit_id === head), "new head unexpectedly received automatic approval");
     await noMerge(ctx, pr);
-  }), "negative"), serial: true },
+  })), "negative"), serial: true },
   automergeScenario("cancel", "The merger can cancel an active reservation", async (ctx) => withSignedPr(ctx, async (pr) => {
     const { data: pull } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
     await ctx.gh.graphql("mutation($pull:ID!){convertPullRequestToDraft(input:{pullRequestId:$pull}){pullRequest{isDraft}}}", { pull: pull.node_id });
