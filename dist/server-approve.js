@@ -32907,10 +32907,10 @@ function requirePrincipal(user, allowed, role) {
     throw new Rejection(`${user?.login ?? "a deleted user"} is not one of the ${role}`);
   return match;
 }
-function checkPullState(p) {
+function checkPullState(p, allowDraft = false) {
   if (p.state !== "open")
     throw new Rejection(`#${p.number} is ${p.state}`);
-  if (p.draft)
+  if (p.draft && !allowDraft)
     throw new Rejection(`#${p.number} is a draft`);
   if (p.headRepository?.toLowerCase() !== p.baseRepository.toLowerCase())
     throw new Rejection(`#${p.number} comes from a fork`);

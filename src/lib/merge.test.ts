@@ -129,7 +129,6 @@ describe("acceptMerge", () => {
   test.each([
     ["untrusted merger", { author: { id: 99, login: "stranger", type: "User" } }, /stranger is not one of the mergers/],
     ["unsupported account type", { author: { id: 99, login: "team", type: "Organization" } }, /unsupported account type Organization/],
-    ["draft pull request", { pull: { draft: true } }, /#12 is a draft/],
     ["fork pull request", { pull: { head: { sha, repo: { full_name: "fork/repo" } } } }, /comes from a fork/],
     ["non-default base", { pull: { base: { ref: "release", repo: { id: 123, full_name: "owner/repo", default_branch: "main" } } } }, /targets release, not the default branch/],
     ["head newer than command", { headDate: "2026-10-24T11:31:00Z" }, /head .* is newer than comment/],
@@ -141,6 +140,11 @@ describe("acceptMerge", () => {
     const { ctx, deploymentsFetch } = setup("/merge", author, false, setupOptions);
     await expect(acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow(expected);
     expect(deploymentsFetch.calls).not.toContain("POST /repos/owner/server/deployments");
+  });
+
+  test("accepts a draft pull request for later evaluation", async () => {
+    const { ctx } = setup("/merge", undefined, false, { pull: { draft: true } });
+    expect(await acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).toMatchObject({ kind: "accepted" });
   });
 
   test("accepts a Bot request only when the trusted Bot owns the pull request and each commit", async () => {

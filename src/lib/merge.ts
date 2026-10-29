@@ -171,7 +171,7 @@ export async function acceptMerge(ctx: MergeContext, args: MergeArgs): Promise<{
   const oldReceipts = await ctx.server.paginate(ctx.server.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: pull.number, per_page: 100 });
   if (hasServerMarker(oldReceipts, marker("merge", comment.id), ctx.config.apps.server_bot_id)) throw new Rejection(`comment ${comment.id} was already handled`);
   requireMergeEnabled(ctx);
-  checkPullState(pull);
+  checkPullState(pull, true);
   await validateHeadBeforeComment(ctx, pull, comment);
   const author = comment.user;
   if (!author) throw new Rejection("the merge comment author was deleted");

@@ -32940,10 +32940,10 @@ function validateComment(c, repository, pullNumber, now) {
     throw new Rejection(`comment ${c.id} is older than 60 minutes`);
   return command;
 }
-function checkPullState(p) {
+function checkPullState(p, allowDraft = false) {
   if (p.state !== "open")
     throw new Rejection(`#${p.number} is ${p.state}`);
-  if (p.draft)
+  if (p.draft && !allowDraft)
     throw new Rejection(`#${p.number} is a draft`);
   if (p.headRepository?.toLowerCase() !== p.baseRepository.toLowerCase())
     throw new Rejection(`#${p.number} comes from a fork`);
@@ -37510,7 +37510,7 @@ async function acceptMerge(ctx, args) {
   if (hasServerMarker(oldReceipts, marker("merge", comment.id), ctx.config.apps.server_bot_id))
     throw new Rejection(`comment ${comment.id} was already handled`);
   requireMergeEnabled(ctx);
-  checkPullState(pull);
+  checkPullState(pull, true);
   await validateHeadBeforeComment(ctx, pull, comment);
   const author = comment.user;
   if (!author)
