@@ -98,7 +98,7 @@ async function withStatuses(args: ListArgs, nodes: readonly z.infer<typeof Deplo
   const records: ReservationRecord[] = [];
   for (const node of nodes) {
     if (node.task !== TASK || node.creator?.__typename !== "Bot" || node.creator.databaseId !== args.serverBotId) continue;
-    const payload = ReservationPayloadSchema.safeParse(node.payload);
+    const payload = parsePayload(node.payload);
     if (!payload.success) { console.warn(`ignoring automerge deployment ${node.databaseId} with invalid payload`); continue; }
     records.push({ deploymentId: node.databaseId, nodeId: node.id, createdAt: node.createdAt, payload: payload.data, statuses: [], state: { kind: "active" } });
   }
@@ -113,6 +113,15 @@ async function withStatuses(args: ListArgs, nodes: readonly z.infer<typeof Deplo
     record.state = reservationState({ statuses: record.statuses, serverBotId: args.serverBotId });
   }
   return selected;
+}
+
+function parsePayload(raw: unknown): ReturnType<typeof ReservationPayloadSchema.safeParse> {
+  if (typeof raw !== "string") return ReservationPayloadSchema.safeParse(raw);
+  try {
+    return ReservationPayloadSchema.safeParse(JSON.parse(raw) as unknown);
+  } catch {
+    return ReservationPayloadSchema.safeParse(undefined);
+  }
 }
 
 function mapStatus(s: z.infer<typeof RestStatus>): DeploymentStatus {

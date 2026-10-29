@@ -9,6 +9,7 @@ function runEntry(action: "approve" | "merge" | "automerge", mode: string) {
   try {
     const preload = join(directory, "preload.ts");
     const receipt = join(directory, "receipt.json");
+    const status = join(directory, "status.json");
     const outputs = join(directory, "outputs.txt");
     const testing = new URL("./testing.ts", import.meta.url).href;
     const acceptedAt = new Date(Date.now() - 8 * 24 * 60 * 60_000).toISOString();
@@ -50,6 +51,7 @@ const fetch = fakeFetch([
 globalThis.fetch = async (input, init) => {
   const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
   if (url.pathname === "/repos/owner/repo/issues/12/comments" && init?.method === "POST") writeFileSync(${JSON.stringify(receipt)}, String(init.body));
+  if (url.pathname === "/repos/owner/server/deployments/123/statuses" && init?.method === "POST") writeFileSync(${JSON.stringify(status)}, String(init.body));
   return fetch(input, init);
 };
 `);
@@ -57,16 +59,17 @@ globalThis.fetch = async (input, init) => {
       env: {
         PATH: process.env.PATH ?? "", GITHUB_REPOSITORY: "owner/server", GITHUB_SHA: "b".repeat(40),
         GITHUB_SERVER_URL: "https://github.example", GITHUB_RUN_ID: "9007199254740993", GITHUB_RUN_ATTEMPT: "3", GITHUB_OUTPUT: outputs,
-        "INPUT_GITHUB-TOKEN": "fixture", "INPUT_SERVER-TOKEN": "fixture", "INPUT_APPROVER-TOKEN": "fixture", "INPUT_NOTIFICATION-TOKEN": "fixture", "INPUT_DEPLOYMENTS-TOKEN": "fixture",
+        "INPUT_GITHUB-TOKEN": "fixture", ...(mode === "error-status" ? {} : { "INPUT_SERVER-TOKEN": "fixture" }), "INPUT_APPROVER-TOKEN": "fixture", "INPUT_NOTIFICATION-TOKEN": "fixture", "INPUT_DEPLOYMENTS-TOKEN": "fixture",
         "INPUT_CONFIG-PATH": "csm-ci.yaml", INPUT_REPOSITORY: "owner/repo", INPUT_ARGS: '{"pull_number":12,"comment_id":9}',
         "INPUT_PULL-NUMBER": "12", "INPUT_DEPLOYMENT-ID": "123",
         INPUT_MODE: mode, INPUT_HEAD: "a".repeat(40), "INPUT_FAILURE-MESSAGE": "original wait failure",
       },
       stdout: "pipe", stderr: "pipe", timeout: 10_000,
     });
-    if (!existsSync(receipt)) throw new Error(`entrypoint did not post a receipt (exit ${result.exitCode}): ${result.stdout.toString()} ${result.stderr.toString()} ${readFileSync(outputs, "utf8")}`);
-    const body = z.object({ body: z.string() }).parse(JSON.parse(readFileSync(receipt, "utf8"))).body;
-    return { exitCode: result.exitCode, body, outputs: readFileSync(outputs, "utf8") };
+    if (mode !== "error-status" && !existsSync(receipt)) throw new Error(`entrypoint did not post a receipt (exit ${result.exitCode}): ${result.stdout.toString()} ${result.stderr.toString()} ${readFileSync(outputs, "utf8")}`);
+    const body = existsSync(receipt) ? z.object({ body: z.string() }).parse(JSON.parse(readFileSync(receipt, "utf8"))).body : "";
+    const statusBody = existsSync(status) ? JSON.parse(readFileSync(status, "utf8")) as Record<string, unknown> : undefined;
+    return { exitCode: result.exitCode, body, status: statusBody, outputs: readFileSync(outputs, "utf8") };
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -91,4 +94,11 @@ test.each([
     expect(result.body).toContain("/deployments/123");
   }
   if (action === "approve") expect(result.body.split("<sub>")[0]).toContain("#12 is a draft");
+});
+
+test("error-status marks the active reservation without a client read token", () => {
+  const result = runEntry("automerge", "error-status");
+  expect(result.exitCode).toBe(0);
+  expect(result.status).toMatchObject({ state: "error", auto_inactive: false });
+  expect(result.status?.log_url).toBe("https://github.example/owner/server/actions/runs/9007199254740993/attempts/3");
 });

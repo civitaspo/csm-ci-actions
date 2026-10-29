@@ -34,10 +34,10 @@ function deployment(id: number, createdAt: string, overrides: Record<string, unk
 
 function harness() {
   const deployments = [
-    deployment(1, "2026-10-15T00:00:00.000Z"),
+    deployment(1, "2026-10-15T00:00:00.000Z", { payload: JSON.stringify(payload) }),
     deployment(2, "2026-10-28T00:00:00.000Z", { payload: { ...payload, pull_number: 99 } }),
     deployment(3, "2026-10-29T00:00:00.000Z", { creator: { __typename: "User" } }),
-    deployment(4, "2026-10-29T00:00:00.000Z", { payload: { ...payload, unknown: true } }),
+    deployment(4, "2026-10-29T00:00:00.000Z", { payload: "{invalid json" }),
     deployment(5, "2026-10-14T23:59:59.000Z"),
   ];
   const restWrites: { path: string; body: Record<string, unknown> }[] = [];

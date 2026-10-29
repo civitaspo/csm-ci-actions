@@ -24,18 +24,32 @@ function fromComment(pr: Pr, comment: { id: number; since: Date }): MergeRequest
   return { since: comment.since, match: { kind: "merge", repository: CLIENT, args: { pull_number: pr.number, comment_id: comment.id } } };
 }
 
-type AutomergeRecord = { id: string; databaseId: number; task: string; payload: unknown; createdAt: string; creator: { __typename: string; databaseId: number } | null; statuses: { nodes: { databaseId: number; state: string; description: string; createdAt: string; creator: { __typename: string; databaseId: number } | null }[] } };
+type AutomergeStatus = { databaseId: number; state: string; description: string | null; createdAt: string; creator: { __typename: string; databaseId: number } | null };
+type AutomergeRecord = { id: string; databaseId: number; task: string; payload: unknown; createdAt: string; creator: { __typename: string; databaseId: number } | null; statuses: { nodes: AutomergeStatus[] } };
 
 async function reservations(ctx: Parameters<Scenario["run"]>[0], pr: Pr): Promise<AutomergeRecord[]> {
-  const data = await ctx.gh.graphql<{ client: { databaseId: number }; server: { deployments: { nodes: AutomergeRecord[] } } }>(
-    "query{client:repository(owner:\"civitaspo\",name:\"testing-csm-ci-client\"){databaseId} server:repository(owner:\"civitaspo\",name:\"testing-csm-ci-server\"){deployments(environments:[\"csm-ci-automerge\"],first:100,orderBy:{field:CREATED_AT,direction:DESC}){nodes{databaseId task payload createdAt creator{__typename ... on Bot{databaseId}} statuses(first:100){nodes{databaseId state description createdAt creator{__typename ... on Bot{databaseId}}}}}}}}",
+  const data = await ctx.gh.graphql<{ client: { databaseId: number }; server: { deployments: { nodes: Omit<AutomergeRecord, "statuses">[] } } }>(
+    "query{client:repository(owner:\"civitaspo\",name:\"testing-csm-ci-client\"){databaseId} server:repository(owner:\"civitaspo\",name:\"testing-csm-ci-server\"){deployments(environments:[\"csm-ci-automerge\"],first:100,orderBy:{field:CREATED_AT,direction:DESC}){nodes{id databaseId task payload createdAt creator{__typename ... on Bot{databaseId}}}}}}",
   );
-  return data.server.deployments.nodes.filter((deployment) => {
+  const matching = data.server.deployments.nodes.filter((deployment) => {
     try {
       const payload = (typeof deployment.payload === "string" ? JSON.parse(deployment.payload) : deployment.payload) as { repository_id?: number; pull_number?: number };
       return deployment.task === "csm-ci:automerge" && deployment.creator?.__typename === "Bot" && deployment.creator.databaseId === SERVER_BOT_ID && payload.repository_id === data.client.databaseId && payload.pull_number === pr.number;
     } catch { return false; }
   });
+  return Promise.all(matching.map(async (deployment) => {
+    const statuses = await ctx.gh.paginate(ctx.gh.rest.repos.listDeploymentStatuses, { owner: "civitaspo", repo: "testing-csm-ci-server", deployment_id: deployment.databaseId, per_page: 100 });
+    return {
+      ...deployment,
+      statuses: { nodes: statuses.map((status) => ({
+        databaseId: Number(status.id),
+        state: status.state.toUpperCase(),
+        description: status.description,
+        createdAt: status.created_at,
+        creator: status.creator ? { __typename: status.creator.type, databaseId: Number(status.creator.id) } : null,
+      })) },
+    };
+  }));
 }
 
 async function awaitReservation(ctx: Parameters<Scenario["run"]>[0], pr: Pr): Promise<AutomergeRecord> {
@@ -271,7 +285,7 @@ export const merge: Scenario[] = [
     assert(sweep.conclusion === "success", `automerge sweep concluded ${sweep.conclusion} (${sweep.html_url})`);
     await until(`queued reservation for changed head #${pr.number}`, async () => {
       const record = await awaitReservation(ctx, pr);
-      return record.statuses.nodes.some((status) => status.state === "QUEUED" && /approval/u.test(status.description)) ? record : undefined;
+      return record.statuses.nodes.some((status) => status.state === "QUEUED" && /approval/u.test(status.description ?? "")) ? record : undefined;
     });
     await noMerge(ctx, pr);
   }), "negative"),

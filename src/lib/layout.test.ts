@@ -113,6 +113,18 @@ describe("merge token boundary", () => {
 test("automerge mints client write permissions only after readiness and pins the reservation and head", () => {
   const workflow = z.object({ jobs: z.object({ evaluate: z.object({ steps: z.array(stepSchema) }) }) }).parse(readYaml(".github/workflows/server-automerge-evaluate.yml"));
   const steps = workflow.jobs.evaluate.steps;
+  const readToken = steps.find((step) => step.id === "read-token");
+  expect(readToken?.with).toEqual({
+    "client-id": "${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}",
+    "private-key": "${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}",
+    owner: "${{ inputs.repository-owner }}",
+    repositories: "${{ inputs.repository-name }}",
+    "permission-contents": "read",
+    "permission-pull-requests": "read",
+    "permission-checks": "read",
+    "permission-issues": "read",
+  });
+  expect(readToken?.with).not.toHaveProperty("permission-statuses");
   const token = steps.find((step) => step.id === "write-token");
   expect(token?.if).toBe("steps.readiness.outputs.ready == 'true'");
   expect(token?.with?.["permission-contents"]).toBe("write");

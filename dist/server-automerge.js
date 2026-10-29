@@ -37152,7 +37152,7 @@ async function withStatuses(args, nodes) {
   for (const node of nodes) {
     if (node.task !== TASK || node.creator?.__typename !== "Bot" || node.creator.databaseId !== args.serverBotId)
       continue;
-    const payload = ReservationPayloadSchema.safeParse(node.payload);
+    const payload = parsePayload(node.payload);
     if (!payload.success) {
       console.warn(`ignoring automerge deployment ${node.databaseId} with invalid payload`);
       continue;
@@ -37170,6 +37170,15 @@ async function withStatuses(args, nodes) {
     record.state = reservationState({ statuses: record.statuses, serverBotId: args.serverBotId });
   }
   return selected;
+}
+function parsePayload(raw) {
+  if (typeof raw !== "string")
+    return ReservationPayloadSchema.safeParse(raw);
+  try {
+    return ReservationPayloadSchema.safeParse(JSON.parse(raw));
+  } catch {
+    return ReservationPayloadSchema.safeParse(undefined);
+  }
 }
 function mapStatus(s) {
   const state = s.state === "queued" ? "queued" : s.state === "success" ? "success" : s.state === "failure" ? "failure" : s.state === "inactive" ? "inactive" : "error";
@@ -37711,21 +37720,24 @@ async function main() {
   const pullNumber = Number(getInput("pull-number", { required: true }));
   if (!Number.isSafeInteger(pullNumber) || pullNumber < 1)
     throw new Error("pull-number must be a positive integer");
+  const id = getInput("deployment-id");
+  const serverRun = { serverUrl: env("GITHUB_SERVER_URL"), repository: serverRepository, id: env("GITHUB_RUN_ID"), attempt: env("GITHUB_RUN_ATTEMPT") };
+  if (mode === "error-status") {
+    const records = await listReservations(listArgs);
+    const record = id ? records.find((item) => String(item.deploymentId) === id && item.payload.pull_number === pullNumber) : records.find((item) => item.payload.repository.toLowerCase() === repository && item.payload.pull_number === pullNumber && item.state.kind === "active");
+    if (record && record.state.kind === "active")
+      await createReservationStatus({ server: deployments, serverRepository, serverBotId: config.apps.server_bot_id, deploymentId: record.deploymentId, serverRunUrl: `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, pullUrl: `${serverRun.serverUrl}/${repository}/pull/${pullNumber}`, state: "error", description: getInput("failure-message") || "evaluation failed" });
+    return;
+  }
   const server = github(getInput("server-token", { required: true }));
   const { data: repo } = await server.rest.repos.get(splitRepository(repository));
   const records = await findReservationsForPull({ ...listArgs, repositoryId: Number(repo.id), pullNumber });
-  const id = getInput("deployment-id");
   const record = id ? records.find((item) => String(item.deploymentId) === id) : records.find((item) => item.state.kind === "active");
   if (!record) {
     setOutput("ready", "false");
     return;
   }
   setOutput("deployment-id", String(record.deploymentId));
-  const serverRun = { serverUrl: env("GITHUB_SERVER_URL"), repository: serverRepository, id: env("GITHUB_RUN_ID"), attempt: env("GITHUB_RUN_ATTEMPT") };
-  if (mode === "error-status") {
-    await createReservationStatus({ server: deployments, serverRepository, serverBotId: config.apps.server_bot_id, deploymentId: record.deploymentId, serverRunUrl: `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, pullUrl: `${serverRun.serverUrl}/${repository}/pull/${pullNumber}`, state: "error", description: getInput("failure-message") || "evaluation failed" });
-    return;
-  }
   const ctx = {
     server,
     deployments,

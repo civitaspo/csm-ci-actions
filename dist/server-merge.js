@@ -37321,7 +37321,7 @@ async function withStatuses(args, nodes) {
   for (const node of nodes) {
     if (node.task !== TASK || node.creator?.__typename !== "Bot" || node.creator.databaseId !== args.serverBotId)
       continue;
-    const payload = ReservationPayloadSchema.safeParse(node.payload);
+    const payload = parsePayload(node.payload);
     if (!payload.success) {
       console.warn(`ignoring automerge deployment ${node.databaseId} with invalid payload`);
       continue;
@@ -37339,6 +37339,15 @@ async function withStatuses(args, nodes) {
     record.state = reservationState({ statuses: record.statuses, serverBotId: args.serverBotId });
   }
   return selected;
+}
+function parsePayload(raw) {
+  if (typeof raw !== "string")
+    return ReservationPayloadSchema.safeParse(raw);
+  try {
+    return ReservationPayloadSchema.safeParse(JSON.parse(raw));
+  } catch {
+    return ReservationPayloadSchema.safeParse(undefined);
+  }
 }
 function mapStatus(s) {
   const state = s.state === "queued" ? "queued" : s.state === "success" ? "success" : s.state === "failure" ? "failure" : s.state === "inactive" ? "inactive" : "error";

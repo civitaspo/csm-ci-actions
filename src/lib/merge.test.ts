@@ -13,7 +13,7 @@ function pull() {
   return { number: 12, state: "open", merged: false, merged_by: null, merge_commit_sha: null, draft: false, node_id: "PR_node", title: "Example (#12)", body: "Description", user: { id: 10, login: "alice", type: "User" }, head: { sha, repo: { full_name: "owner/repo" } }, base: { ref: "main", repo: { id: 123, full_name: "owner/repo", default_branch: "main" } } };
 }
 
-function setup(body: string, author = { id: 10, login: "alice", type: "User" }, activeReservation = false, options: { pull?: Record<string, unknown>; pullThen?: unknown[]; commentId?: number; editedAt?: string | null; payload?: Record<string, unknown>; headDate?: string; timeline?: unknown[]; reviews?: unknown[]; checks?: unknown[]; checksThen?: unknown[]; commits?: unknown[]; legacyReceipt?: "server" | "forged"; statuses?: unknown[] } = {}) {
+function setup(body: string, author = { id: 10, login: "alice", type: "User" }, activeReservation = false, options: { pull?: Record<string, unknown>; pullThen?: unknown[]; commentId?: number; editedAt?: string | null; payload?: Record<string, unknown>; headDate?: string; timeline?: unknown[]; reviews?: unknown[]; reviewsThen?: unknown[]; checks?: unknown[]; checksThen?: unknown[]; commits?: unknown[]; legacyReceipt?: "server" | "forged"; statuses?: unknown[] } = {}) {
   const comment = { id: 9, node_id: "IC_node", body, issue_url: "https://api.github.com/repos/owner/repo/issues/12", created_at: "2026-10-24T11:30:00Z", updated_at: "2026-10-24T11:30:00Z", user: author };
   const payload = { version: 1, repository_id: 123, repository: "owner/repo", pull_number: 12, pull_node_id: "PR_node", base_ref: "main", merger: { id: 10, login: "alice", type: "User" }, mode: "human", command_comment_id: options.commentId ?? 88, accepted_head: sha, accepted_at: "2026-10-20T00:00:00.000Z", expires_at: "2026-10-27T00:00:00.000Z", ...options.payload };
   const deploymentNodes = activeReservation ? [{ id: "D_node", databaseId: 77, task: "csm-ci:automerge", payload, createdAt: "2026-10-20T00:00:00Z", creator: { __typename: "Bot", databaseId: 3000 } }] : [];
@@ -27,7 +27,7 @@ function setup(body: string, author = { id: 10, login: "alice", type: "User" }, 
     { method: "GET", path: `${P}/commits/${sha}`, body: { sha, commit: { committer: { date: options.headDate ?? "2026-10-24T11:00:00Z" } } } },
     { method: "GET", path: `${P}/issues/12/timeline`, body: options.timeline ?? [] },
     { method: "GET", path: `${P}/pulls/12/commits`, body: options.commits ?? [{ sha, commit: { verification: { verified: true } }, author: { id: 10, login: "alice" }, committer: { id: 10, login: "alice" } }] },
-    { method: "GET", path: `${P}/pulls/12/reviews`, body: options.reviews ?? [{ id: 4, user: { id: 4000 }, state: "APPROVED", commit_id: sha, submitted_at: "2026-10-24T11:20:00Z" }] },
+    { method: "GET", path: `${P}/pulls/12/reviews`, body: options.reviews ?? [{ id: 4, user: { id: 4000 }, state: "APPROVED", commit_id: sha, submitted_at: "2026-10-24T11:20:00Z" }], ...(options.reviewsThen ? { then: options.reviewsThen } : {}) },
     { method: "GET", path: `${P}/commits/${sha}/check-runs`, body: options.checks ?? [{ id: 7, name: "status-check", app: { id: 15368 }, status: "completed", conclusion: "success", started_at: "2026-10-24T11:10:00Z" }], ...(options.checksThen ? { then: options.checksThen } : {}) },
   ]);
   const notifyFetch = fakeFetch([
@@ -96,9 +96,31 @@ describe("acceptMerge", () => {
 
   test.each([
     ["comment body is not a command", "hello", /not exactly/],
+    ["different command", "/approve", /comment 9 is not \/merge/],
   ])("rejects invalid command evidence: %s", async (_name, body, expected) => {
     const { ctx } = setup(body);
     await expect(acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow(expected);
+  });
+
+  test("requires merge to remain enabled in the refreshed configuration", async () => {
+    const { ctx, deploymentsFetch } = setup("/merge");
+    ctx.reloadConfig = async () => ({ ...ctx.config, repositories: [] });
+    await expect(acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow("repository owner/repo no longer enables merge");
+    expect(deploymentsFetch.calls).not.toContain("POST /repos/owner/server/deployments");
+  });
+
+  test("rejects Bot requests disabled for this repository", async () => {
+    const bot = { id: 20, login: "renovate[bot]", type: "Bot" };
+    const { ctx, deploymentsFetch } = setup("/merge", bot, false, { pull: { user: bot } });
+    ctx.config.repositories = [{ name: "owner/repo", ops: ["merge"], merge: { allow_bot_requests: false } }];
+    await expect(acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow("bot merge requests are disabled for repository owner/repo");
+    expect(deploymentsFetch.calls).not.toContain("POST /repos/owner/server/deployments");
+  });
+
+  test("rejects a second active reservation for the same pull request", async () => {
+    const { ctx, deploymentsFetch } = setup("/merge", { id: 10, login: "alice", type: "User" }, true);
+    await expect(acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow("pull request #12 already has an active merge reservation");
+    expect(deploymentsFetch.calls).not.toContain("POST /repos/owner/server/deployments");
   });
 
   test.each([
@@ -145,6 +167,22 @@ describe("acceptMerge", () => {
     expect(deploymentsFetch.calls).toContain("POST /repos/owner/server/deployments/77/statuses");
     expect(notifyFetch.calls).toContain("POST /repos/owner/repo/issues/comments/9/reactions");
   });
+
+  test.each([
+    ["unrelated User", { id: 99, login: "stranger", type: "User" }, { merged: false }, "stranger cannot cancel this merge reservation"],
+    ["reservation owner after merge", { id: 10, login: "alice", type: "User" }, { merged: true }, "pull request #12 has already merged"],
+  ] as const)("rejects cancellation by %s", async (_case, author, pullUpdate, message) => {
+    const { ctx, deploymentsFetch } = setup("/merge cancel", author, true, { pull: pullUpdate });
+    await expect(acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow(message);
+    expect(deploymentsFetch.calls).not.toContain("POST /repos/owner/server/deployments/77/statuses");
+  });
+
+  test("rejects cancellation explicitly when the reserved pull is already merged", async () => {
+    const { ctx, deploymentsFetch, notifyFetch } = setup("/merge cancel", { id: 10, login: "alice", type: "User" }, true, { pull: { merged: true, state: "closed" } });
+    await expect(acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow("pull request #12 has already merged");
+    expect(deploymentsFetch.calls).not.toContain("POST /repos/owner/server/deployments/77/statuses");
+    expect(notifyFetch.calls).toEqual([]);
+  });
 });
 
 describe("evaluateReservation", () => {
@@ -169,6 +207,20 @@ describe("evaluateReservation", () => {
     expect(result.ready).toBe(false);
     expect(deploymentsFetch.calls).toContain("POST /repos/owner/server/deployments/77/statuses");
     expect(notifyFetch.calls).toContain(`POST ${P}/issues/12/comments`);
+  });
+
+  test.each([
+    ["approval for an older head", { reviews: [{ id: 5, user: { id: 4000 }, state: "APPROVED", commit_id: nextSha, submitted_at: "2026-10-24T11:20:00Z" }] }, "waiting for approval of aaaaaaa"],
+    ["required check from an untrusted producer", { checks: [{ id: 7, name: "status-check", app: { id: 999 }, status: "completed", conclusion: "success", started_at: "2026-10-24T11:10:00Z" }] }, "waiting for check status-check from app 15368 is not success or skipped"],
+    ["latest required check failure", { checks: [
+      { id: 7, name: "status-check", app: { id: 15368 }, status: "completed", conclusion: "success", started_at: "2026-10-24T11:10:00Z" },
+      { id: 8, name: "status-check", app: { id: 15368 }, status: "completed", conclusion: "failure", started_at: "2026-10-24T11:11:00Z" },
+    ] }, "waiting for check status-check from app 15368 is not success or skipped"],
+  ] as const)("keeps readiness waiting for %s", async (_case, options, reason) => {
+    const { ctx, payload } = setup("/merge", { id: 10, login: "alice", type: "User" }, true, options as unknown as Parameters<typeof setup>[3]);
+    const record = { deploymentId: 77, nodeId: "D_node", createdAt: "2026-10-20T00:00:00Z", payload: payload as never, statuses: [], state: { kind: "active" as const } };
+    const result = await evaluateReservation(ctx, record);
+    expect(result.decision).toMatchObject({ kind: "wait", reason });
   });
 
   test("invalidates a reservation when current configuration removes merge", async () => {
@@ -200,6 +252,21 @@ describe("evaluateReservation", () => {
     expect(result.decision).toMatchObject({ kind: "terminal", state: "inactive", description: "pull request closed", comment: "none" });
     expect(notifyFetch.calls).not.toContain(`POST ${P}/issues/12/comments`);
   });
+
+  test.each([
+    ["repository ID", { base: { ref: "main", repo: { id: 999, full_name: "owner/repo", default_branch: "main" } } }],
+    ["pull node ID", { node_id: "different-node" }],
+  ])("rejects changed immutable %s identity", async (_label, pullUpdate) => {
+    const { ctx, payload } = setup("/merge", { id: 10, login: "alice", type: "User" }, true, { pull: pullUpdate });
+    const record = { deploymentId: 77, nodeId: "D_node", createdAt: "2026-10-20T00:00:00Z", payload: payload as never, statuses: [], state: { kind: "active" as const } };
+    await expect(evaluateReservation(ctx, record)).rejects.toThrow("reservation repository or pull request identity changed");
+  });
+
+  test("rejects a reservation missing from current server state", async () => {
+    const { ctx, payload } = setup("/merge", { id: 10, login: "alice", type: "User" });
+    const record = { deploymentId: 77, nodeId: "D_node", createdAt: "2026-10-20T00:00:00Z", payload: payload as never, statuses: [], state: { kind: "active" as const } };
+    await expect(evaluateReservation(ctx, record)).rejects.toThrow("merge reservation no longer exists");
+  });
 });
 
 describe("mergeReservation", () => {
@@ -227,6 +294,36 @@ describe("mergeReservation", () => {
     const writeFetch = fakeFetch([{ method: "PUT", path: `${P}/pulls/12/merge`, status: 409, body: { message: "Conflict" } }]);
     ctx.write = github("write", writeFetch);
     await expect(mergeReservation(ctx, record, sha)).rejects.toThrow("base changed");
+    expect(writeFetch.calls).toEqual([`PUT ${P}/pulls/12/merge`]);
+  });
+
+  test.each([
+    ["not ready", { reviews: [] }, sha, "merge readiness changed before the final write"],
+    ["different head", { pull: { head: { sha: nextSha, repo: { full_name: "owner/repo" } } } }, sha, "merge readiness changed before the final write"],
+  ] as const)("rejects the final write when readiness is %s", async (_case, options, expectedHead, message) => {
+    const { ctx, record } = readyReservation(options as unknown as Parameters<typeof setup>[3]);
+    const writeFetch = fakeFetch([{ method: "PUT", path: `${P}/pulls/12/merge`, status: 200, body: { merged: true, sha: "c".repeat(40) } }]);
+    ctx.write = github("write", writeFetch);
+    await expect(mergeReservation(ctx, record, expectedHead)).rejects.toThrow(message);
+    expect(writeFetch.calls).toEqual([]);
+  });
+
+  test("revalidates after disabling auto-merge and refuses a moved head", async () => {
+    const changed = { ...pull(), head: { sha: nextSha, repo: { full_name: "owner/repo" } } };
+    const { ctx, record } = readyReservation({ pullThen: [pull(), changed] });
+    const writeFetch = fakeFetch([{ method: "PUT", path: `${P}/pulls/12/merge`, status: 200, body: { merged: true, sha: "c".repeat(40) } }]);
+    ctx.write = github("write", writeFetch);
+    await expect(mergeReservation(ctx, record, sha)).rejects.toThrow("merge readiness changed after disabling auto-merge");
+    expect(writeFetch.calls).toEqual([]);
+  });
+
+  test("revalidates readiness before retrying a retryable merge response", async () => {
+    const successCheck = { id: 7, name: "status-check", app: { id: 15368 }, status: "completed", conclusion: "success", started_at: "2026-10-24T11:10:00Z" };
+    const failedCheck = { ...successCheck, id: 8, conclusion: "failure", started_at: "2026-10-24T11:11:00Z" };
+    const { ctx, record } = readyReservation({ checks: [successCheck], checksThen: [[successCheck], [failedCheck]] });
+    const writeFetch = fakeFetch([{ method: "PUT", path: `${P}/pulls/12/merge`, status: 405, body: { message: "not mergeable" } }]);
+    ctx.write = github("write", writeFetch);
+    await expect(mergeReservation(ctx, record, sha)).rejects.toThrow("merge readiness changed before retry");
     expect(writeFetch.calls).toEqual([`PUT ${P}/pulls/12/merge`]);
   });
 

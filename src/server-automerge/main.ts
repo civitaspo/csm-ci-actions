@@ -53,21 +53,23 @@ async function main(): Promise<void> {
   const repository = core.getInput("repository", { required: true }).toLowerCase();
   const pullNumber = Number(core.getInput("pull-number", { required: true }));
   if (!Number.isSafeInteger(pullNumber) || pullNumber < 1) throw new Error("pull-number must be a positive integer");
+  const id = core.getInput("deployment-id");
+  const serverRun = { serverUrl: env("GITHUB_SERVER_URL"), repository: serverRepository, id: env("GITHUB_RUN_ID"), attempt: env("GITHUB_RUN_ATTEMPT") };
+  if (mode === "error-status") {
+    const records = await listReservations(listArgs);
+    const record = id ? records.find((item) => String(item.deploymentId) === id && item.payload.pull_number === pullNumber) : records.find((item) => item.payload.repository.toLowerCase() === repository && item.payload.pull_number === pullNumber && item.state.kind === "active");
+    if (record && record.state.kind === "active") await createReservationStatus({ server: deployments, serverRepository, serverBotId: config.apps.server_bot_id, deploymentId: record.deploymentId, serverRunUrl: `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, pullUrl: `${serverRun.serverUrl}/${repository}/pull/${pullNumber}`, state: "error", description: core.getInput("failure-message") || "evaluation failed" });
+    return;
+  }
   const server = github(core.getInput("server-token", { required: true }));
   const { data: repo } = await server.rest.repos.get(splitRepository(repository));
   const records = await findReservationsForPull({ ...listArgs, repositoryId: Number(repo.id), pullNumber });
-  const id = core.getInput("deployment-id");
   const record = id ? records.find((item) => String(item.deploymentId) === id) : records.find((item) => item.state.kind === "active");
   if (!record) {
     core.setOutput("ready", "false");
     return;
   }
   core.setOutput("deployment-id", String(record.deploymentId));
-  const serverRun = { serverUrl: env("GITHUB_SERVER_URL"), repository: serverRepository, id: env("GITHUB_RUN_ID"), attempt: env("GITHUB_RUN_ATTEMPT") };
-  if (mode === "error-status") {
-    await createReservationStatus({ server: deployments, serverRepository, serverBotId: config.apps.server_bot_id, deploymentId: record.deploymentId, serverRunUrl: `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, pullUrl: `${serverRun.serverUrl}/${repository}/pull/${pullNumber}`, state: "error", description: core.getInput("failure-message") || "evaluation failed" });
-    return;
-  }
   const ctx: MergeContext = {
     server, deployments, serverRepository, config, repository, serverRun,
     notify: github(core.getInput("notification-token", { required: true })),
