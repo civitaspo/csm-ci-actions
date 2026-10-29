@@ -65,6 +65,10 @@ describe("validateCancellationTarget", () => {
     expect(validateCancellationTarget(input)).toBeUndefined();
   });
 
+  test.each(["queued", "pending", "waiting", "in_progress"])("accepts an e2e job with status %s", (status) => {
+    expect(validateCancellationTarget({ ...input, run: { ...run, status }, jobs: [{ name: "e2e", status }] })).toBeUndefined();
+  });
+
   test.each([
     ["different run ID", { ...input, expectedRunId: run.id + 1 }, "the run ID does not match the requested run."],
     ["wrong event", { ...input, run: { ...run, event: "workflow_dispatch" } }, "the run is not an e2e-comment workflow run."],

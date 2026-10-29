@@ -46,6 +46,10 @@ export type CancellationTarget = {
 
 export type CancellationJob = { name: string; status: string };
 
+function activeStatus(status: string): boolean {
+  return status === "queued" || status === "pending" || status === "waiting" || status === "in_progress";
+}
+
 export function validateCancellationTarget(input: {
   run: CancellationTarget;
   jobs: readonly CancellationJob[];
@@ -62,9 +66,9 @@ export function validateCancellationTarget(input: {
     return "the run is not an e2e-comment workflow run.";
   }
   if (run.repository?.full_name.toLowerCase() !== input.repository.toLowerCase()) return "the run belongs to a different repository.";
-  if (run.status !== "queued" && run.status !== "in_progress") return "the run is no longer active.";
+  if (!activeStatus(run.status)) return "the run is no longer active.";
   const e2eJob = input.jobs.find((job) => job.name === "e2e");
-  if (!e2eJob || (e2eJob.status !== "queued" && e2eJob.status !== "in_progress")) return "the e2e job is no longer active.";
+  if (!e2eJob || !activeStatus(e2eJob.status)) return "the e2e job is no longer active.";
 
   const runUrl = `${input.serverUrl}/${input.repository}/actions/runs/${run.id}`;
   const associated = input.comments.some(({ user, body }) => user?.id === ACTIONS_BOT_ID
@@ -123,7 +127,7 @@ export async function findCancellationTarget(gh: ReturnType<typeof github>, repo
       candidates.push({ runId, status: "finished" });
       continue;
     }
-    if (run.status !== "queued" && run.status !== "in_progress") {
+    if (!activeStatus(run.status ?? "")) {
       candidates.push({ runId, status: "unverified" });
       continue;
     }
