@@ -57,12 +57,21 @@ jobs:
         env:
           PR: ${{ github.event.issue.number }}
           PR_TITLE: ${{ github.event.issue.title }}
+          COMMENT_URL: ${{ github.event.comment.html_url }}
           REPO: ${{ github.repository }}
           SERVER_URL: ${{ github.server_url }}
         run: |
-          printf 'Triggered by pull request:\n\n' >> "$GITHUB_STEP_SUMMARY"
-          if [ -n "$PR_TITLE" ]; then printf 'Title: %s\n\n' "$PR_TITLE" >> "$GITHUB_STEP_SUMMARY"; fi
-          printf 'URL: %s/%s/pull/%s\n' "$SERVER_URL" "$REPO" "$PR" >> "$GITHUB_STEP_SUMMARY"
+          pr_url="$SERVER_URL/$REPO/pull/$PR"
+          title="${PR_TITLE:-Pull request}"
+          title="${title//\\/\\\\}"
+          title="${title//\[/\\[}"
+          title="${title//\]/\\]}"
+          {
+            printf 'Triggered by the pull request:\n\n'
+            printf -- '- Title: [%s #%s](%s)\n' "$title" "$PR" "$pr_url"
+            printf -- '- Pull request URL: %s\n' "$pr_url"
+            printf -- '- Comment URL: %s\n' "$COMMENT_URL"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # A reusable workflow cannot read the csm-ci-e2e environment's secrets, so this job mirrors e2e.yml.
   # It checks out the PR head only when authorize chose the PR's harness.
