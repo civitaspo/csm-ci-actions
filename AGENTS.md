@@ -42,25 +42,24 @@ mise run actions-lock-verify
 
 - If the build changes `dist/`, review and commit the generated files with their source. Rebuild and confirm the clean-dist check against that commit.
 - When changing a shared client workflow or its composite dependencies, run `mise run actions-lock`. Review and commit the generated `.github/workflows/actions.lock`. Keep the task's configured workflow list and preserve the server checkout pattern.
-- For executable changes, run the affected live feature suites and then smoke at the signed, pushed full head SHA. Documentation-only changes do not need live e2e.
 - Before opening the PR, obtain an independent review of the diff against the relevant specification. Give the reviewer the diff and specification without your conclusions. Resolve findings and repeat affected checks after fixes.
 
 ## Run live e2e safely
 
 Read [README.md](README.md#run-live-e2e-in-the-testing-repositories) for prerequisites and [docs/testing.md](docs/testing.md#running-e2e) for cleanup and correlation rules.
 
-```sh
-GH_TOKEN=$(gh auth token) bun e2e/run.ts --ref <full-head-sha> --feature <feature>
-GH_TOKEN=$(gh auth token) bun e2e/run.ts --ref <full-head-sha> --feature smoke
-```
+- Decide whether live e2e is needed from the entire diff. Documentation-only, unit-test-only, fixtures not synchronized to testing repositories, generated-file-only changes reproduced by `bun run build` with a clean `dist/`, and development tooling that runtime and CI workflows do not load need no live e2e. Mixed changes follow the most demanding applicable rule.
+- Trace changed code through its callers and select every affected operation's suite. For example, `src/lib/merge.ts` affects `merge`, and `src/lib/managed-files.ts` affects `repo-settings`. Shared code such as `src/lib/github.ts`, `src/lib/config.ts`, intake, and `.github/workflows/server.yml`, or an unclear impact, requires all operation suites: `approve`, `merge`, `policy-check`, `securefix`, `release`, `release-pr`, and `repo-settings`. The `release-prepare` client action belongs to `release-pr`.
+- After local checks and independent review, push the signed commit and open the PR. Run the selected suites once by commenting `/e2e --feature <feature>[,<feature>...]` on the PR. Do not add a separate smoke run before merge. Confirm the reply reports success for the final PR head SHA and record the selection rule, SHA, harness, run URL, result, and skips in the PR's Verification section. If the head changes, rerun against the new head.
+- The workflow always comes from `main`. It uses the PR harness only for an eligible same-repository PR whose commits are verified and authored by the owner. If it uses the `main` harness, verify changes to `e2e/` locally or in CI after merge. Local runs skip second-identity scenarios; record the skips and run those scenarios in CI after merge. Verify changes to the e2e workflow itself after merge, when the updated workflow runs from `main`.
+- After an authorized merge, compare the merged commit's tree to the verified PR head's tree. If they match, run only smoke against the merged SHA. If they differ, rerun the affected suites against the merged SHA. Run any outstanding harness or workflow verification as well. Changes that needed no live e2e need no post-merge smoke. Run post-merge CI through `e2e.yml` on `main`.
 
 - The harness writes to `testing-csm-ci-client`, `testing-csm-ci-server`, and this repository's `e2e` ref. Production repositories are not test fixtures.
 - Run one harness invocation at a time. An invocation may list several features, such as `--feature approve,merge,policy-check`; their concurrent scenarios overlap and serial scenarios run alone. Wait for completion before dispatching another CI suite, because a newer pending run can replace an older one.
-- Use `--scenario <substring>` while iterating, then run the full affected feature. The `release-prepare` client action belongs to the `release-pr` suite.
+- Use `--scenario <substring>` while iterating, then run the full affected feature.
 - Another session or a multi-feature run can hold `e2e-lock` for a long time. Read the lock's description before waiting, and tell the user what you are waiting on.
 - Under GitHub's account-wide job limit, runs can stay queued for more than ten minutes, and a job's API status can lag its finished steps. Check the queue and step conclusions before blaming the code or retrying.
 - For mutation checks in copied trees, exclude `mise.toml` (an untrusted copy makes `mise` refuse to run) and call the real binary from `mise which bun`. Confirm the unmutated baseline passes. Install dependencies in every worktree instead of symlinking `node_modules`, because bundles embed the dependency path.
-- Local runs skip scenarios requiring the second identity. Record those skips. Run the affected suites and smoke through `e2e.yml` on `main` against the merged SHA after an authorized merge. Keep the runner checkout on `main` so candidate code cannot receive the privileged e2e environment.
 - Before removing a stale `e2e-lock`, confirm ownership and that the harness and its dispatched workflows have stopped. Inspect cleanup diagnostics, restore only owned test state, and close owned leftover `e2e-*` PRs and branches. Never delete a ruleset by name alone or reset an unverified managed branch.
 
 ## Troubleshoot from the request to the result

@@ -248,14 +248,17 @@ When a source change updates bundles, review and commit the regenerated `dist/` 
 
 The harness uses only `civitaspo/testing-csm-ci-client` and `civitaspo/testing-csm-ci-server` as targets. It moves the `e2e` branch in `civitaspo/csm-ci-actions` to the supplied revision and synchronizes test fixture workflows. These are live writes, not a local simulation.
 
-Prerequisites are a signed, pushed full commit SHA; the testing Apps, configuration, variables, and secrets from [setup](docs/setup.md); and an authenticated `gh` session with the required access to all three repositories. `GH_TOKEN` acts as the testing owner. `CSM_CI_ACTIONS_TOKEN`, when set, handles the actions repository's branch and lock; otherwise the harness uses `GH_TOKEN` for both. Credential provisioning is an operator task.
+Prerequisites are a signed, pushed full commit SHA and the testing Apps, configuration, variables, and secrets from [setup](docs/setup.md). Credential provisioning is an operator task. Follow [AGENTS.md](AGENTS.md#run-live-e2e-safely) to select suites and record verification.
 
-Run one invocation at a time, then smoke. One invocation can run several features together; their concurrent scenarios overlap and their serial scenarios run alone:
+After opening the PR, the repository owner comments `/e2e --feature approve,merge,policy-check` to test its current head. Use the selected features in the command. The reply identifies the pinned SHA, harness, run URL, and result. Append `--scenario <name substring>` to rerun a matching scenario while iterating, then run the full affected suite. The PR harness is used only when its branch is in this repository and every PR commit is verified and authored by the owner. Otherwise the workflow uses the `main` harness. See [docs/testing.md](docs/testing.md#running-e2e).
+
+One invocation can run several features together; their concurrent scenarios overlap and their serial scenarios run alone. Run one invocation at a time and wait for completion before starting another. A newer queued GitHub run can replace an older pending run.
+
+For local troubleshooting or when the PR harness cannot be used, an authenticated `gh` session needs access to all three repositories. `GH_TOKEN` acts as the testing owner. `CSM_CI_ACTIONS_TOKEN`, when set, handles this repository's branch and lock; otherwise the harness uses `GH_TOKEN` for both:
 
 ```sh
 GH_TOKEN=$(gh auth token) bun e2e/run.ts --ref <full-sha> --feature repo-settings
 GH_TOKEN=$(gh auth token) bun e2e/run.ts --ref <full-sha> --feature approve,merge,policy-check
-GH_TOKEN=$(gh auth token) bun e2e/run.ts --ref <full-sha> --feature smoke
 ```
 
 Available features are `approve`, `merge`, `policy-check`, `securefix`, `release`, `release-pr`, `repo-settings`, and `smoke`. The feature name remains `release-pr` even though its client action is named `release-prepare`. Record run URLs and any skips in the PR.
@@ -264,16 +267,14 @@ New fixture PRs describe their scenario, case, ordered expected behavior, identi
 
 Display labels use the fixed catalog in [e2e/pr-metadata.ts](e2e/pr-metadata.ts): `e2e`, one `e2e:<feature>`, exactly one `case:positive`, `case:negative` or `case:mixed`, and relevant `check:*` categories. The harness provisions missing labels once under its lock, reuses operator-edited labels, and preserves unrelated PR labels. Labels never authorize an operation or identify cleanup ownership. Direct PRs receive a description when opened. Server-generated PRs retain their title and original body bytes; the harness appends its marked intent section after verifying generated output, and replaces only that section on repeated annotation. Historical and unrelated fixture PRs are excluded.
 
-The local runner skips scenarios that need `CSM_CI_UNTRUSTED_COMMITTER_TOKEN`. The [CI e2e workflow](.github/workflows/e2e.yml) supplies that second identity from its preconfigured `csm-ci-e2e` environment. After merge, dispatch the affected suites and smoke sequentially from `main`, testing the merged SHA:
+The local runner skips scenarios that need `CSM_CI_UNTRUSTED_COMMITTER_TOKEN`. CI supplies that second identity from the `csm-ci-e2e` environment. If the PR uses the `main` harness, changes to `e2e/` need a local run or a post-merge CI run; run locally skipped scenarios in CI after merge. The workflow files always come from `main`, so verify changed e2e workflow files after merge.
+
+After an authorized merge, compare the merged commit's tree with the verified PR head's tree. If they match, run smoke against the merged SHA. Otherwise rerun the affected suites against the merged SHA. Changes that did not need live e2e do not need post-merge smoke. Dispatch any required post-merge run from `main`:
 
 ```sh
 gh workflow run e2e.yml --repo civitaspo/csm-ci-actions --ref main \
-  -f ref=<merged-full-sha> -f feature=repo-settings
+  -f ref=<merged-full-sha> -f feature=smoke
 ```
-
-Wait for completion before dispatching the next suite. The harness lock and workflow concurrency protect shared state, but a newer queued GitHub run can replace an older pending run.
-
-To run live e2e in GitHub Actions for a pull request, the repository owner comments `/e2e --feature merge,smoke` (any known features) on it. Append `--scenario <name substring>` to rerun only matching scenarios, for example a failed one. The workflow runs against the PR's current head SHA, using the PR's own `e2e/` harness when its commits are all verified and authored by the owner and `main`'s otherwise, including the scenarios that need the second identity, and replies with the run URL and result. With the `main` harness, a PR that changes `e2e/` still needs a local or post-merge run. See [docs/testing.md](docs/testing.md#running-e2e).
 
 Scenarios restore temporary configuration and administrative state in cleanup paths and verify restoration where applicable. A failed API call or killed process can leave state behind. If a run is interrupted, first ensure it and its dispatched workflows have stopped. Inspect restoration diagnostics, verify ownership of leftover test objects, close owned `e2e-*` PRs, and remove the stale `e2e-lock` label before restarting. Do not delete a ruleset by name alone or reset an unverified managed branch. Changed-content resets of existing managed branches are excluded from the live verification procedure. Keep that limitation explicit when reporting results.
 

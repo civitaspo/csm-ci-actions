@@ -24,6 +24,8 @@ This page describes the testing environment, how to run and write live e2e scena
 
 ## Running e2e
 
+For suite selection and PR verification, follow [AGENTS.md](../AGENTS.md#run-live-e2e-safely). Open the PR before running its selected suites with `/e2e`. Run post-merge verification against the merged SHA using the tree comparison described there.
+
 ```bash
 GH_TOKEN=$(gh auth token) bun e2e/run.ts --ref <full-sha> --feature <feature>[,<feature>...] [--scenario <substring>]
 gh workflow run e2e.yml --repo civitaspo/csm-ci-actions --ref main -f ref=<sha> -f feature=<feature>[,<feature>...]
