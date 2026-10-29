@@ -1,7 +1,16 @@
-import { assert, CLIENT, dispatch, expectServer, type Scenario, SERVER, smokeRequest } from "./harness.ts";
+import { ACTIONS, assert, CLIENT, dispatch, expectServer, type Scenario, SERVER, smokeRequest } from "./harness.ts";
 import { splitRepository } from "../src/lib/github.ts";
 
 export const smoke: Scenario[] = [
+  {
+    id: "smoke.requested-revision",
+    cases: {},
+    name: "requested revision is available",
+    run: async (ctx) => {
+      const { data } = await ctx.gh.rest.repos.getCommit({ ...splitRepository(ACTIONS), ref: ctx.run.candidateSha });
+      assert(data.sha === ctx.run.candidateSha, "requested revision does not match the retrieved commit");
+    },
+  },
   {
     id: "smoke.request-1",
     cases: {},

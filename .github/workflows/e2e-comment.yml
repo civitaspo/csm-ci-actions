@@ -20,11 +20,13 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
+      deployments: write
       actions: read
       issues: write
-      pull-requests: read
+      pull-requests: write
     outputs:
       ok: ${{ steps.check.outputs.ok }}
+      deployment-id: ${{ steps.check.outputs.deployment-id }}
       ref: ${{ steps.check.outputs.ref }}
       feature: ${{ steps.check.outputs.feature }}
       scenario: ${{ steps.check.outputs.scenario }}
@@ -60,7 +62,9 @@ jobs:
       cancelled: ${{ steps.scenarios.outputs.cancelled }}
     runs-on: ubuntu-26.04
     timeout-minutes: 120
-    environment: csm-ci-e2e
+    environment:
+      name: csm-ci-e2e
+      deployment: false
     concurrency:
       group: e2e
       cancel-in-progress: false
@@ -111,6 +115,7 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
+      deployments: write
       issues: write
       pull-requests: write
     steps:
@@ -127,6 +132,7 @@ jobs:
           PR: ${{ github.event.issue.number }}
           COMMENT_ID: ${{ github.event.comment.id }}
           RESULT: ${{ needs.e2e.outputs.cancelled == 'true' && 'cancelled' || needs.e2e.result }}
+          DEPLOYMENT_ID: ${{ needs.authorize.outputs.deployment-id }}
           REF: ${{ needs.authorize.outputs.ref }}
           FEATURE: ${{ needs.authorize.outputs.feature }}
           SCENARIO: ${{ needs.authorize.outputs.scenario }}

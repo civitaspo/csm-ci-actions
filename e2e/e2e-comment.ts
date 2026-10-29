@@ -2,7 +2,7 @@
 //   bun e2e/e2e-comment.ts authorize|report
 // Inputs come from the environment so that comment text is never interpolated into a shell.
 import * as core from "@actions/core";
-import { github, splitRepository } from "../src/lib/github.ts";
+import { github, splitRepository, type GitHub } from "../src/lib/github.ts";
 import { FEATURES, type Feature } from "./pr-metadata.ts";
 
 // Immutable IDs allowed to run live e2e: the repository owner civitaspo.
@@ -207,8 +207,7 @@ function env(name: string): string {
   return value;
 }
 
-async function authorize(): Promise<void> {
-  const gh = github(env("GH_TOKEN"));
+export async function authorize(gh: GitHub): Promise<void> {
   const repository = env("REPO");
   const repo = splitRepository(repository);
   const number = Number(env("PR"));
@@ -245,7 +244,11 @@ async function authorize(): Promise<void> {
 
   await gh.rest.reactions.createForIssueComment({ ...repo, comment_id: Number(env("COMMENT_ID")), content: "eyes" });
   await reply(`e2e started for ${scope(parsed.command)} at \`${pr.head.sha}\` (harness: ${harness}). Run: ${env("RUN_URL")}`);
+  const { data: deployment } = await gh.rest.repos.createDeployment({ ...repo, ref: pr.head.sha, environment: "csm-ci-e2e", auto_merge: false, required_contexts: [], production_environment: false });
+  if (!("id" in deployment)) throw new Error(`deployment was not created: ${deployment.message ?? "unknown response"}`);
+  await gh.rest.repos.createDeploymentStatus({ ...repo, deployment_id: Number(deployment.id), state: "in_progress", log_url: env("RUN_URL"), auto_inactive: false });
   core.setOutput("ok", "true");
+  core.setOutput("deployment-id", Number(deployment.id));
   core.setOutput("cancel", "false");
   core.setOutput("ref", pr.head.sha);
   core.setOutput("feature", parsed.command.features.join(","));
@@ -254,22 +257,25 @@ async function authorize(): Promise<void> {
   core.setOutput("harness-ref", harness === "pr" ? pr.head.sha : "");
 }
 
-async function report(): Promise<void> {
-  const gh = github(env("GH_TOKEN"));
+export async function report(gh: GitHub): Promise<void> {
   const repo = splitRepository(env("REPO"));
   const result = env("RESULT");
   const cancelled = result === "cancelled";
   const passed = result === "success";
   const command: Command = { features: env("FEATURE").split(",") as Feature[], scenario: process.env.SCENARIO ?? "" };
-  await gh.rest.reactions.createForIssueComment({ ...repo, comment_id: Number(env("COMMENT_ID")), content: cancelled ? "confused" : passed ? "rocket" : "-1" });
-  const failureHelp = passed || cancelled ? "" : " Cancellation or cleanup may leave the e2e lock held; inspect the run logs for cleanup and related workflow diagnostics.";
-  await gh.rest.issues.createComment({ ...repo, issue_number: Number(env("PR")),
-    body: `e2e ${scope(command)} at \`${env("REF")}\` (harness: ${env("HARNESS")}): **${cancelled ? "cancelled after cleanup" : passed ? "pass" : `fail (${result})`}**.${failureHelp} Run: ${env("RUN_URL")}` });
+  try {
+    await gh.rest.reactions.createForIssueComment({ ...repo, comment_id: Number(env("COMMENT_ID")), content: cancelled ? "confused" : passed ? "rocket" : "-1" });
+    const failureHelp = passed || cancelled ? "" : " Cancellation or cleanup may leave the e2e lock held; inspect the run logs for cleanup and related workflow diagnostics.";
+    await gh.rest.issues.createComment({ ...repo, issue_number: Number(env("PR")),
+      body: `e2e ${scope(command)} at \`${env("REF")}\` (harness: ${env("HARNESS")}): **${cancelled ? "cancelled after cleanup" : passed ? "pass" : `fail (${result})`}**.${failureHelp} Run: ${env("RUN_URL")}` });
+  } finally {
+    await gh.rest.repos.createDeploymentStatus({ ...repo, deployment_id: Number(env("DEPLOYMENT_ID")), state: passed ? "success" : cancelled ? "error" : "failure", description: `e2e ${result}`, log_url: env("RUN_URL"), auto_inactive: false });
+  }
 }
 
 if (import.meta.main) {
   const mode = process.argv[2];
-  if (mode === "authorize") await authorize();
-  else if (mode === "report") await report();
+  if (mode === "authorize") await authorize(github(env("GH_TOKEN")));
+  else if (mode === "report") await report(github(env("GH_TOKEN")));
   else throw new Error("usage: bun e2e/e2e-comment.ts authorize|report");
 }
