@@ -276,6 +276,8 @@ gh workflow run e2e.yml --repo civitaspo/csm-ci-actions --ref main \
   -f ref=<merged-full-sha> -f feature=smoke
 ```
 
+To request a safe stop, comment `/e2e --cancel` on the same PR, or run `GH_TOKEN=$(gh auth token) REPO=civitaspo/csm-ci-actions bun e2e/cancel.ts <pr-number>`. Both select the sole active run from its start comment. If more than one run is active, use `/e2e --cancel <run-id>` to select one. The request is not a completed cancellation; check the final PR comment and run logs. For a local run, press Ctrl+C once. The harness stops starting scenarios and waits for active scenarios and cleanup. GitHub's Cancel workflow or a forced process termination can interrupt cleanup.
+
 Scenarios restore temporary configuration and administrative state in cleanup paths and verify restoration where applicable. A failed API call or killed process can leave state behind. If a run is interrupted, first ensure it and its dispatched workflows have stopped. Inspect restoration diagnostics, verify ownership of leftover test objects, close owned `e2e-*` PRs, and remove the stale `e2e-lock` label before restarting. Do not delete a ruleset by name alone or reset an unverified managed branch. Changed-content resets of existing managed branches are excluded from the live verification procedure. Keep that limitation explicit when reporting results.
 
 ## License

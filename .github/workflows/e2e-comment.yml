@@ -1,9 +1,9 @@
 name: e2e-comment
 
-# `/e2e <features>` on a pull request runs the live e2e of its head commit. issue_comment workflows
+# `/e2e --feature <features>` runs live e2e; `/e2e --cancel [<run-id>]` requests a safe stop. issue_comment workflows
 # run from the default branch, so the privileged e2e job, its harness and its environment come from
-# main. The pull request's code is never checked out here; it only reaches the testing repositories
-# through the harness's e2e branch. The command logic is in e2e/e2e-comment.ts, run from main.
+# main. The authorize job runs command logic from main; the e2e job may check out the pull request's
+# harness after authorization. Candidate action code reaches the testing repositories via the e2e branch.
 # Commands must not cancel each other, and e2e.yml serializes the runs.
 # jactionlint ignore=concurrency-limits
 on:
@@ -20,8 +20,9 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
+      actions: read
       issues: write
-      pull-requests: write
+      pull-requests: read
     outputs:
       ok: ${{ steps.check.outputs.ok }}
       ref: ${{ steps.check.outputs.ref }}
@@ -29,6 +30,7 @@ jobs:
       scenario: ${{ steps.check.outputs.scenario }}
       harness-ref: ${{ steps.check.outputs.harness-ref }}
       harness: ${{ steps.check.outputs.harness }}
+      cancel: ${{ steps.check.outputs.cancel }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -46,13 +48,16 @@ jobs:
           COMMENTER_ID: ${{ github.event.comment.user.id }}
           BODY: ${{ github.event.comment.body }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SERVER_URL: ${{ github.server_url }}
         run: bun e2e/e2e-comment.ts authorize
 
   # A reusable workflow cannot read the csm-ci-e2e environment's secrets, so this job mirrors e2e.yml.
   # It checks out the PR head only when authorize chose the PR's harness.
   e2e:
     needs: authorize
-    if: ${{ needs.authorize.outputs.ok == 'true' }}
+    if: ${{ needs.authorize.outputs.ok == 'true' && needs.authorize.outputs.cancel != 'true' }}
+    outputs:
+      cancelled: ${{ steps.scenarios.outputs.cancelled }}
     runs-on: ubuntu-26.04
     timeout-minutes: 120
     environment: csm-ci-e2e
@@ -85,7 +90,8 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.untrusted-committer.outputs.token }}
         run: test "$(gh api /installation/repositories --jq '[.repositories[].name] | sort | join(",")')" = "testing-csm-ci-client"
-      - name: Run scenarios
+      - id: scenarios
+        name: Run scenarios
         env:
           GH_TOKEN: ${{ secrets.CSM_CI_OWNER_TOKEN }}
           CSM_CI_ACTIONS_TOKEN: ${{ github.token }}
@@ -93,6 +99,7 @@ jobs:
           REF: ${{ needs.authorize.outputs.ref }}
           FEATURE: ${{ needs.authorize.outputs.feature }}
           SCENARIO: ${{ needs.authorize.outputs.scenario }}
+          E2E_PR_NUMBER: ${{ github.event.issue.number }}
         run: |
           args=(--ref "$REF" --feature "$FEATURE")
           if [ -n "$SCENARIO" ]; then args+=(--scenario "$SCENARIO"); fi
@@ -100,7 +107,7 @@ jobs:
 
   report:
     needs: [authorize, e2e]
-    if: ${{ always() && needs.authorize.outputs.ok == 'true' }}
+    if: ${{ always() && needs.authorize.outputs.ok == 'true' && needs.authorize.outputs.cancel != 'true' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
@@ -119,7 +126,7 @@ jobs:
           REPO: ${{ github.repository }}
           PR: ${{ github.event.issue.number }}
           COMMENT_ID: ${{ github.event.comment.id }}
-          RESULT: ${{ needs.e2e.result }}
+          RESULT: ${{ needs.e2e.outputs.cancelled == 'true' && 'cancelled' || needs.e2e.result }}
           REF: ${{ needs.authorize.outputs.ref }}
           FEATURE: ${{ needs.authorize.outputs.feature }}
           SCENARIO: ${{ needs.authorize.outputs.scenario }}
