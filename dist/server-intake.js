@@ -36732,7 +36732,7 @@ var RepositoryEntry = strictObject({
     }).optional()
   }).optional(),
   sensitive_paths: strictObject({ paths: array(string2().min(1)).optional(), exempt: array(Principal).optional() }).optional(),
-  merge: strictObject({ allow_bot_requests: boolean2().optional(), use_platform_automerge: boolean2().optional() }).optional()
+  merge: strictObject({ allow_bot_requests: boolean2().optional() }).optional()
 }).superRefine((entry, ctx) => {
   if (entry.ops.includes("release") !== (entry.release !== undefined)) {
     ctx.addIssue({ code: "custom", path: ["release"], message: "release settings must be present exactly when release is enabled" });
@@ -36882,6 +36882,9 @@ function validateIntake(event, env, config) {
   return request;
 }
 var PUBLISHING_KINDS = new Set(["approve", "policy-check"]);
+function automergeConcurrencyKey(repository, pullNumber) {
+  return `automerge-${repository.toLowerCase()}#${pullNumber}`;
+}
 function concurrencyKey(request) {
   const n = "pull_number" in request.args ? request.args.pull_number : request.args.run_id;
   const group = PUBLISHING_KINDS.has(request.kind) ? "pull-request" : request.kind;
@@ -37071,6 +37074,8 @@ async function main() {
   setOutput("name", repo);
   setOutput("args", JSON.stringify(request.args));
   setOutput("concurrency-key", concurrencyKey(request));
+  if ("pull_number" in request.args)
+    setOutput("automerge-concurrency-key", automergeConcurrencyKey(request.repository, request.args.pull_number));
   setOutput("release", release ? JSON.stringify(release) : "");
   setOutput("server-bot-id", String(serverBotId));
   info(`accepted ${request.kind} for ${request.repository} ${JSON.stringify(request.args)}`);
