@@ -25,7 +25,7 @@ The server evaluates reservations after `/merge`, `/approve`, and policy-check o
 For each reservation selected for evaluation, csm-ci applies these rules in order:
 
 1. Complete any missing result comment for a terminal reservation. A closed pull request and a pull request merged outside csm-ci do not receive a result comment.
-2. Mark an expired reservation `inactive` before reading the client repository. If the repository is no longer installed, mark the reservation `inactive` without a client comment or label update.
+2. Mark an expired reservation `inactive` before reading the client repository. When the client repository cannot be reached, the server cannot post a comment or update its label.
 3. Mark an already merged pull request `success`, or a closed pull request `inactive`. Mark a reservation `inactive` if the repository or pull request identity no longer matches.
 4. Mark the reservation `inactive` if its merger is no longer trusted, merge is disabled, Bot requests are no longer allowed for a Bot reservation, or the base branch changed.
 5. Reject a Bot reservation with `failure` if a commit is not authored by that Bot.
@@ -53,7 +53,7 @@ The scheduled workflow lists reservations from the previous 14 days and caps one
 
 ## Required permissions and caller
 
-The Server App needs Deployments read and write access on the server repository to list and create reservations and statuses. The scheduled listing token uses Deployments write to end reservations for repositories absent from the installation. It needs its existing client-repository permissions to read pull requests, reviews, checks, and policies, post comments and labels, and merge. Read, notification, and final write tokens remain separate. The final token receives `contents`, `pull-requests`, and `workflows` write access only after readiness succeeds.
+The Server App needs Deployments read and write access on the server repository to list and create reservations and statuses. The scheduled listing token uses Deployments write to expire reservations whose repositories are unavailable to its discovery token. Discovery covers the server owner's installation; an absent repository ID does not prove that a repository in another installation is unavailable. The Server App needs its existing client-repository permissions to read pull requests, reviews, checks, and policies, post comments and labels, and merge. Read, notification, and final write tokens remain separate. The final token receives `contents`, `pull-requests`, and `workflows` write access only after readiness succeeds.
 
 The server repository calls `server-automerge.yml` from a scheduled caller. Map `CSM_CI_SERVER_APP_PRIVATE_KEY` by name because that secret is stored in the `csm-ci` environment. The reusable workflow declares that environment. `secrets: inherit` does not pass an environment-only secret.
 
