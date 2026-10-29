@@ -13,7 +13,8 @@ const SERVER_CONFIG = "csm-ci.yaml";
 
 type MergeRequest = { match: { kind: string; repository: string; args: Record<string, number> }; since: Date };
 
-async function request(ctx: Parameters<Scenario["run"]>[0], pr: Pr, commentId: number, kind: "merge" | "merge-cancel" = "merge"): Promise<MergeRequest> {
+async function request(ctx: Parameters<Scenario["run"]>[0], pr: Pr, commentId: number): Promise<MergeRequest> {
+  const kind = "merge";
   const since = new Date(Date.now() - 2_000);
   const run = await dispatch(ctx, CLIENT, "csm-ci-smoke.yml", { kind, args: `${pr.number}/${commentId}` });
   assert(run.conclusion === "success", `client merge request concluded ${run.conclusion} (${run.html_url})`);
@@ -277,7 +278,7 @@ export const merge: Scenario[] = [
     await waitForCsmMerge(ctx, pr, head);
     await assertReservation(ctx, pr, "SUCCESS");
   })),
-  automergeScenario("head-change-needs-approval", "A reservation waits when its new head has not been approved", async (ctx) => withSignedPr(ctx, async (pr) => {
+  { ...automergeScenario("head-change-needs-approval", "A reservation waits when its new head has not been approved", async (ctx) => withSignedPr(ctx, async (pr) => {
     const { data: pull } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
     await ctx.gh.graphql("mutation($pull:ID!){convertPullRequestToDraft(input:{pullRequestId:$pull}){pullRequest{isDraft}}}", { pull: pull.node_id });
     await reserve(ctx, pr);
@@ -286,7 +287,7 @@ export const merge: Scenario[] = [
       const { data } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
       return data.head.sha === head ? true : undefined;
     });
-    await ctx.gh.graphql("mutation($pull:ID!){convertPullRequestToReadyForReview(input:{pullRequestId:$pull}){pullRequest{isDraft}}}", { pull: pull.node_id });
+    await ctx.gh.graphql("mutation($pull:ID!){markPullRequestReadyForReview(input:{pullRequestId:$pull}){pullRequest{isDraft}}}", { pull: pull.node_id });
     const sweep = await dispatch(ctx, SERVER, "csm-ci-automerge.yml");
     assert(sweep.conclusion === "success", `automerge sweep concluded ${sweep.conclusion} (${sweep.html_url})`);
     await until(`queued reservation for changed head #${pr.number}`, async () => {
@@ -294,13 +295,13 @@ export const merge: Scenario[] = [
       return record.statuses.nodes.some((status) => status.state === "QUEUED" && /approval/u.test(status.description ?? "")) ? record : undefined;
     });
     await noMerge(ctx, pr);
-  }), "negative"),
+  }), "negative"), serial: true },
   automergeScenario("cancel", "The merger can cancel an active reservation", async (ctx) => withSignedPr(ctx, async (pr) => {
     const { data: pull } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
     await ctx.gh.graphql("mutation($pull:ID!){convertPullRequestToDraft(input:{pullRequestId:$pull}){pullRequest{isDraft}}}", { pull: pull.node_id });
     const { record } = await reserve(ctx, pr);
     const comment = await postComment(ctx, pr, "/merge cancel");
-    await expectOp(ctx, { kind: "merge-cancel", repository: CLIENT, args: { pull_number: pr.number, comment_id: comment.id } }, comment.since, "success");
+    await expectOp(ctx, { kind: "merge", repository: CLIENT, args: { pull_number: pr.number, comment_id: comment.id } }, comment.since, "success");
     await assertReservation(ctx, pr, "INACTIVE");
     await assertAutomergeLabel(ctx, pr, false);
     const bodies = await serverComments(ctx, pr);
@@ -313,11 +314,11 @@ export const merge: Scenario[] = [
     await ctx.gh.graphql("mutation($pull:ID!){convertPullRequestToDraft(input:{pullRequestId:$pull}){pullRequest{isDraft}}}", { pull: pull.node_id });
     await reserve(ctx, pr);
     const comment = await postComment(ctx, pr, "/merge cancel", ctx.untrusted);
-    const info = await request(ctx, pr, comment.id, "merge-cancel");
+    const info = await request(ctx, pr, comment.id);
     await expectOp(ctx, info.match, info.since, "failure", /only the reserving User or a trusted merger/u);
     await assertReservation(ctx, pr, "QUEUED");
   }), "negative", true),
-  automergeScenario("closed", "Closing a pull request ends its reservation without a comment", async (ctx) => withSignedPr(ctx, async (pr) => {
+  { ...automergeScenario("closed", "Closing a pull request ends its reservation without a comment", async (ctx) => withSignedPr(ctx, async (pr) => {
     const { data: pull } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
     await ctx.gh.graphql("mutation($pull:ID!){convertPullRequestToDraft(input:{pullRequestId:$pull}){pullRequest{isDraft}}}", { pull: pull.node_id });
     await reserve(ctx, pr);
@@ -327,7 +328,7 @@ export const merge: Scenario[] = [
     await assertReservation(ctx, pr, "INACTIVE");
     await assertAutomergeLabel(ctx, pr, false);
     assert(!(await serverComments(ctx, pr)).some((body) => body.includes("pull request closed")), "closing the PR unexpectedly posted an automerge comment");
-  }), "negative"),
+  }), "negative"), serial: true },
   automergeScenario("command-edit-ignored", "Editing the original command does not revoke an accepted reservation", async (ctx) => withSignedPr(ctx, async (pr) => {
     await dismissApproval(ctx, pr);
     const { comment } = await reserve(ctx, pr);
@@ -350,7 +351,7 @@ export const merge: Scenario[] = [
     const { data: pull } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
     await ctx.gh.graphql("mutation($pull:ID!){convertPullRequestToDraft(input:{pullRequestId:$pull}){pullRequest{isDraft}}}", { pull: pull.node_id });
     await reserve(ctx, pr);
-    await ctx.gh.graphql("mutation($pull:ID!){convertPullRequestToReadyForReview(input:{pullRequestId:$pull}){pullRequest{isDraft}}}", { pull: pull.node_id });
+    await ctx.gh.graphql("mutation($pull:ID!){markPullRequestReadyForReview(input:{pullRequestId:$pull}){pullRequest{isDraft}}}", { pull: pull.node_id });
     const sweep = await dispatch(ctx, SERVER, "csm-ci-automerge.yml");
     assert(sweep.conclusion === "success", `automerge sweep concluded ${sweep.conclusion} (${sweep.html_url})`);
     await waitForCsmMerge(ctx, pr, pr.head);
