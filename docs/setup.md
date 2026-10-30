@@ -11,13 +11,15 @@ Create the server repository, for example `csm-ci-server`. The client repositori
 Follow the [`csm-ci-setup` skill](../.agents/skills/csm-ci-setup/SKILL.md). It lists the Apps, their permissions and installation targets, and the credentials to store. These steps happen:
 
 1. Create the environment `csm-ci` in the server repository. Only `main` can deploy to it.
-2. Register `csm-ci-server` and install it on the server and every client repository. Grant Deployments read and write on the server repository for automerge reservations.
+2. Register `csm-ci-server` and install it on the server and every client repository. Grant Contents write and Deployments read/write on the server repository for automerge display commits and reservations. Grant Deployments write on each client repository only if enabling the optional display projection. The projection's scoped token must not be available to client code. Verify installed permission metadata before rollout; only the operator changes App permissions.
 3. Register `csm-ci-client` and install it on the server repository only.
 4. Register `csm-ci-approver` and install it on every client repository.
 5. Store the client IDs as variables and the private keys as secrets:
    - In the server repository, environment `csm-ci`: `CSM_CI_SERVER_APP_CLIENT_ID`, `CSM_CI_SERVER_APP_PRIVATE_KEY`, `CSM_CI_APPROVER_APP_CLIENT_ID` and `CSM_CI_APPROVER_APP_PRIVATE_KEY`.
    - In each client repository: `CSM_CI_CLIENT_APP_CLIENT_ID`, `CSM_CI_CLIENT_APP_PRIVATE_KEY` and `CSM_CI_SERVER_REPOSITORY`.
 6. Look up the bot user IDs for `csm-ci.yaml`.
+
+Create the `csm-ci-automerge` environment in the server repository without secrets or protection rules. Create `csm-ci-automerge-display` in each client repository where the optional projection is enabled, also without secrets or protection rules. The repo-settings operation manages the `automerge-display` ruleset for the exact server ref `refs/heads/csm-ci/automerge`; verify the branch does not already belong to an unrelated workflow before enabling it. The Server App is its sole bypass actor because it writes directly. Do not reset an existing branch. If the display commit cannot be created, automerge reservation acceptance falls back to the server default branch.
 
 Delete the downloaded `.pem` files afterwards.
 

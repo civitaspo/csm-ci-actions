@@ -1,6 +1,6 @@
 # Repository settings
 
-The server reconciles repository settings, four fixed rulesets, immutable releases, and managed-file pull requests. Configuration is global. Repository entries select targets and supply their operation and release settings. The standard caller generator also uses preparation settings.
+The server reconciles repository settings, five fixed rulesets, immutable releases, and managed-file pull requests. Configuration is global. Repository entries select targets and supply their operation and release settings. The standard caller generator also uses preparation settings.
 
 ## Configuration
 
@@ -210,6 +210,9 @@ The rulesets have fixed meanings from the [security design](design.md#s6-placeme
 | `review-and-checks` | Default branch | One approval, dismiss stale approvals, required policy and configured checks, squash merges |
 | `controlled-merges` | Default branch | Updates require a pull request through the Server App |
 | `release-tags` | `refs/tags/v*` | Only the Server App can create, update, or delete matching tags |
+| `automerge-display` | `refs/heads/csm-ci/automerge` | Forbids creation, update, and deletion; the Server App is the sole `always` bypass actor |
+
+The four existing rulesets retain their current scope and continue to be reconciled on selected client repositories and the server repository. `automerge-display` is additional and applies only to the server repository; never create or reconcile it on a client repository.
 
 The server matches rulesets by name and `source_type: Repository`. Duplicate names fail the run. It replaces the complete managed ruleset, leaving unrelated rulesets alone. Immutable releases are enabled and never disabled.
 
@@ -222,7 +225,7 @@ A scheduled run does not create `controlled-merges` or activate a disabled rules
 
 The checks run only when a dispatch would activate the ruleset. A dispatch for a repository whose `controlled-merges` is already active repairs drift without them. A failed preflight fails the run before administrative changes. App permission proof uses the official token action. The collaborator-permission endpoint does not reliably describe whether an App's approval counts.
 
-A reconcile takes over any existing ruleset that has one of these four names. Before enrolling a repository that already has protection, rename such rulesets (for example to `legacy-<name>`) and remove them once the csm-ci rulesets are active and a protected merge has passed.
+A reconcile takes over any existing ruleset that has one of the four existing names on a selected target, or `automerge-display` on the server repository. Before enrolling a repository that already has protection, rename such rulesets (for example to `legacy-<name>`) and remove them once the csm-ci rulesets are active and a protected merge has passed. `automerge-display` must match only `refs/heads/csm-ci/automerge` and forbid creation, update, and deletion for everyone except its sole Server App `always` bypass actor, because that App writes signed display commits directly. It must not match the default branch or any other branch. The runtime must identify managed rulesets by name and `source_type: Repository`, reject duplicate names, and preserve unrelated rulesets under the existing reconciliation rules. Do not bootstrap over an existing branch with an unrelated owner or history.
 
 To change one field of a ruleset, send the full body, because only omitting `enforcement` is verified to keep the current value:
 
@@ -249,7 +252,7 @@ The reusable workflow accepts `targets`, a comma-separated list that names what 
 | Target | Changes | Tokens |
 |---|---|---|
 | `settings` | Repository settings, repository features, and the Sponsor button setting | Administration |
-| `rulesets` | `integrity`, `review-and-checks`, `controlled-merges`, and `release-tags`, including the `controlled-merges` activation preflight | Administration; approver only when a dispatch activates `controlled-merges` |
+| `rulesets` | `integrity`, `review-and-checks`, `controlled-merges`, `release-tags`, and `automerge-display`, including the `controlled-merges` activation preflight | Administration; approver only when a dispatch activates `controlled-merges` |
 | `releases` | Immutable releases | Administration |
 | `managed-files` | The managed-file pull request: additional files, generated standard callers, and generated funding content | Contents and pull requests; workflows only when a managed path is a workflow or an existing branch is rebuilt |
 | `all` | Every target above | As above |
