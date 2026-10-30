@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { ReservationRecord } from "../lib/automerge-github.ts";
-import { activeReservationForPullByRepositoryId, activeSweepReservations, evaluationReservation, installedRepositoryId, partitionSweepRepositories, resolveRepositoryName, sweepBatch } from "./sweep.ts";
+import { activeReservationForPullByRepositoryId, activeSweepReservations, evaluationReservation, installedRepositoryId, partitionSweepRepositories, resolveRepositoryName, sweepBatch, terminalRepairReservations } from "./sweep.ts";
 
 function reservation(deploymentId: number, pullNumber: number, state: ReservationRecord["state"]): ReservationRecord {
   return {
@@ -47,6 +47,16 @@ test("sweep batch caps active reservations at 256 after terminal records are fil
   const batch = sweepBatch(activeSweepReservations(records));
   expect(batch).toHaveLength(256);
   expect(batch.every(({ state }) => state.kind === "active")).toBe(true);
+});
+
+test("terminal repair selects at most 64 reservations terminated within three days", () => {
+  const recent = Array.from({ length: 70 }, (_, index) => reservation(index + 10, index + 10, { kind: "terminal", state: "success", at: "2026-10-29T00:00:00.000Z", description: "merged", reason: "merged" }));
+  const old = reservation(1, 1, { kind: "terminal", state: "inactive", at: "2026-10-25T00:00:00.000Z", description: "expired", reason: "expired" });
+  const active = reservation(2, 2, { kind: "active" });
+  const selected = terminalRepairReservations([old, active, ...recent], new Date("2026-10-30T00:00:00.000Z"));
+  expect(selected).toHaveLength(64);
+  expect(selected[0]?.deploymentId).toBe(10);
+  expect(selected.at(-1)?.deploymentId).toBe(73);
 });
 
 test("unresolved repositories are skipped until expiration, then isolated for server-side expiry", () => {

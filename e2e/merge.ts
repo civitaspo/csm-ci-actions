@@ -82,6 +82,22 @@ async function assertReservation(ctx: Parameters<Scenario["run"]>[0], pr: Pr, ex
   return record;
 }
 
+async function assertClientDisplay(ctx: Parameters<Scenario["run"]>[0], pr: Pr, record: AutomergeRecord, expected: "queued" | "success" | "inactive"): Promise<void> {
+  await until(`client display ${expected} for reservation ${record.databaseId}`, async () => {
+    const { data: pull } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
+    const deployments = await ctx.gh.paginate(ctx.gh.rest.repos.listDeployments, { ...splitRepository(CLIENT), environment: "csm-ci-automerge-display", sha: pull.head.sha, per_page: 100 });
+    for (const deployment of deployments) {
+      let payload: unknown;
+      try { payload = parseAutomergePayload(deployment.payload); } catch { continue; }
+      if (deployment.creator?.id !== SERVER_BOT_ID || deployment.creator.type !== "Bot" || deployment.task !== "csm-ci:automerge-display" || typeof payload !== "object" || payload === null || !("reservation_deployment_id" in payload) || payload.reservation_deployment_id !== record.databaseId || !("server_repository" in payload) || payload.server_repository !== SERVER) continue;
+      const statuses = await ctx.gh.paginate(ctx.gh.rest.repos.listDeploymentStatuses, { ...splitRepository(CLIENT), deployment_id: Number(deployment.id), per_page: 100 });
+      const latest = statuses.filter((status) => status.creator?.id === SERVER_BOT_ID && status.creator.type === "Bot").sort((a, b) => Number(b.id) - Number(a.id))[0];
+      if (latest?.state === expected && latest.log_url?.includes("/actions/runs/")) return true;
+    }
+    return undefined;
+  });
+}
+
 async function assertAutomergeComment(ctx: Parameters<Scenario["run"]>[0], pr: Pr, record: AutomergeRecord, event: "accepted" | "merged" | "cancelled", text: RegExp): Promise<void> {
   const bodies = await serverComments(ctx, pr);
   assert(bodies.filter((body) => body.includes(automergeMarker(record.databaseId, event))).length === 1, `expected one ${event} comment for deployment ${record.databaseId}`);
@@ -250,6 +266,7 @@ export const merge: Scenario[] = [
       const mergeInfo = fromComment(pr, merge);
       await expectOp(ctx, mergeInfo.match, mergeInfo.since, "success");
       const reservation = await assertReservation(ctx, pr, "QUEUED");
+      await assertClientDisplay(ctx, pr, reservation, "queued");
       assert(reservation.statuses.nodes.some((status) => status.state === "QUEUED" && status.description?.includes("approval")), "reservation has no queued approval reason");
       await assertAutomergeLabel(ctx, pr, true);
       await assertAutomergeComment(ctx, pr, reservation, "accepted", /merge reserved/iu);
@@ -262,6 +279,7 @@ export const merge: Scenario[] = [
       });
       assert(merged.head.sha === pr.head && merged.merged_by?.id === SERVER_BOT_ID, `pull request #${pr.number} was not merged by the Server bot at its approved head`);
       await assertReservation(ctx, pr, "SUCCESS");
+      await assertClientDisplay(ctx, pr, reservation, "success");
       await assertAutomergeLabel(ctx, pr, true);
     }),
   },

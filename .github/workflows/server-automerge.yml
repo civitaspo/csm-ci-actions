@@ -23,6 +23,8 @@ jobs:
     outputs:
       matrix: ${{ steps.reservations.outputs.matrix }}
       count: ${{ steps.reservations.outputs.count }}
+      repair-matrix: ${{ steps.reservations.outputs.repair-matrix }}
+      repair-count: ${{ steps.reservations.outputs.repair-count }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -71,5 +73,26 @@ jobs:
       pull-number: ${{ matrix.reservation.pull_number }}
       deployment-id: ${{ matrix.reservation.deployment_id }}
       config-path: ${{ inputs.config-path }}
+    secrets:
+      CSM_CI_SERVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+
+  repair:
+    needs: [list, evaluate]
+    if: always() && needs.list.result == 'success' && needs.list.outputs.repair-count != '0'
+    strategy:
+      max-parallel: 4
+      fail-fast: false
+      matrix:
+        reservation: ${{ fromJSON(needs.list.outputs.repair-matrix) }}
+    uses: ./.github/workflows/server-automerge-evaluate.yml
+    permissions:
+      contents: read
+    with:
+      repository: ${{ matrix.reservation.repository }}
+      repository-owner: ${{ matrix.reservation.repository_owner }}
+      pull-number: ${{ matrix.reservation.pull_number }}
+      deployment-id: ${{ matrix.reservation.deployment_id }}
+      config-path: ${{ inputs.config-path }}
+      repair: true
     secrets:
       CSM_CI_SERVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}

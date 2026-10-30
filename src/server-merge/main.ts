@@ -2,6 +2,7 @@ import * as core from "@actions/core";
 import { type MergeArgs, type MergeContext, acceptMerge } from "../lib/merge.ts";
 import { github, loadCurrentServerConfig } from "../lib/github.ts";
 import { summarizeReservation } from "../lib/automerge-summary.ts";
+import { syncAutomergeDisplay } from "../lib/automerge-display.ts";
 
 function env(name: string): string {
   const value = process.env[name];
@@ -34,7 +35,11 @@ async function main(): Promise<void> {
   if (result.reservation) core.setOutput("reservation-id", String(result.reservation.deploymentId));
   if (result.reservation) {
     const state = result.kind === "accepted" ? `queued: waiting for approval of ${result.reservation.payload.accepted_head.slice(0, 7)}` : result.kind === "cancelled" ? "inactive: cancelled" : result.reservation.state.kind === "active" ? `active: ${result.reservation.state.waitingReason ?? "waiting"}` : `${result.reservation.state.state}: ${result.reservation.state.reason}`;
-    await summarizeReservation({ record: result.reservation, serverRepository, serverUrl: ctx.serverRun.serverUrl, runUrl: `${ctx.serverRun.serverUrl}/${serverRepository}/actions/runs/${ctx.serverRun.id}/attempts/${ctx.serverRun.attempt}`, state, displayFailure: Boolean(result.displayFailure) });
+    const runUrl = `${ctx.serverRun.serverUrl}/${serverRepository}/actions/runs/${ctx.serverRun.id}/attempts/${ctx.serverRun.attempt}`;
+    const displayToken = core.getInput("display-deployments-token");
+    const display = await syncAutomergeDisplay({ server: ctx.deployments, reader: ctx.server, ...(displayToken ? { client: github(displayToken) } : {}), serverRepository, repository: ctx.repository, serverBotId: config.apps.server_bot_id, record: result.reservation, runUrl, now: ctx.now() });
+    if (display.kind === "unavailable") core.warning("Client display synchronization unavailable");
+    await summarizeReservation({ record: result.reservation, serverRepository, serverUrl: ctx.serverRun.serverUrl, runUrl, state, displayFailure: Boolean(result.displayFailure), displaySyncFailure: display.kind === "unavailable", ...(display.kind === "synced" && display.deploymentId ? { displayDeploymentId: display.deploymentId } : {}) });
   }
   core.info(`merge command ${result.kind}`);
 }

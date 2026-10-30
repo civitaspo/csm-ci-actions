@@ -158,7 +158,9 @@ test("automerge resolves immutable repository identity before canonical concurre
     repository: "${{ steps.resolve.outputs.repository }}",
     "concurrency-key": "${{ steps.resolve.outputs.concurrency-key }}",
   });
-  expect(resolve.steps.find((step) => step.with?.mode === "resolve")?.with?.["deployment-id"]).toBe("${{ inputs.deployment-id }}");
+  const resolveStep = resolve.steps.find((step) => step.id === "resolve");
+  expect(resolveStep?.with?.mode).toBe("${{ inputs.repair && 'resolve-repair' || 'resolve' }}");
+  expect(resolveStep?.with?.["deployment-id"]).toBe("${{ inputs.deployment-id }}");
   expect(evaluation.needs).toEqual(["resolve"]);
   expect(evaluation.if).toBe("needs.resolve.outputs.resolved == 'true'");
   expect(evaluation.concurrency.group).toBe("csm-ci-${{ needs.resolve.outputs.concurrency-key }}");

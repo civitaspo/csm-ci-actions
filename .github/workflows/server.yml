@@ -216,6 +216,16 @@ jobs:
           repositories: ${{ needs.intake.outputs.name }}
           permission-issues: write
           permission-pull-requests: write
+      - id: merge-display-deployments-token
+        if: needs.intake.outputs.kind == 'merge'
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ needs.intake.outputs.owner }}
+          repositories: ${{ needs.intake.outputs.name }}
+          permission-deployments: write
       - id: merge-accept
         if: needs.intake.outputs.kind == 'merge'
         uses: ./.csm-ci-actions/actions/server/merge
@@ -226,6 +236,7 @@ jobs:
           notification-token: ${{ steps.merge-notify-token.outputs.token }}
           deployments-token: ${{ steps.automerge-deployments-token.outputs.token }}
           display-commit-token: ${{ steps.automerge-display-token.outputs.token }}
+          display-deployments-token: ${{ steps.merge-display-deployments-token.outputs.token }}
           repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
           args: ${{ needs.intake.outputs.args }}
       - if: needs.intake.outputs.kind == 'policy-check'

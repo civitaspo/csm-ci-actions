@@ -3,9 +3,10 @@ import { createReservationStatus, findReservationsForPull, listReservations } fr
 import { terminalDescription } from "../lib/automerge.ts";
 import { github, loadCurrentServerConfig, splitRepository } from "../lib/github.ts";
 import { summarizeReservation } from "../lib/automerge-summary.ts";
+import { syncAutomergeDisplay } from "../lib/automerge-display.ts";
 import { evaluateReservation, mergeReservation, type MergeContext } from "../lib/merge.ts";
 import { automergeConcurrencyKey } from "../lib/request.ts";
-import { activeReservationForPullByRepositoryId, activeSweepReservations, evaluationReservation, installedRepositoryId, partitionSweepRepositories, resolveRepositoryName, sweepBatch } from "./sweep.ts";
+import { activeReservationForPullByRepositoryId, activeSweepReservations, evaluationReservation, installedRepositoryId, partitionSweepRepositories, resolveRepositoryName, sweepBatch, terminalRepairReservations } from "./sweep.ts";
 
 function env(name: string): string {
   const value = process.env[name];
@@ -49,6 +50,10 @@ async function main(): Promise<void> {
     }));
     core.setOutput("matrix", JSON.stringify(matrix));
     core.setOutput("count", String(matrix.length));
+    const terminal = terminalRepairReservations(reservations, new Date());
+    const repair = terminal.map((record) => ({ repository: repositories.get(record.payload.repository_id) ?? record.payload.repository, repository_owner: splitRepository(repositories.get(record.payload.repository_id) ?? record.payload.repository).owner, pull_number: record.payload.pull_number, deployment_id: record.deploymentId }));
+    core.setOutput("repair-matrix", JSON.stringify(repair));
+    core.setOutput("repair-count", String(repair.length));
     return;
   }
   const repository = core.getInput("repository", { required: true }).toLowerCase();
@@ -56,7 +61,7 @@ async function main(): Promise<void> {
   if (!Number.isSafeInteger(pullNumber) || pullNumber < 1) throw new Error("pull-number must be a positive integer");
   const id = core.getInput("deployment-id");
   const serverRun = { serverUrl: env("GITHUB_SERVER_URL"), repository: serverRepository, id: env("GITHUB_RUN_ID"), attempt: env("GITHUB_RUN_ATTEMPT") };
-  if (mode === "resolve") {
+  if (mode === "resolve" || mode === "resolve-repair") {
     if (!id) {
       const repository = core.getInput("repository", { required: true }).toLowerCase();
       const parts = splitRepository(repository);
@@ -68,7 +73,7 @@ async function main(): Promise<void> {
       return;
     }
     const records = await listReservations(listArgs);
-    const record = id ? records.find((item) => String(item.deploymentId) === id && item.payload.pull_number === pullNumber && item.state.kind === "active") : undefined;
+    const record = id ? records.find((item) => String(item.deploymentId) === id && item.payload.pull_number === pullNumber && (mode === "resolve-repair" ? item.state.kind === "terminal" : item.state.kind === "active")) : undefined;
     if (!record) {
       core.setOutput("resolved", "false");
       return;
@@ -77,6 +82,10 @@ async function main(): Promise<void> {
     const installed = await discovery.paginate("GET /installation/repositories", { per_page: 100 });
     const repository = resolveRepositoryName({ deploymentId: id, repository: core.getInput("repository"), repositoryId: record.payload.repository_id, repositories: installed });
     if (!repository) {
+      if (mode === "resolve-repair") {
+        core.warning("Client display repair could not resolve the repository");
+        await summarizeReservation({ record, serverRepository, serverUrl: serverRun.serverUrl, runUrl: `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, state: record.state.kind === "terminal" ? `${record.state.state}: ${record.state.reason}` : "active", displaySyncFailure: true });
+      }
       core.setOutput("resolved", "false");
       return;
     }
@@ -99,7 +108,16 @@ async function main(): Promise<void> {
     }
     if (record && record.state.kind === "active") {
       await createReservationStatus({ server: deployments, serverRepository, serverBotId: config.apps.server_bot_id, deploymentId: record.deploymentId, serverRunUrl: `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, pullUrl: `${serverRun.serverUrl}/${repository}/pull/${pullNumber}`, state: "error", description: core.getInput("failure-message") || "evaluation failed" });
-      await summarizeReservation({ record, serverRepository, serverUrl: serverRun.serverUrl, runUrl: `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, state: "error: evaluation failed" });
+      const runUrl = `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`;
+      const readToken = core.getInput("server-token");
+      const displayToken = core.getInput("display-deployments-token");
+      const display = readToken ? await syncAutomergeDisplay({ server: deployments, reader: github(readToken), ...(displayToken ? { client: github(displayToken) } : {}), serverRepository, repository, serverBotId: config.apps.server_bot_id, record, runUrl, now: new Date() }) : { kind: "unavailable" as const };
+      if (display.kind === "unavailable") core.warning("Client display synchronization unavailable");
+      await summarizeReservation({ record, repository, serverRepository, serverUrl: serverRun.serverUrl, runUrl, state: "error: evaluation failed", displaySyncFailure: display.kind === "unavailable", ...(display.kind === "synced" && display.deploymentId ? { displayDeploymentId: display.deploymentId } : {}) });
+    }
+    if (record && record.state.kind === "terminal") {
+      core.warning("Client display repair failed");
+      await summarizeReservation({ record, repository, serverRepository, serverUrl: serverRun.serverUrl, runUrl: `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, state: `${record.state.state}: ${record.state.reason}`, displaySyncFailure: true });
     }
     return;
   }
@@ -119,17 +137,28 @@ async function main(): Promise<void> {
     reloadConfig: () => loadCurrentServerConfig(configReader, serverRepository, configPath),
     now: () => new Date(),
   };
+  const summarize = async (state: string): Promise<void> => {
+    const runUrl = `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`;
+    const token = core.getInput("display-deployments-token");
+    const display = await syncAutomergeDisplay({ server: deployments, reader: server, ...(token ? { client: github(token) } : {}), serverRepository, repository, serverBotId: config.apps.server_bot_id, record, runUrl, now: new Date() });
+    if (display.kind === "unavailable") core.warning("Client display synchronization unavailable");
+    await summarizeReservation({ record, repository, serverRepository, serverUrl: serverRun.serverUrl, runUrl, state, displaySyncFailure: display.kind === "unavailable", ...(display.kind === "synced" && display.deploymentId ? { displayDeploymentId: display.deploymentId } : {}) });
+  };
+  if (mode === "repair") {
+    await summarize(record.state.kind === "terminal" ? `${record.state.state}: ${record.state.reason}` : "active");
+    return;
+  }
   if (mode === "evaluate") {
     const evaluation = await evaluateReservation(ctx, record);
     const decision = evaluation.decision;
-    await summarizeReservation({ record, serverRepository, serverUrl: serverRun.serverUrl, runUrl: `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, state: decision.kind === "terminal" ? `${decision.state}: ${decision.reason}` : decision.kind === "wait" ? `queued: ${decision.reason}` : "ready" });
+    await summarize(decision.kind === "terminal" ? `${decision.state}: ${decision.reason}` : decision.kind === "wait" ? `queued: ${decision.reason}` : "ready");
     core.setOutput("ready", String(evaluation.ready));
     core.setOutput("head", evaluation.head);
     return;
   }
   if (mode === "merge") {
     const outcome = await mergeReservation(ctx, record, core.getInput("head", { required: true }));
-    await summarizeReservation({ record, serverRepository, serverUrl: serverRun.serverUrl, runUrl: `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, state: `${outcome.result}: ${outcome.mergeCommit}` });
+    await summarize(`${outcome.result}: ${outcome.mergeCommit}`);
     return;
   }
   throw new Error(`unknown automerge action mode: ${mode}`);

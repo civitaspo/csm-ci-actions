@@ -26,6 +26,10 @@ on:
         description: Path of csm-ci.yaml in the server repository.
         type: string
         default: csm-ci.yaml
+      repair:
+        description: Reconcile a terminal display without evaluating a merge.
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -68,7 +72,7 @@ jobs:
       - id: resolve
         uses: ./.csm-ci-actions/actions/server/automerge
         with:
-          mode: resolve
+          mode: ${{ inputs.repair && 'resolve-repair' || 'resolve' }}
           config-path: ${{ inputs.config-path }}
           deployments-token: ${{ steps.deployments-token.outputs.token }}
           discovery-token: ${{ steps.discovery-token.outputs.token }}
@@ -141,14 +145,24 @@ jobs:
           repositories: ${{ needs.resolve.outputs.repository-name }}
           permission-issues: write
           permission-pull-requests: write
+      - id: display-deployments-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ needs.resolve.outputs.repository-owner }}
+          repositories: ${{ needs.resolve.outputs.repository-name }}
+          permission-deployments: write
       - id: readiness
         uses: ./.csm-ci-actions/actions/server/automerge
         with:
-          mode: evaluate
+          mode: ${{ inputs.repair && 'repair' || 'evaluate' }}
           config-path: ${{ inputs.config-path }}
           deployments-token: ${{ steps.deployments-token.outputs.token }}
           server-token: ${{ steps.read-token.outputs.token }}
           notification-token: ${{ steps.notification-token.outputs.token }}
+          display-deployments-token: ${{ steps.display-deployments-token.outputs.token }}
           repository: ${{ needs.resolve.outputs.repository }}
           pull-number: ${{ inputs.pull-number }}
           deployment-id: ${{ inputs.deployment-id }}
@@ -173,6 +187,7 @@ jobs:
           server-token: ${{ steps.read-token.outputs.token }}
           notification-token: ${{ steps.notification-token.outputs.token }}
           write-token: ${{ steps.write-token.outputs.token }}
+          display-deployments-token: ${{ steps.display-deployments-token.outputs.token }}
           repository: ${{ needs.resolve.outputs.repository }}
           pull-number: ${{ inputs.pull-number }}
           deployment-id: ${{ steps.readiness.outputs.deployment-id || inputs.deployment-id }}
@@ -184,6 +199,7 @@ jobs:
           mode: error-status
           config-path: ${{ inputs.config-path }}
           server-token: ${{ steps.read-token.outputs.token }}
+          display-deployments-token: ${{ steps.display-deployments-token.outputs.token }}
           deployments-token: ${{ steps.deployments-token.outputs.token }}
           discovery-token: ${{ steps.discovery-token.outputs.token }}
           deployment-id: ${{ steps.readiness.outputs.deployment-id || inputs.deployment-id }}

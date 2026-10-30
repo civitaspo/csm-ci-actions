@@ -10,6 +10,11 @@ export function activeSweepReservations(reservations: readonly ReservationRecord
   return [...latestByPull.values()].reverse();
 }
 
+export function terminalRepairReservations(reservations: readonly ReservationRecord[], now: Date): ReservationRecord[] {
+  const cutoff = now.getTime() - 3 * 24 * 60 * 60_000;
+  return reservations.filter((record) => record.state.kind === "terminal" && Date.parse(record.state.at) >= cutoff).slice(0, 64);
+}
+
 export function installedRepositoryId(repositories: readonly { id: number | bigint; full_name: string }[], name: string): number | undefined {
   const id = repositories.find((repository) => repository.full_name.toLowerCase() === name.toLowerCase())?.id;
   return id === undefined ? undefined : Number(id);

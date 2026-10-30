@@ -37765,11 +37765,11 @@ function pullUrl(serverUrl, repository, number) {
 // src/lib/automerge-summary.ts
 function reservationSummary(args, observedAt) {
   const { record } = args;
-  const repository = record.payload.repository;
+  const repository = args.repository ?? record.payload.repository;
   const pullUrl = `${args.serverUrl}/${repository}/pull/${record.payload.pull_number}`;
   const apiUrl = `https://api.github.com/repos/${args.serverRepository}/deployments/${record.deploymentId}`;
   return `<h3>Automerge reservation ${record.deploymentId}</h3>
-<ul><li>Client PR: <a href="${escapeHtml(pullUrl)}">${escapeHtml(repository)}#${record.payload.pull_number}</a></li><li>Server: ${escapeHtml(args.serverRepository)}; <a href="${escapeHtml(apiUrl)}">Deployment ${record.deploymentId} (API JSON)</a></li><li>Observed: ${escapeHtml(args.state)} at ${observedAt.toISOString()}</li><li><a href="${escapeHtml(args.runUrl)}">Server Actions run</a></li>${args.displayFailure ? "<li>Display commit unavailable; reservation uses the default branch.</li>" : ""}</ul>
+<ul><li>Client PR: <a href="${escapeHtml(pullUrl)}">${escapeHtml(repository)}#${record.payload.pull_number}</a></li><li>Server: ${escapeHtml(args.serverRepository)}; <a href="${escapeHtml(apiUrl)}">Deployment ${record.deploymentId} (API JSON)</a></li><li>Observed: ${escapeHtml(args.state)} at ${observedAt.toISOString()}</li><li><a href="${escapeHtml(args.runUrl)}">Server Actions run</a></li>${args.displayDeploymentId ? `<li>Client display Deployment ${args.displayDeploymentId}; <a href="${escapeHtml(`${args.serverUrl}/${repository}/deployments/${"csm-ci-automerge-display"}`)}">environment list</a></li>` : ""}${args.displayFailure ? "<li>Display commit unavailable; reservation uses the default branch.</li>" : ""}${args.displaySyncFailure ? "<li>Client display synchronization unavailable.</li>" : ""}</ul>
 `;
 }
 async function summarizeReservation(args) {
@@ -37777,6 +37777,101 @@ async function summarizeReservation(args) {
     await summary.addRaw(reservationSummary(args, new Date)).write();
   } catch {
     warning("Unable to write automerge reservation summary");
+  }
+}
+
+// src/lib/automerge-display.ts
+var ENVIRONMENT2 = "csm-ci-automerge-display";
+var TASK2 = "csm-ci:automerge-display";
+var Payload = object({ server_repository: string2(), reservation_deployment_id: number2().int().positive() });
+var Deployment = object({ id: number2().int().positive(), sha: string2().regex(/^[0-9a-f]{40}$/u), task: string2(), environment: string2(), payload: unknown(), creator: object({ id: number2().int().positive(), type: string2() }).nullable() });
+var Status = object({ id: number2().int().positive(), state: string2(), log_url: string2().nullable(), environment_url: string2().nullable(), creator: object({ id: number2().int().positive(), type: string2() }).nullable() });
+function parsePayload2(value) {
+  try {
+    let decoded = value;
+    for (let depth = 0;depth < 2 && typeof decoded === "string"; depth++)
+      decoded = JSON.parse(decoded);
+    const parsed = Payload.safeParse(decoded);
+    return parsed.success ? parsed.data : undefined;
+  } catch {
+    return;
+  }
+}
+function displayState(record, serverBotId) {
+  if (record.state.kind === "terminal")
+    return record.state.state === "success" ? "success" : "inactive";
+  const latest = record.statuses.filter((status) => status.creator.type === "Bot" && status.creator.databaseId === serverBotId).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.id - a.id)[0];
+  return latest?.state === "error" ? "error" : "queued";
+}
+async function current(args) {
+  const { record } = args;
+  const records = await findReservationsForPull({ server: args.server, serverRepository: args.serverRepository, serverBotId: args.serverBotId, repositoryId: record.payload.repository_id, pullNumber: record.payload.pull_number, now: args.now });
+  const latest = records.find((item) => item.deploymentId === record.deploymentId);
+  if (!latest)
+    throw new Error("display reservation no longer exists");
+  const { data: pull } = await args.reader.rest.pulls.get({ ...splitRepository(args.repository), pull_number: record.payload.pull_number });
+  if (Number(pull.base.repo?.id) !== record.payload.repository_id || pull.node_id !== record.payload.pull_node_id)
+    throw new Error("display pull request identity changed");
+  return { record: latest, head: string2().regex(/^[0-9a-f]{40}$/u).parse(pull.head.sha) };
+}
+async function candidates(args) {
+  const raw = await args.client.paginate(args.client.rest.repos.listDeployments, { ...splitRepository(args.repository), environment: ENVIRONMENT2, per_page: 100 });
+  return raw.flatMap((value) => {
+    const parsed = Deployment.safeParse(value);
+    if (!parsed.success)
+      return [];
+    const deployment = parsed.data;
+    const payload = parsePayload2(deployment.payload);
+    return deployment.environment === ENVIRONMENT2 && deployment.task === TASK2 && deployment.creator?.type === "Bot" && deployment.creator.id === args.serverBotId && payload?.server_repository === args.serverRepository && payload.reservation_deployment_id === args.record.deploymentId ? [deployment] : [];
+  }).sort((a, b) => a.id - b.id);
+}
+async function reconcileAutomergeDisplay(args) {
+  let observed = await current(args);
+  let deployments = await candidates(args);
+  let matching = deployments.filter((deployment) => deployment.sha === observed.head);
+  if (!matching.length) {
+    observed = await current(args);
+    try {
+      await args.client.rest.repos.createDeployment({ ...splitRepository(args.repository), ref: observed.head, task: TASK2, environment: ENVIRONMENT2, auto_merge: false, required_contexts: [], transient_environment: false, production_environment: false, payload: { server_repository: args.serverRepository, reservation_deployment_id: args.record.deploymentId } });
+    } catch (error) {
+      deployments = await candidates(args);
+      if (!deployments.some((deployment) => deployment.sha === observed.head))
+        throw error;
+    }
+    deployments = await candidates(args);
+    matching = deployments.filter((deployment) => deployment.sha === observed.head);
+    if (!matching.length)
+      throw new Error("created client display is not yet observable");
+  }
+  const canonical = matching[0];
+  for (const deployment of deployments) {
+    observed = await current(args);
+    const desired = deployment.id === canonical?.id && deployment.sha === observed.head ? displayState(observed.record, args.serverBotId) : "inactive";
+    const statuses = await args.client.paginate(args.client.rest.repos.listDeploymentStatuses, { ...splitRepository(args.repository), deployment_id: deployment.id, per_page: 100 });
+    const trusted = statuses.map((value) => Status.safeParse(value)).flatMap((result) => result.success && result.data.creator?.type === "Bot" && result.data.creator.id === args.serverBotId ? [result.data] : []).sort((a, b) => b.id - a.id);
+    if (trusted[0]?.state === desired && trusted[0].log_url === args.runUrl && trusted[0].environment_url === args.runUrl)
+      continue;
+    observed = await current(args);
+    const finalState = deployment.id === canonical?.id && deployment.sha === observed.head ? displayState(observed.record, args.serverBotId) : "inactive";
+    try {
+      await args.client.rest.repos.createDeploymentStatus({ ...splitRepository(args.repository), deployment_id: deployment.id, state: finalState, log_url: args.runUrl, environment_url: args.runUrl, auto_inactive: false });
+    } catch (error) {
+      const after = await args.client.paginate(args.client.rest.repos.listDeploymentStatuses, { ...splitRepository(args.repository), deployment_id: deployment.id, per_page: 100 });
+      const latest = after.map((value) => Status.safeParse(value)).flatMap((status) => status.success && status.data.creator?.type === "Bot" && status.data.creator.id === args.serverBotId ? [status.data] : []).sort((a, b) => b.id - a.id)[0];
+      if (latest?.state !== finalState || latest.log_url !== args.runUrl || latest.environment_url !== args.runUrl)
+        throw error;
+    }
+  }
+  return canonical?.id;
+}
+async function syncAutomergeDisplay(args) {
+  if (!args.client)
+    return { kind: "unavailable" };
+  try {
+    const deploymentId = await reconcileAutomergeDisplay({ ...args, client: args.client });
+    return deploymentId ? { kind: "synced", deploymentId } : { kind: "synced" };
+  } catch {
+    return { kind: "unavailable" };
   }
 }
 
@@ -37814,7 +37909,12 @@ async function main() {
     setOutput("reservation-id", String(result.reservation.deploymentId));
   if (result.reservation) {
     const state = result.kind === "accepted" ? `queued: waiting for approval of ${result.reservation.payload.accepted_head.slice(0, 7)}` : result.kind === "cancelled" ? "inactive: cancelled" : result.reservation.state.kind === "active" ? `active: ${result.reservation.state.waitingReason ?? "waiting"}` : `${result.reservation.state.state}: ${result.reservation.state.reason}`;
-    await summarizeReservation({ record: result.reservation, serverRepository, serverUrl: ctx.serverRun.serverUrl, runUrl: `${ctx.serverRun.serverUrl}/${serverRepository}/actions/runs/${ctx.serverRun.id}/attempts/${ctx.serverRun.attempt}`, state, displayFailure: Boolean(result.displayFailure) });
+    const runUrl = `${ctx.serverRun.serverUrl}/${serverRepository}/actions/runs/${ctx.serverRun.id}/attempts/${ctx.serverRun.attempt}`;
+    const displayToken = getInput("display-deployments-token");
+    const display = await syncAutomergeDisplay({ server: ctx.deployments, reader: ctx.server, ...displayToken ? { client: github(displayToken) } : {}, serverRepository, repository: ctx.repository, serverBotId: config.apps.server_bot_id, record: result.reservation, runUrl, now: ctx.now() });
+    if (display.kind === "unavailable")
+      warning("Client display synchronization unavailable");
+    await summarizeReservation({ record: result.reservation, serverRepository, serverUrl: ctx.serverRun.serverUrl, runUrl, state, displayFailure: Boolean(result.displayFailure), displaySyncFailure: display.kind === "unavailable", ...display.kind === "synced" && display.deploymentId ? { displayDeploymentId: display.deploymentId } : {} });
   }
   info(`merge command ${result.kind}`);
 }
