@@ -35,6 +35,9 @@ permissions: {}
 jobs:
   probe:
     uses: civitaspo/csm-ci-actions/.github/workflows/server-automerge-visibility-probe.yml@e2e # jactionlint ignore=unpinned-uses
+    permissions:
+      contents: read
+      pull-requests: read
     with:
       mode: ${{ inputs.mode }}
       pull-number: ${{ inputs.pull-number }}
