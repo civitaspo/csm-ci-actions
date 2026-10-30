@@ -273,8 +273,8 @@ export const merge: Scenario[] = [
       const { data } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
       return data.head.sha === head ? true : undefined;
     });
-    const approval = await postComment(ctx, pr, "/approve");
-    await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: approval.id } }, approval.since, "success");
+    await until(`approval of pull request #${pr.number} at ${head}`, async () =>
+      (await approverReviews(ctx, pr)).some((review) => review.state === "APPROVED" && review.commit_id === head) ? true : undefined);
     await waitForCsmMerge(ctx, pr, head);
     await assertReservation(ctx, pr, "SUCCESS");
   })),
