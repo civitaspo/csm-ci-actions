@@ -19,6 +19,8 @@ inputs:
   deployments-token:
     description: Server App token with deployments:write on the server repository.
     required: true
+  display-commit-token:
+    description: Optional server-scoped Contents write token for display commits.
   repository:
     description: owner/repo of the client repository.
     required: true

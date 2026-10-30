@@ -37852,9 +37852,10 @@ var RuleSetSchema = object({
   rules: array(object({ type: string2(), parameters: record(string2(), unknown()).optional() })),
   bypass_actors: array(object({ actor_id: number2().nullable(), actor_type: string2(), bypass_mode: string2() }))
 });
-function repoSettingsRuleSets(config) {
+function repoSettingsRuleSets(config, isServer = false) {
   const defaultBranch = { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } };
   const serverBypass = [{ actor_id: config.apps.server_app_id, actor_type: "Integration", bypass_mode: "pull_request" }];
+  const displayRuleSet = { name: "automerge-display", enforcement: "active", target: "branch", conditions: { ref_name: { include: ["refs/heads/csm-ci/automerge"], exclude: [] } }, rules: [{ type: "creation" }, { type: "update" }, { type: "deletion" }], bypass_actors: [{ actor_id: config.apps.server_app_id, actor_type: "Integration", bypass_mode: "always" }] };
   return [
     { name: "integrity", enforcement: "active", target: "branch", conditions: defaultBranch, rules: [{ type: "deletion" }, { type: "non_fast_forward" }, { type: "required_linear_history" }, { type: "required_signatures" }], bypass_actors: [] },
     { name: "review-and-checks", enforcement: "active", target: "branch", conditions: defaultBranch, rules: [
@@ -37862,7 +37863,8 @@ function repoSettingsRuleSets(config) {
       { type: "required_status_checks", parameters: { strict_required_status_checks_policy: false, do_not_enforce_on_create: false, required_status_checks: [{ context: "csm-ci/policy", integration_id: config.apps.server_app_id }, ...config.merge.required_checks.map((check) => ({ context: check.name, integration_id: check.app_id }))] } }
     ], bypass_actors: [] },
     { name: "controlled-merges", enforcement: "active", target: "branch", conditions: defaultBranch, rules: [{ type: "update" }], bypass_actors: serverBypass },
-    { name: "release-tags", enforcement: "active", target: "tag", conditions: { ref_name: { include: ["refs/tags/v*"], exclude: [] } }, rules: [{ type: "creation" }, { type: "update" }, { type: "deletion" }], bypass_actors: [{ actor_id: config.apps.server_app_id, actor_type: "Integration", bypass_mode: "always" }] }
+    { name: "release-tags", enforcement: "active", target: "tag", conditions: { ref_name: { include: ["refs/tags/v*"], exclude: [] } }, rules: [{ type: "creation" }, { type: "update" }, { type: "deletion" }], bypass_actors: [{ actor_id: config.apps.server_app_id, actor_type: "Integration", bypass_mode: "always" }] },
+    ...isServer ? [displayRuleSet] : []
   ];
 }
 var ALL_ADMIN_TARGETS = { settings: true, rulesets: true, releases: true };
@@ -37879,7 +37881,7 @@ async function inspectRepoSettings(args) {
     targets.releases ? isImmutableReleasesEnabled(args.adminGH, address) : true,
     targets.settings && repoSettings.sponsorships ? readSponsorships(args.adminGH, args.target.name) : undefined
   ]);
-  const definitions = targets.rulesets ? repoSettingsRuleSets(args.config) : [];
+  const definitions = targets.rulesets ? repoSettingsRuleSets(args.config, args.target.isServer) : [];
   const summaries = array(object({ id: number2().int().positive(), name: string2(), source_type: string2().optional() })).parse(ruleSets);
   const managed = await Promise.all(summaries.filter((set) => set.source_type === "Repository" && definitions.some((definition) => definition.name === set.name)).map(async (set) => {
     const response = await args.adminGH.request("GET /repos/{owner}/{repo}/rulesets/{ruleset_id}", { ...address, ruleset_id: set.id });
@@ -37959,7 +37961,7 @@ async function applyRepoSettings(args) {
     await args.adminGH.request("PUT /repos/{owner}/{repo}/immutable-releases", address);
     immutableReleasesEnabled = 1;
   }
-  const definitions = repoSettingsRuleSets(args.config);
+  const definitions = repoSettingsRuleSets(args.config, args.target.isServer);
   for (const name of inspection.changes.rulesets) {
     const definition = definitions.find((entry) => entry.name === name);
     if (!definition)

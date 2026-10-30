@@ -168,7 +168,7 @@ const RuleSetSchema = z.object({
 type RuleSet = z.infer<typeof RuleSetSchema>;
 
 type RuleSetDefinition = {
-  name: "integrity" | "review-and-checks" | "controlled-merges" | "release-tags";
+  name: "integrity" | "review-and-checks" | "controlled-merges" | "release-tags" | "automerge-display";
   enforcement: "active";
   target: "branch" | "tag";
   conditions: { ref_name: { include: string[]; exclude: string[] } };
@@ -177,9 +177,10 @@ type RuleSetDefinition = {
   bypass_actors: { actor_id: number; actor_type: "Integration"; bypass_mode: "pull_request" | "always" }[];
 };
 
-export function repoSettingsRuleSets(config: Config): RuleSetDefinition[] {
+export function repoSettingsRuleSets(config: Config, isServer = false): RuleSetDefinition[] {
   const defaultBranch = { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } };
   const serverBypass = [{ actor_id: config.apps.server_app_id, actor_type: "Integration" as const, bypass_mode: "pull_request" as const }];
+  const displayRuleSet: RuleSetDefinition = { name: "automerge-display", enforcement: "active", target: "branch", conditions: { ref_name: { include: ["refs/heads/csm-ci/automerge"], exclude: [] } }, rules: [{ type: "creation" }, { type: "update" }, { type: "deletion" }], bypass_actors: [{ actor_id: config.apps.server_app_id, actor_type: "Integration", bypass_mode: "always" }] };
   return [
     { name: "integrity", enforcement: "active", target: "branch", conditions: defaultBranch, rules: [{ type: "deletion" }, { type: "non_fast_forward" }, { type: "required_linear_history" }, { type: "required_signatures" }], bypass_actors: [] },
     { name: "review-and-checks", enforcement: "active", target: "branch", conditions: defaultBranch, rules: [
@@ -188,6 +189,7 @@ export function repoSettingsRuleSets(config: Config): RuleSetDefinition[] {
     ], bypass_actors: [] },
     { name: "controlled-merges", enforcement: "active", target: "branch", conditions: defaultBranch, rules: [{ type: "update" }], bypass_actors: serverBypass },
     { name: "release-tags", enforcement: "active", target: "tag", conditions: { ref_name: { include: ["refs/tags/v*"], exclude: [] } }, rules: [{ type: "creation" }, { type: "update" }, { type: "deletion" }], bypass_actors: [{ actor_id: config.apps.server_app_id, actor_type: "Integration", bypass_mode: "always" }] },
+    ...(isServer ? [displayRuleSet] : []),
   ];
 }
 
@@ -226,7 +228,7 @@ export async function inspectRepoSettings(args: {
     targets.releases ? isImmutableReleasesEnabled(args.adminGH, address) : true,
     targets.settings && repoSettings.sponsorships ? readSponsorships(args.adminGH, args.target.name) : undefined,
   ]);
-  const definitions = targets.rulesets ? repoSettingsRuleSets(args.config) : [];
+  const definitions = targets.rulesets ? repoSettingsRuleSets(args.config, args.target.isServer) : [];
   const summaries = z.array(z.object({ id: z.number().int().positive(), name: z.string(), source_type: z.string().optional() })).parse(ruleSets);
   const managed = await Promise.all(summaries.filter((set) => set.source_type === "Repository" && definitions.some((definition) => definition.name === set.name)).map(async (set) => {
     const response = await args.adminGH.request("GET /repos/{owner}/{repo}/rulesets/{ruleset_id}", { ...address, ruleset_id: set.id });
@@ -309,7 +311,7 @@ export async function applyRepoSettings(args: {
     await args.adminGH.request("PUT /repos/{owner}/{repo}/immutable-releases", address);
     immutableReleasesEnabled = 1;
   }
-  const definitions = repoSettingsRuleSets(args.config);
+  const definitions = repoSettingsRuleSets(args.config, args.target.isServer);
   for (const name of inspection.changes.rulesets) {
     const definition = definitions.find((entry) => entry.name === name);
     if (!definition) throw new Error(`missing fixed ruleset definition: ${name}`);

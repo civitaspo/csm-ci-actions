@@ -64,6 +64,24 @@ describe("acceptMerge", () => {
     expect(notifyFetch.calls).toContain("POST /repos/owner/repo/issues/12/comments");
   });
 
+  test("accepts the reservation when the display commit token cannot read the branch", async () => {
+    const { ctx, deploymentsFetch } = setup("/merge");
+    const denied = fakeFetch([{ method: "GET", path: "/repos/owner/server/git/ref/heads%2Fcsm-ci%2Fautomerge", status: 403, body: { message: "denied" } }]);
+    ctx.displayCommit = github("display", denied);
+    expect(await acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).toMatchObject({ kind: "accepted", reservation: { deploymentId: 77 }, displayFailure: "denied" });
+    expect(deploymentsFetch.calls).toContain("POST /repos/owner/server/deployments");
+  });
+
+  test("reports the reservation when a subsequent notification fails", async () => {
+    const { ctx } = setup("/merge");
+    const failed = fakeFetch([{ method: "POST", path: `${P}/issues/comments/9/reactions`, status: 403, body: { message: "denied" } }]);
+    ctx.notify = github("notify", failed);
+    const observed: number[] = [];
+    ctx.onAcceptanceFailure = async (record) => { observed.push(record.deploymentId); };
+    await expect(acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow("denied");
+    expect(observed).toEqual([77]);
+  });
+
   test("replays the same command after a head change without applying the old-head freshness rule", async () => {
     const { ctx, serverFetch, notifyFetch } = setup("/merge", { id: 10, login: "alice", type: "User" }, true, { commentId: 9, pull: { head: { sha: nextSha, repo: { full_name: "owner/repo" } } }, payload: { merger: { id: 10, login: "alice", type: "User" } } });
     expect(await acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).toMatchObject({ kind: "replay", reservation: { deploymentId: 77 } });

@@ -31,7 +31,7 @@ export type ReservationRecord = {
 };
 
 type ListArgs = { server: GitHub; serverRepository: string; serverBotId: number; now: Date; limit?: number };
-type CreateArgs = { server: GitHub; serverRepository: string; defaultBranch: string; serverBotId: number; payload: ReservationPayload };
+type CreateArgs = { server: GitHub; serverRepository: string; defaultBranch: string; displayCommit?: string; serverBotId: number; payload: ReservationPayload };
 
 const DEPLOYMENTS_QUERY = `query($owner:String!,$name:String!,$cursor:String){repository(owner:$owner,name:$name){deployments(environments:["${ENVIRONMENT}"],first:100,after:$cursor,orderBy:{field:CREATED_AT,direction:DESC}){pageInfo{hasNextPage endCursor}nodes{id databaseId task payload createdAt creator{__typename ... on Bot{databaseId}} statuses(first:100){pageInfo{hasNextPage}nodes{id state description createdAt creator{__typename ... on Bot{databaseId}}}}}}}}`;
 
@@ -68,7 +68,7 @@ export async function createReservation(args: CreateArgs): Promise<ReservationRe
   if (replay) return replay;
   const { owner, repo } = splitRepository(args.serverRepository);
   try {
-    const { data } = await args.server.rest.repos.createDeployment({ owner, repo, ref: args.defaultBranch, task: TASK, environment: ENVIRONMENT, auto_merge: false, required_contexts: [], production_environment: false, transient_environment: false, description: `${args.payload.repository}#${args.payload.pull_number}`, payload: args.payload });
+    const { data } = await args.server.rest.repos.createDeployment({ owner, repo, ref: args.displayCommit ?? args.defaultBranch, task: TASK, environment: ENVIRONMENT, auto_merge: false, required_contexts: [], production_environment: false, transient_environment: false, description: `${args.payload.repository}#${args.payload.pull_number}`, payload: args.payload });
     const created = CreatedDeployment.parse(data);
     if (created.task !== TASK || created.creator?.type !== "Bot" || created.creator.id !== args.serverBotId) throw new Error("created deployment identity does not match csm-ci automerge");
     return { deploymentId: created.id, nodeId: created.node_id, createdAt: created.created_at, payload: args.payload, statuses: [], state: { kind: "active" } };
