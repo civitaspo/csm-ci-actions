@@ -37293,6 +37293,17 @@ async function findReservationsForPull(args) {
   const { repositoryId, pullNumber, ...listArgs } = args;
   return (await listReservations(listArgs)).filter((r) => r.payload.repository_id === repositoryId && r.payload.pull_number === pullNumber);
 }
+async function getReservation(args) {
+  const { owner, repo } = splitRepository(args.serverRepository);
+  const { data } = await args.server.rest.repos.getDeployment({ owner, repo, deployment_id: args.record.deploymentId });
+  const deployment = CreatedDeployment.parse(data);
+  const payload = parsePayload(data.payload);
+  if (deployment.id !== args.record.deploymentId || deployment.node_id !== args.record.nodeId || deployment.task !== TASK || data.environment !== ENVIRONMENT || deployment.creator?.type !== "Bot" || deployment.creator.id !== args.serverBotId || JSON.stringify(payload.success ? payload.data : null) !== JSON.stringify(ReservationPayloadSchema.parse(args.record.payload)))
+    throw new Error("display reservation no longer exists");
+  const raw = await args.server.paginate(args.server.rest.repos.listDeploymentStatuses, { owner, repo, deployment_id: deployment.id, per_page: 100 });
+  const statuses = raw.map((value) => mapStatus(RestStatus.parse(value)));
+  return { ...args.record, statuses, state: reservationState({ statuses, serverBotId: args.serverBotId }) };
+}
 async function createReservation(args) {
   const find = () => findReservationsForPull({ server: args.server, serverRepository: args.serverRepository, serverBotId: args.serverBotId, repositoryId: args.payload.repository_id, pullNumber: args.payload.pull_number, now: new Date });
   const existing = await find();
@@ -37805,10 +37816,7 @@ function displayState(record, serverBotId) {
 }
 async function current(args) {
   const { record } = args;
-  const records = await findReservationsForPull({ server: args.server, serverRepository: args.serverRepository, serverBotId: args.serverBotId, repositoryId: record.payload.repository_id, pullNumber: record.payload.pull_number, now: args.now });
-  const latest = records.find((item) => item.deploymentId === record.deploymentId);
-  if (!latest)
-    throw new Error("display reservation no longer exists");
+  const latest = await getReservation({ server: args.server, serverRepository: args.serverRepository, serverBotId: args.serverBotId, record });
   const { data: pull } = await args.reader.rest.pulls.get({ ...splitRepository(args.repository), pull_number: record.payload.pull_number });
   if (Number(pull.base.repo?.id) !== record.payload.repository_id || pull.node_id !== record.payload.pull_node_id)
     throw new Error("display pull request identity changed");
@@ -37822,8 +37830,8 @@ async function candidates(args, head) {
       raw.push(...response.data);
       if (response.data.length < 100)
         break;
-      if (sha && page === 3)
-        throw new Error("display head lookup exceeded its page limit");
+      if (page === 3)
+        throw new Error(sha ? "display head lookup exceeded its page limit" : "display history lookup exceeded its page limit");
     }
   }
   const seen = new Set;
@@ -37863,7 +37871,7 @@ async function reconcileAutomergeDisplay(args) {
     const desired = deployment.id === canonical?.id && deployment.sha === observed.head ? displayState(observed.record, args.serverBotId) : "inactive";
     const statuses = await args.client.paginate(args.client.rest.repos.listDeploymentStatuses, { ...splitRepository(args.repository), deployment_id: deployment.id, per_page: 100 });
     const trusted = statuses.map((value) => Status.safeParse(value)).flatMap((result) => result.success && result.data.creator?.type === "Bot" && result.data.creator.id === args.serverBotId ? [result.data] : []).sort((a, b) => b.id - a.id);
-    if (trusted[0]?.state === desired && trusted[0].log_url === args.runUrl && trusted[0].environment_url === args.runUrl)
+    if (trusted[0]?.state === desired)
       continue;
     observed = await current(args);
     if (observed.head !== canonical?.sha)
@@ -37889,7 +37897,7 @@ async function syncAutomergeDisplay(args) {
     const deploymentId = await reconcileAutomergeDisplay({ ...args, client: args.client });
     return deploymentId ? { kind: "synced", deploymentId } : { kind: "synced" };
   } catch (error) {
-    const safeMessages = ["display reservation no longer exists", "display pull request identity changed", "display head lookup exceeded its page limit", "created client display is not yet observable", "display head changed during reconciliation"];
+    const safeMessages = ["display reservation no longer exists", "display pull request identity changed", "display head lookup exceeded its page limit", "display history lookup exceeded its page limit", "created client display is not yet observable", "display head changed during reconciliation"];
     const message = error instanceof Error ? error.message : "";
     const status = typeof error === "object" && error !== null && "status" in error && typeof error.status === "number" ? error.status : undefined;
     return { kind: "unavailable", reason: safeMessages.includes(message) ? message : status ? `GitHub request failed (HTTP ${status})` : "GitHub request or response failed" };

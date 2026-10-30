@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { findReservationsForPull, type ReservationRecord } from "./automerge-github.ts";
+import { getReservation, type ReservationRecord } from "./automerge-github.ts";
 import { type GitHub, splitRepository } from "./github.ts";
 
 const ENVIRONMENT = "csm-ci-automerge-display";
@@ -27,9 +27,7 @@ function displayState(record: ReservationRecord, serverBotId: number): "queued" 
 
 async function current(args: Args): Promise<{ record: ReservationRecord; head: string }> {
   const { record } = args;
-  const records = await findReservationsForPull({ server: args.server, serverRepository: args.serverRepository, serverBotId: args.serverBotId, repositoryId: record.payload.repository_id, pullNumber: record.payload.pull_number, now: args.now });
-  const latest = records.find((item) => item.deploymentId === record.deploymentId);
-  if (!latest) throw new Error("display reservation no longer exists");
+  const latest = await getReservation({ server: args.server, serverRepository: args.serverRepository, serverBotId: args.serverBotId, record });
   const { data: pull } = await args.reader.rest.pulls.get({ ...splitRepository(args.repository), pull_number: record.payload.pull_number });
   if (Number(pull.base.repo?.id) !== record.payload.repository_id || pull.node_id !== record.payload.pull_node_id) throw new Error("display pull request identity changed");
   return { record: latest, head: z.string().regex(/^[0-9a-f]{40}$/u).parse(pull.head.sha) };
@@ -42,7 +40,7 @@ async function candidates(args: Args, head: string): Promise<z.infer<typeof Depl
       const response = await args.client.rest.repos.listDeployments({ ...splitRepository(args.repository), environment: ENVIRONMENT, ...(sha ? { sha } : {}), per_page: 100, page });
       raw.push(...response.data);
       if (response.data.length < 100) break;
-      if (sha && page === 3) throw new Error("display head lookup exceeded its page limit");
+      if (page === 3) throw new Error(sha ? "display head lookup exceeded its page limit" : "display history lookup exceeded its page limit");
     }
   }
   const seen = new Set<number>();
@@ -79,7 +77,7 @@ export async function reconcileAutomergeDisplay(args: Args): Promise<number | un
     const desired = deployment.id === canonical?.id && deployment.sha === observed.head ? displayState(observed.record, args.serverBotId) : "inactive";
     const statuses: unknown[] = await args.client.paginate(args.client.rest.repos.listDeploymentStatuses, { ...splitRepository(args.repository), deployment_id: deployment.id, per_page: 100 });
     const trusted = statuses.map((value) => Status.safeParse(value)).flatMap((result) => result.success && result.data.creator?.type === "Bot" && result.data.creator.id === args.serverBotId ? [result.data] : []).sort((a, b) => b.id - a.id);
-    if (trusted[0]?.state === desired && trusted[0].log_url === args.runUrl && trusted[0].environment_url === args.runUrl) continue;
+    if (trusted[0]?.state === desired) continue;
     observed = await current(args);
     if (observed.head !== canonical?.sha) throw new Error("display head changed during reconciliation");
     const finalState = deployment.id === canonical?.id && deployment.sha === observed.head ? displayState(observed.record, args.serverBotId) : "inactive";
@@ -101,7 +99,7 @@ export async function syncAutomergeDisplay(args: Omit<Args, "client"> & { client
     const deploymentId = await reconcileAutomergeDisplay({ ...args, client: args.client });
     return deploymentId ? { kind: "synced", deploymentId } : { kind: "synced" };
   } catch (error) {
-    const safeMessages = ["display reservation no longer exists", "display pull request identity changed", "display head lookup exceeded its page limit", "created client display is not yet observable", "display head changed during reconciliation"];
+    const safeMessages = ["display reservation no longer exists", "display pull request identity changed", "display head lookup exceeded its page limit", "display history lookup exceeded its page limit", "created client display is not yet observable", "display head changed during reconciliation"];
     const message = error instanceof Error ? error.message : "";
     const status = typeof error === "object" && error !== null && "status" in error && typeof error.status === "number" ? error.status : undefined;
     return { kind: "unavailable", reason: safeMessages.includes(message) ? message : status ? `GitHub request failed (HTTP ${status})` : "GitHub request or response failed" };

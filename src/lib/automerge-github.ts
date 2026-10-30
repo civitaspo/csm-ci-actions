@@ -61,6 +61,17 @@ export async function findReservationsForPull(args: ListArgs & { repositoryId: n
   return (await listReservations(listArgs)).filter((r) => r.payload.repository_id === repositoryId && r.payload.pull_number === pullNumber);
 }
 
+export async function getReservation(args: { server: GitHub; serverRepository: string; serverBotId: number; record: ReservationRecord }): Promise<ReservationRecord> {
+  const { owner, repo } = splitRepository(args.serverRepository);
+  const { data } = await args.server.rest.repos.getDeployment({ owner, repo, deployment_id: args.record.deploymentId });
+  const deployment = CreatedDeployment.parse(data);
+  const payload = parsePayload(data.payload);
+  if (deployment.id !== args.record.deploymentId || deployment.node_id !== args.record.nodeId || deployment.task !== TASK || data.environment !== ENVIRONMENT || deployment.creator?.type !== "Bot" || deployment.creator.id !== args.serverBotId || JSON.stringify(payload.success ? payload.data : null) !== JSON.stringify(ReservationPayloadSchema.parse(args.record.payload))) throw new Error("display reservation no longer exists");
+  const raw: unknown[] = await args.server.paginate(args.server.rest.repos.listDeploymentStatuses, { owner, repo, deployment_id: deployment.id, per_page: 100 });
+  const statuses = raw.map((value) => mapStatus(RestStatus.parse(value)));
+  return { ...args.record, statuses, state: reservationState({ statuses, serverBotId: args.serverBotId }) };
+}
+
 export async function createReservation(args: CreateArgs): Promise<ReservationRecord> {
   const find = () => findReservationsForPull({ server: args.server, serverRepository: args.serverRepository, serverBotId: args.serverBotId, repositoryId: args.payload.repository_id, pullNumber: args.payload.pull_number, now: new Date() });
   const existing = await find();

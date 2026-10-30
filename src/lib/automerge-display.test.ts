@@ -15,19 +15,18 @@ function deployment(id: number, ref: string, creator = 3000, data: unknown = cor
   return { id, sha: ref, task: "csm-ci:automerge-display", environment: "csm-ci-automerge-display", payload: data, creator: { id: creator, type: "Bot" } };
 }
 
-function harness(options: { deployments: unknown[]; deploymentsThen?: unknown[][]; createStatus?: number; statusError?: number; statusThen?: unknown[][]; terminal?: string; terminalThen?: string[]; pullId?: number; pullNodeId?: string; headsThen?: readonly string[] }) {
+function harness(options: { deployments: unknown[]; deploymentsThen?: unknown[][]; serverDeployment?: Record<string, unknown>; createStatus?: number; statusError?: number; statuses?: unknown[]; statusThen?: unknown[][]; terminal?: string; terminalThen?: string[]; pullId?: number; pullNodeId?: string; headsThen?: readonly string[] }) {
   const response = (state?: string) => {
-    const status = state ? [{ id: "S_1", state, description: "csm-ci:automerge:reason=cancelled| cancelled", createdAt: "2026-10-29T00:00:01.000Z", creator: { __typename: "Bot", databaseId: 3000 } }] : [];
-    return { data: { repository: { deployments: { nodes: [{ id: "D_77", databaseId: 77, task: "csm-ci:automerge", payload, createdAt: payload.accepted_at, creator: { __typename: "Bot", databaseId: 3000 }, statuses: { nodes: status, pageInfo: { hasNextPage: false } } }], pageInfo: { hasNextPage: false, endCursor: null } } } } };
+    return state ? [{ id: 1, state: state.toLowerCase(), description: "csm-ci:automerge:reason=cancelled| cancelled", created_at: "2026-10-29T00:00:01.000Z", creator: { type: "Bot", id: 3000 } }] : [];
   };
-  const server = fakeFetch([{ method: "POST", path: "/graphql", body: response(options.terminal), ...(options.terminalThen ? { then: options.terminalThen.map((state) => response(state)) } : {}) }]);
+  const server = fakeFetch([{ method: "GET", path: "/repos/owner/server/deployments/77", body: { id: 77, node_id: "D_77", task: "csm-ci:automerge", environment: "csm-ci-automerge", payload, created_at: payload.accepted_at, creator: { type: "Bot", id: 3000 }, ...options.serverDeployment } }, { method: "GET", path: "/repos/owner/server/deployments/77/statuses", body: response(options.terminal), ...(options.terminalThen ? { then: options.terminalThen.map((state) => response(state)) } : {}) }]);
   const pull = (head: string) => ({ node_id: options.pullNodeId ?? "PR_12", head: { sha: head }, base: { repo: { id: options.pullId ?? 42 } } });
   const reader = fakeFetch([{ method: "GET", path: "/repos/owner/client/pulls/12", body: pull(sha), ...(options.headsThen ? { then: options.headsThen.map(pull) } : {}) }]);
   const all = [...options.deployments, ...(options.deploymentsThen?.flat() ?? [])];
   const responses = [options.deployments, ...(options.deploymentsThen ?? [])].flatMap((items) => [items, items]);
   const routes = [{ method: "GET", path: "/repos/owner/client/deployments", body: responses[0], then: responses.slice(1) }, { method: "POST", path: "/repos/owner/client/deployments", status: options.createStatus ?? 201, body: options.createStatus ? { message: "timeout" } : { id: 2 } }, ...all.flatMap((value) => {
     if (typeof value !== "object" || value === null || !("id" in value)) return [];
-    return [{ method: "GET", path: `/repos/owner/client/deployments/${value.id}/statuses`, body: [], ...(options.statusThen ? { then: options.statusThen } : {}) }, { method: "POST", path: `/repos/owner/client/deployments/${value.id}/statuses`, status: options.statusError ?? 201, body: options.statusError ? { message: "timeout" } : { id: 10 } }];
+    return [{ method: "GET", path: `/repos/owner/client/deployments/${value.id}/statuses`, body: options.statuses ?? [], ...(options.statusThen ? { then: options.statusThen } : {}) }, { method: "POST", path: `/repos/owner/client/deployments/${value.id}/statuses`, status: options.statusError ?? 201, body: options.statusError ? { message: "timeout" } : { id: 10 } }];
   })];
   const client = fakeFetch(routes);
   return { args: { server: github("server", server), reader: github("reader", reader), client: github("display", client), serverRepository: "owner/server", repository: "owner/client", serverBotId: 3000, record, runUrl: serverRun, now: new Date("2026-10-30T00:00:00.000Z") }, client };
@@ -88,8 +87,30 @@ test("limits old-head discovery to the three newest environment pages", async ()
     }
     return h.client(input, init);
   }, { preconnect: globalThis.fetch.preconnect });
-  expect(await reconcileAutomergeDisplay({ ...h.args, client: github("display", fetch) })).toBe(2);
+  expect(await syncAutomergeDisplay({ ...h.args, client: github("display", fetch) })).toEqual({ kind: "unavailable", reason: "display history lookup exceeded its page limit" });
   expect(pages).toEqual([1, 2, 3]);
+});
+
+test("does not rewrite an unchanged trusted state for a new run URL", async () => {
+  const status = { id: 10, state: "queued", log_url: "https://example.test/old", environment_url: "https://example.test/old", creator: { id: 3000, type: "Bot" } };
+  const h = harness({ deployments: [deployment(2, sha)], statuses: [status] });
+  await reconcileAutomergeDisplay(h.args);
+  expect(h.client.requests.filter((request) => request.method === "POST")).toHaveLength(0);
+});
+
+test.each([
+  { id: 78 },
+  { node_id: "D_other" },
+  { task: "other" },
+  { environment: "other" },
+  { creator: { id: 3000, type: "User" } },
+  { creator: { id: 99, type: "Bot" } },
+  { payload: {} },
+  { payload: { ...payload, pull_number: 13 } },
+])("rejects an untrusted or changed reservation: %j", async (serverDeployment) => {
+  const h = harness({ deployments: [deployment(2, sha)], serverDeployment });
+  expect(await syncAutomergeDisplay(h.args)).toEqual({ kind: "unavailable", reason: "display reservation no longer exists" });
+  expect(h.client.requests.filter((request) => request.method === "POST")).toHaveLength(0);
 });
 
 test("recovers an ambiguous deployment creation from the correlated Server Bot record", async () => {
