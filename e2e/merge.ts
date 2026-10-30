@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { withRepositoryPolicy } from "./repository-policy.ts";
 import { OWNER_IDENTITY } from "./pr-metadata.ts";
 import { prCase } from "./harness.ts";
@@ -5,11 +6,15 @@ import { marker } from "../src/lib/notify.ts";
 import { automergeMarker } from "../src/lib/automerge.ts";
 import { parseConfig } from "../src/lib/config.ts";
 import { splitRepository } from "../src/lib/github.ts";
-import { approverReviews, assert, CLIENT, closePr, dispatch, expectOp, openPr, type Pr, postComment, type Scenario, SERVER, SERVER_BOT_ID, serverComments, until, withServerConfig } from "./harness.ts";
+import { approverReviews, assert, CLIENT, closePr, dispatch, expectOp, hasStatus, openPr, type Pr, postComment, type Scenario, SERVER, SERVER_BOT_ID, serverComments, sleep, until, withServerConfig } from "./harness.ts";
 
 const TEST_BOT_ID = 347402450;
 const TEST_BOT_LOGIN = "testing-csm-ci-untrusted-committer[bot]";
 const SERVER_CONFIG = "csm-ci.yaml";
+const VISIBILITY_PROBE_WORKFLOW = "csm-ci-automerge-visibility-probe.yml";
+const SERVER_PROBE_ENVIRONMENT = "csm-ci-automerge-visibility-probe";
+const CLIENT_PROBE_ENVIRONMENT = "csm-ci-automerge-display-probe";
+const PROBE_TASK = "csm-ci:automerge-visibility-probe";
 
 type MergeRequest = { match: { kind: string; repository: string; args: Record<string, number> }; since: Date };
 
@@ -141,6 +146,32 @@ function automergeScenario(id: string, title: string, run: Scenario["run"], clas
     cases: { fixture },
     run,
   };
+}
+
+function visibilityProbeId(ctx: Parameters<Scenario["run"]>[0]): string {
+  const e2ePrNumber = process.env.E2E_PR_NUMBER;
+  assert(e2ePrNumber && /^[1-9][0-9]*$/u.test(e2ePrNumber), "visibility probe requires an /e2e pull request number");
+  const hex = createHash("sha256").update(`csm-ci-automerge-visibility-probe:${e2ePrNumber}:${ctx.run.invocation}`).digest("hex").slice(0, 32);
+  const uuid = `${hex.slice(0, 12)}4${hex.slice(13, 16)}8${hex.slice(17, 20)}${hex.slice(20)}`;
+  return `${uuid.slice(0, 8)}-${uuid.slice(8, 12)}-${uuid.slice(12, 16)}-${uuid.slice(16, 20)}-${uuid.slice(20)}`;
+}
+
+function payloadObject(raw: unknown): Record<string, unknown> | undefined {
+  let value = raw;
+  if (typeof value === "string") {
+    try { value = JSON.parse(value) as unknown; } catch { return undefined; }
+  }
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? Object.fromEntries(Object.entries(value))
+    : undefined;
+}
+
+async function probeDeployments(ctx: Parameters<Scenario["run"]>[0], repository: string, environment: string, probeId: string) {
+  const data = await ctx.gh.paginate(ctx.gh.rest.repos.listDeployments, { ...splitRepository(repository), environment, per_page: 100 });
+  return data.filter((deployment) => {
+    const payload = payloadObject(deployment.payload);
+    return deployment.task === PROBE_TASK && deployment.creator?.type === "Bot" && deployment.creator.id === SERVER_BOT_ID && payload?.probe_id === probeId;
+  });
 }
 
 async function reserve(ctx: Parameters<Scenario["run"]>[0], pr: Pr): Promise<{ comment: Awaited<ReturnType<typeof postComment>>; record: AutomergeRecord }> {
@@ -648,4 +679,46 @@ export const merge: Scenario[] = [
       }));
     },
   },
+  automergeScenario("deployment-visibility-probe", "App-backed automerge deployment visibility probe", async (ctx) => withSignedPr(ctx, async (pr) => {
+    const probeId = visibilityProbeId(ctx);
+    const branch = `codex/automerge-visibility-probe-${probeId}`;
+    let serverTip: string | undefined;
+    try {
+      const created = await dispatch(ctx, SERVER, VISIBILITY_PROBE_WORKFLOW, {
+        mode: "create", "pull-number": String(pr.number), "client-sha": pr.head, "probe-id": probeId,
+      });
+      assert(created.conclusion === "success", `visibility probe creation concluded ${created.conclusion} (${created.html_url})`);
+      const { data: ref } = await ctx.gh.rest.git.getRef({ ...splitRepository(SERVER), ref: `heads/${branch}` });
+      serverTip = ref.object.sha;
+      const serverDeployments = await probeDeployments(ctx, SERVER, SERVER_PROBE_ENVIRONMENT, probeId);
+      assert(serverDeployments.length === 1 && serverDeployments[0]!.sha === serverTip, `expected one Server App deployment at ${serverTip}, found ${serverDeployments.length}`);
+      const clientDeployments = await probeDeployments(ctx, CLIENT, CLIENT_PROBE_ENVIRONMENT, probeId);
+      assert(clientDeployments.length <= 1 && clientDeployments.every((deployment) => deployment.sha === pr.head), "client display deployments do not match the pull request head");
+      console.log(`visibility probe observation window: PR ${CLIENT}#${pr.number}; server environment https://github.com/${SERVER}/deployments/${SERVER_PROBE_ENVIRONMENT}; server deployment ${serverDeployments[0]!.id}; client environment https://github.com/${CLIENT}/deployments/${CLIENT_PROBE_ENVIRONMENT}; client deployment ${clientDeployments[0]?.id ?? "unavailable"}; workflow ${created.html_url}; e2e lock remains held for 120 seconds`);
+      await sleep(120_000);
+      assert(clientDeployments.length === 1, `Server App client Deployments write is unavailable or no display deployment was created (${created.html_url})`);
+    } finally {
+      if (!serverTip) {
+        try {
+          const { data } = await ctx.gh.rest.git.getRef({ ...splitRepository(SERVER), ref: `heads/${branch}` });
+          serverTip = data.object.sha;
+        } catch (error) {
+          if (!hasStatus(error, 404)) throw error;
+        }
+      }
+      const cleaned = await dispatch(ctx, SERVER, VISIBILITY_PROBE_WORKFLOW, {
+        mode: "cleanup", "pull-number": String(pr.number), "client-sha": pr.head, "probe-id": probeId,
+        ...(serverTip ? { "server-tip": serverTip } : {}),
+      });
+      assert(cleaned.conclusion === "success", `visibility probe cleanup concluded ${cleaned.conclusion} (${cleaned.html_url})`);
+      if (serverTip) {
+        let exists = true;
+        try { await ctx.gh.rest.git.getRef({ ...splitRepository(SERVER), ref: `heads/${branch}` }); }
+        catch (error) { if (hasStatus(error, 404)) exists = false; else throw error; }
+        assert(!exists, `visibility probe branch ${branch} remains after cleanup`);
+      }
+      assert((await probeDeployments(ctx, SERVER, SERVER_PROBE_ENVIRONMENT, probeId)).length === 0, "server probe deployment remains after cleanup");
+      assert((await probeDeployments(ctx, CLIENT, CLIENT_PROBE_ENVIRONMENT, probeId)).length === 0, "client probe deployment remains after cleanup");
+    }
+  }), "positive"),
 ];

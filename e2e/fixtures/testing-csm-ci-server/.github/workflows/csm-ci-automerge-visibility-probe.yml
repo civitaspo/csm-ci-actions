@@ -1,0 +1,45 @@
+name: csm-ci automerge visibility probe
+run-name: csm-ci-automerge-visibility-probe ${{ inputs.correlation }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Create an isolated probe or remove its owned resources.
+        type: choice
+        options: [create, cleanup]
+        required: true
+      pull-number:
+        description: Open testing client pull request used by the probe.
+        type: string
+        required: true
+      client-sha:
+        description: Current head SHA of the testing client pull request.
+        type: string
+        required: true
+      probe-id:
+        description: UUID v4 used to identify this probe's resources.
+        type: string
+        required: true
+      server-tip:
+        description: Exact probe branch tip required for cleanup.
+        type: string
+        required: false
+      correlation:
+        description: Unique e2e run identifier.
+        type: string
+        required: false
+
+permissions: {}
+
+jobs:
+  probe:
+    uses: civitaspo/csm-ci-actions/.github/workflows/server-automerge-visibility-probe.yml@e2e # jactionlint ignore=unpinned-uses
+    with:
+      mode: ${{ inputs.mode }}
+      pull-number: ${{ inputs.pull-number }}
+      client-sha: ${{ inputs.client-sha }}
+      probe-id: ${{ inputs.probe-id }}
+      server-tip: ${{ inputs.server-tip }}
+    secrets:
+      CSM_CI_SERVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}

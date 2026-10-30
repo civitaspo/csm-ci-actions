@@ -22,6 +22,7 @@ const contracts: [string, Record<string, { required: boolean }>][] = [
   ["server-repo-settings.yml", settingsContract],
   ["server-repo-settings-target.yml", settingsContract],
   ["server-automerge.yml", { [serverSecret]: { required: true } }],
+  ["server-automerge-visibility-probe.yml", { [serverSecret]: { required: true } }],
   ["server-automerge-evaluate.yml", { [serverSecret]: { required: true } }],
   ["server-check.yml", {}],
 ];
@@ -48,6 +49,7 @@ describe("explicit reusable workflow secret contracts", () => {
       const names = job.uses.includes("/client-") ? [clientSecret]
         : job.uses.includes("/server.yml@") ? [serverSecret, approverSecret, ...providerSecrets]
         : job.uses.includes("/server-automerge.yml@") ? [serverSecret]
+        : job.uses.includes("/server-automerge-visibility-probe.yml@") ? [serverSecret]
         : job.uses.includes("/server-repo-settings") ? [serverSecret, approverSecret] : [];
       expect(job.secrets ?? {}).toEqual(mapping(names));
     }

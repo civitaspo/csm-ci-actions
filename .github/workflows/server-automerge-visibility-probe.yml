@@ -1,0 +1,130 @@
+name: server automerge visibility probe
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        type: string
+        required: true
+      pull-number:
+        type: string
+        required: true
+      client-sha:
+        type: string
+        required: true
+      probe-id:
+        type: string
+        required: true
+      server-tip:
+        type: string
+        required: false
+    secrets:
+      CSM_CI_SERVER_APP_PRIVATE_KEY:
+        required: true
+
+permissions: {}
+
+jobs:
+  validate:
+    if: github.repository == 'civitaspo/testing-csm-ci-server'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      valid: ${{ steps.validate.outputs.valid }}
+    steps:
+      - id: validate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MODE: ${{ inputs.mode }}
+          PULL_NUMBER: ${{ inputs.pull-number }}
+          CLIENT_SHA: ${{ inputs.client-sha }}
+          PROBE_ID: ${{ inputs.probe-id }}
+          SERVER_TIP: ${{ inputs.server-tip }}
+        run: |
+          test "$GITHUB_REPOSITORY" = "civitaspo/testing-csm-ci-server"
+          [[ "$MODE" == create || "$MODE" == cleanup ]]
+          [[ "$PULL_NUMBER" =~ ^[1-9][0-9]{0,8}$ ]]
+          [[ "$CLIENT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PROBE_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]
+          if [[ "$MODE" == cleanup && -n "$SERVER_TIP" ]]; then [[ "$SERVER_TIP" =~ ^[0-9a-f]{40}$ ]]; fi
+          if [[ "$MODE" == create ]]; then
+            actual="$(gh api "repos/civitaspo/testing-csm-ci-client/pulls/$PULL_NUMBER" --jq '.head.sha')"
+            state="$(gh api "repos/civitaspo/testing-csm-ci-client/pulls/$PULL_NUMBER" --jq '.state')"
+            test "$actual" = "$CLIENT_SHA" && test "$state" = open
+          fi
+          echo "valid=true" >> "$GITHUB_OUTPUT"
+
+  probe:
+    needs: validate
+    if: needs.validate.outputs.valid == 'true'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    environment: csm-ci
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .csm-ci-actions
+          persist-credentials: false
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+        env:
+          MISE_CONFIG_FILE: ${{ github.workspace }}/.csm-ci-actions/mise.toml
+        with:
+          cache: false
+      - run: bun install --frozen-lockfile --ignore-scripts
+        env:
+          MISE_CONFIG_FILE: ${{ github.workspace }}/.csm-ci-actions/mise.toml
+        working-directory: .csm-ci-actions
+      - id: server-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: civitaspo
+          repositories: testing-csm-ci-server
+          permission-contents: write
+          permission-deployments: write
+      - id: client-token
+        if: inputs.mode == 'create'
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: civitaspo
+          repositories: testing-csm-ci-client
+          permission-pull-requests: read
+      - id: client-deployments-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: civitaspo
+          repositories: testing-csm-ci-client
+          permission-deployments: write
+      - name: Run visibility probe
+        working-directory: .csm-ci-actions
+        env:
+          MISE_CONFIG_FILE: ${{ github.workspace }}/.csm-ci-actions/mise.toml
+          MODE: ${{ inputs.mode }}
+          PULL_NUMBER: ${{ inputs.pull-number }}
+          CLIENT_SHA: ${{ inputs.client-sha }}
+          PROBE_ID: ${{ inputs.probe-id }}
+          SERVER_TIP: ${{ inputs.server-tip }}
+          SERVER_TOKEN: ${{ steps.server-token.outputs.token }}
+          SERVER_TOKEN_RESULT: ${{ steps.server-token.outcome }}
+          CLIENT_READ_TOKEN: ${{ steps.client-token.outputs.token }}
+          CLIENT_READ_TOKEN_RESULT: ${{ steps.client-token.outcome }}
+          CLIENT_TOKEN: ${{ steps.client-deployments-token.outputs.token }}
+          CLIENT_TOKEN_RESULT: ${{ steps.client-deployments-token.outcome }}
+          SERVER_URL: ${{ github.server_url }}
+          RUN_ID: ${{ github.run_id }}
+        run: bun src/server-automerge-visibility-probe/main.ts

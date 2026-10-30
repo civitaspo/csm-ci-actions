@@ -102,7 +102,7 @@ export async function syncFixtures(gh: GitHub): Promise<void> {
 
 export async function dispatch(ctx: Ctx, repository: string, workflow: string, inputs: Record<string, string> = {}): Promise<Run> {
   const since = new Date(Date.now() - 2_000);
-  const correlatedWorkflow = workflow === "csm-ci-smoke.yml" || workflow === "csm-ci-release-verify.yml" || workflow === "csm-ci-release-pr.yml" || workflow === "csm-ci-repo-settings.yml" || workflow === "csm-ci-automerge.yml";
+  const correlatedWorkflow = workflow === "csm-ci-smoke.yml" || workflow === "csm-ci-release-verify.yml" || workflow === "csm-ci-release-pr.yml" || workflow === "csm-ci-repo-settings.yml" || workflow === "csm-ci-automerge.yml" || workflow === "csm-ci-automerge-visibility-probe.yml";
   const correlation = correlatedWorkflow ? randomUUID() : undefined;
   const dispatchInputs = correlation ? { ...inputs, correlation } : inputs;
   await until(`dispatch of ${workflow}`, async () => {
