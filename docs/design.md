@@ -106,6 +106,10 @@ docs/, e2e/
 - **Server-owned branches** (`release/next`, `csm-ci/repo-settings`)
   - Every commit after the merge base must be server-made and within range.
   - A new commit is built on a temporary branch at the head of the default branch, and the owned branch is moved to it in one leased update, so the branch never equals its base and its open PR stays open.
+- **Automerge display branch** (`csm-ci/automerge`)
+  - This branch contains signed, empty commits used only as refs for server automerge reservation Deployments. Its commit subject names the validated client pull request; its body carries a diagnostic correlation marker.
+  - These commits are not pull request commits and are excluded from the Server Bot commit trust rule above. Their text, signatures, refs, and markers never establish reservation authority or merge eligibility.
+  - The branch is written only by the Server App and protected by the `automerge-display` ruleset. It is not reset or force-pushed. If a display commit cannot be created, reservation acceptance falls back to the server default branch.
 
 ### S5. Comment commands (`/approve`, `/merge`, `/recheck`)
 
@@ -129,7 +133,7 @@ docs/, e2e/
 - The release build job declares no environment.
 - **Client App** is installed only on the server repository, with `issues: write`.
 - **Server App** permissions:
-  - `contents: write`, `pull_requests: write`, `issues: write`, `checks: write`, `actions: read`. Deployments read and write access on the server repository is required for automerge reservations.
+  - `contents: write`, `pull_requests: write`, `issues: write`, `checks: write`, `actions: read`. Deployments read and write access on the server repository is required for automerge reservations. Server Contents write is used for the optional display commit. Client Deployments write is used only for the optional, display-only client Deployment and must be scoped to that client repository.
   - `workflows: write`: minted only when securefix allows workflow changes, for managed files, and on the final merge token after readiness succeeds. Read and notification tokens never receive it.
   - `administration: write`: minted only in repo-settings jobs. Unlike an admin PAT, the token expires in an hour, can be limited to one repository, is not tied to a person and needs no renewal.
 - **Approver App** needs `contents: write` installed so its approval counts toward required approvals; its tokens are minted with `pull_requests: write` only.
@@ -138,6 +142,8 @@ docs/, e2e/
   - `review-and-checks`: one approval, `dismiss_stale_reviews_on_push`, `csm-ci/policy` from the Server App and the configured `required_checks`, squash only. Branches need not be up to date, because `/merge` does not update them.
   - `controlled-merges`: the `update` rule only. The only bypass is the Server App with `bypass_mode: pull_request` (`always` would allow direct pushes).
   - `release-tags` (`refs/tags/v*`): forbids `creation`, `update` and `deletion`. The only bypass is the Server App.
+  - `automerge-display` (`refs/heads/csm-ci/automerge`): forbids creation, update, and deletion except through the Server App's sole `bypass_mode: always`, because it writes commits directly. It matches only the dedicated display branch and grants no access to the default branch or other refs.
+  - The four existing rulesets retain their existing client and server repository scope. `automerge-display` applies only to the server repository; it must not be installed on client repositories.
 
 ### S7. Known compromises
 
@@ -175,9 +181,10 @@ This is the single source for names. The implementation, docs and setup skill us
 |---|---|---|
 | server repo | `csm-ci` | Server and Approver credentials; Terraform provider signing credentials when enabled |
 | server repo | `csm-ci-automerge` | No secrets or protection rules. Server App-created automerge deployments only. |
+| client repo | `csm-ci-automerge-display` | Server App-created, display-only automerge deployments; no secrets or protection rules. |
 | csm-ci-actions | `csm-ci-e2e` | e2e harness credentials |
 
-The `csm-ci` and `csm-ci-e2e` environments allow deployments only from the default branch. The `csm-ci-automerge` environment has no secrets or protection rules.
+The `csm-ci` and `csm-ci-e2e` environments allow deployments only from the default branch. The `csm-ci-automerge` and `csm-ci-automerge-display` environments have no secrets or protection rules.
 
 ### Environment `csm-ci` of the server repo
 
@@ -220,6 +227,10 @@ Terraform provider publication only. The production and testing servers each use
 | check | `csm-ci/policy` |
 | branch | `csm-ci/repo-settings`, `release/next`, `e2e` |
 | deployment task | `csm-ci:automerge` |
+| branch | `csm-ci/automerge` (server automerge display commits only) |
+| ruleset | `automerge-display` |
+| deployment task | `csm-ci:automerge-display` |
+| environment | `csm-ci-automerge-display` |
 | label | `csm-ci/automerge` (display only) |
 | marker | `<!-- csm-ci:... -->` |
 | configuration file | `csm-ci.yaml` |
