@@ -12,7 +12,7 @@ const correlation = { server_repository: "owner/server", reservation_deployment_
 const serverRun = "https://github.com/owner/server/actions/runs/1";
 
 function deployment(id: number, ref: string, creator = 3000, data: unknown = correlation) {
-  return { id, sha: ref, task: "csm-ci:automerge-display", environment: "csm-ci-automerge-display", payload: data, creator: { id: creator, type: "Bot" } };
+  return { id, sha: ref, task: "csm-ci:automerge-display", environment: "csm-ci-automerge-display", created_at: "2026-10-29T00:00:01.000Z", payload: data, creator: { id: creator, type: "Bot" } };
 }
 
 function harness(options: { deployments: unknown[]; deploymentsThen?: unknown[][]; serverDeployment?: Record<string, unknown>; createStatus?: number; statusError?: number; statuses?: unknown[]; statusThen?: unknown[][]; terminal?: string; terminalThen?: string[]; pullId?: number; pullNodeId?: string; headsThen?: readonly string[] }) {
@@ -83,12 +83,30 @@ test("limits old-head discovery to the three newest environment pages", async ()
     if (url.pathname === "/repos/owner/client/deployments" && (init?.method ?? "GET") === "GET") {
       if (url.searchParams.has("sha")) return Response.json([deployment(2, sha)]);
       pages.push(Number(url.searchParams.get("page")));
-      return Response.json(Array.from({ length: 100 }, (_, index) => deployment(1000 + index, old, 9)));
+      return Response.json(Array.from({ length: 100 }, (_, index) => ({ ...deployment(1000 + index, old, 9), created_at: record.createdAt })));
     }
     return h.client(input, init);
   }, { preconnect: globalThis.fetch.preconnect });
   expect(await syncAutomergeDisplay({ ...h.args, client: github("display", fetch) })).toEqual({ kind: "unavailable", reason: "display history lookup exceeded its page limit" });
   expect(pages).toEqual([1, 2, 3]);
+});
+
+test("stops old-head discovery at the reservation creation time despite older history", async () => {
+  const h = harness({ deployments: [deployment(2, sha)] });
+  const older = Array.from({ length: 350 }, (_, index) => ({ ...deployment(1000 + index, old, 9), created_at: "2026-10-28T23:59:59.000Z" }));
+  const pages: number[] = [];
+  const fetch = Object.assign(async (input: Parameters<typeof globalThis.fetch>[0], init?: Parameters<typeof globalThis.fetch>[1]) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    if (url.pathname === "/repos/owner/client/deployments" && (init?.method ?? "GET") === "GET") {
+      if (url.searchParams.has("sha")) return Response.json([deployment(2, sha)]);
+      const page = Number(url.searchParams.get("page"));
+      pages.push(page);
+      return Response.json([deployment(2, sha), ...older].slice((page - 1) * 100, page * 100));
+    }
+    return h.client(input, init);
+  }, { preconnect: globalThis.fetch.preconnect });
+  expect(await syncAutomergeDisplay({ ...h.args, client: github("display", fetch) })).toEqual({ kind: "synced", deploymentId: 2 });
+  expect(pages).toEqual([1]);
 });
 
 test("does not rewrite an unchanged trusted state for a new run URL", async () => {

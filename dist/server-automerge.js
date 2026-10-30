@@ -37273,7 +37273,7 @@ async function summarizeReservation(args) {
 var ENVIRONMENT2 = "csm-ci-automerge-display";
 var TASK2 = "csm-ci:automerge-display";
 var Payload = object({ server_repository: string2(), reservation_deployment_id: number2().int().positive() });
-var Deployment = object({ id: number2().int().positive(), sha: string2().regex(/^[0-9a-f]{40}$/u), task: string2(), environment: string2(), payload: unknown(), creator: object({ id: number2().int().positive(), type: string2() }).nullable() });
+var Deployment = object({ id: number2().int().positive(), sha: string2().regex(/^[0-9a-f]{40}$/u), task: string2(), environment: string2(), created_at: exports_iso.datetime(), payload: unknown(), creator: object({ id: number2().int().positive(), type: string2() }).nullable() });
 var Status = object({ id: number2().int().positive(), state: string2(), log_url: string2().nullable(), environment_url: string2().nullable(), creator: object({ id: number2().int().positive(), type: string2() }).nullable() });
 function parsePayload2(value) {
   try {
@@ -37306,6 +37306,8 @@ async function candidates(args, head) {
     for (let page = 1;page <= 3; page++) {
       const response = await args.client.rest.repos.listDeployments({ ...splitRepository(args.repository), environment: ENVIRONMENT2, ...sha ? { sha } : {}, per_page: 100, page });
       raw.push(...response.data);
+      if (!sha && response.data.some((deployment) => Date.parse(exports_iso.datetime().parse(deployment.created_at)) < Date.parse(args.record.createdAt)))
+        break;
       if (response.data.length < 100)
         break;
       if (page === 3)

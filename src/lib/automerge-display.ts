@@ -5,7 +5,7 @@ import { type GitHub, splitRepository } from "./github.ts";
 const ENVIRONMENT = "csm-ci-automerge-display";
 const TASK = "csm-ci:automerge-display";
 const Payload = z.object({ server_repository: z.string(), reservation_deployment_id: z.number().int().positive() });
-const Deployment = z.object({ id: z.number().int().positive(), sha: z.string().regex(/^[0-9a-f]{40}$/u), task: z.string(), environment: z.string(), payload: z.unknown(), creator: z.object({ id: z.number().int().positive(), type: z.string() }).nullable() });
+const Deployment = z.object({ id: z.number().int().positive(), sha: z.string().regex(/^[0-9a-f]{40}$/u), task: z.string(), environment: z.string(), created_at: z.iso.datetime(), payload: z.unknown(), creator: z.object({ id: z.number().int().positive(), type: z.string() }).nullable() });
 const Status = z.object({ id: z.number().int().positive(), state: z.string(), log_url: z.string().nullable(), environment_url: z.string().nullable(), creator: z.object({ id: z.number().int().positive(), type: z.string() }).nullable() });
 
 type Args = { server: GitHub; reader: GitHub; client: GitHub; serverRepository: string; repository: string; serverBotId: number; record: ReservationRecord; runUrl: string; now: Date };
@@ -39,6 +39,7 @@ async function candidates(args: Args, head: string): Promise<z.infer<typeof Depl
     for (let page = 1; page <= 3; page++) {
       const response = await args.client.rest.repos.listDeployments({ ...splitRepository(args.repository), environment: ENVIRONMENT, ...(sha ? { sha } : {}), per_page: 100, page });
       raw.push(...response.data);
+      if (!sha && response.data.some((deployment) => Date.parse(z.iso.datetime().parse(deployment.created_at)) < Date.parse(args.record.createdAt))) break;
       if (response.data.length < 100) break;
       if (page === 3) throw new Error(sha ? "display head lookup exceeded its page limit" : "display history lookup exceeded its page limit");
     }
