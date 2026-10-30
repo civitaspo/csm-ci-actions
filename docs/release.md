@@ -66,7 +66,7 @@ To verify a released asset, run this from a checkout that contains the downloade
 ```sh
 gh attestation verify <asset> \
   --owner <server-owner> \
-  --signer-workflow <server-owner>/<server-repo>/.github/workflows/server.yml \
+  --signer-workflow civitaspo/csm-ci-actions/.github/workflows/server.yml \
   --predicate-type https://github.com/civitaspo/csm-ci-actions/attestation/release/v1 \
   --deny-self-hosted-runners --format json > verified.json
 
