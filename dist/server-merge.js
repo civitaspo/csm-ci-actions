@@ -37454,8 +37454,13 @@ command_comment_id=${payload.command_comment_id}`;
   for (let attempt = 0;attempt < ATTEMPTS; attempt++) {
     if (!bootstrapped) {
       const prior = await readCommit(server, serverRepository, head);
-      if (prior.oid !== head || !owned(prior, args.serverBotId))
+      if (prior.oid !== head)
         throw new Error("display branch tip is not an owned display commit");
+      if (!owned(prior, args.serverBotId)) {
+        const comparison = await server.rest.repos.compareCommitsWithBasehead({ ...splitRepository(serverRepository), basehead: `${head}...${args.defaultBranch}` });
+        if (comparison.data.status !== "ahead" && comparison.data.status !== "identical")
+          throw new Error("display branch tip is not an owned display commit");
+      }
     }
     let oid;
     try {
