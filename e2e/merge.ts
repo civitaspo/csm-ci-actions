@@ -377,14 +377,14 @@ export const merge: Scenario[] = [
       return data.merged ? data : undefined;
     });
     assert(merged.head.sha === pr.head, `pull request #${pr.number} merged at an unexpected head`);
-    const after = await ctx.gh.graphql<{ repository: { pullRequest: { autoMergeRequest: unknown | null } } }>("query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){autoMergeRequest{enabledAt}}}}", { owner: "civitaspo", name: "testing-csm-ci-client", number: pr.number });
-    assert(after.repository.pullRequest.autoMergeRequest === null, "GitHub auto-merge request remained enabled after merge");
     await until(`successful reservation for pull request #${pr.number}`, async () => {
       const current = await awaitReservation(ctx, pr);
       return terminalStatus(current)?.state === "SUCCESS" ? current : undefined;
     });
     const reservation = await assertReservation(ctx, pr, "SUCCESS");
     if (merged.merged_by?.id === SERVER_BOT_ID) {
+      const after = await ctx.gh.graphql<{ repository: { pullRequest: { autoMergeRequest: unknown | null } } }>("query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){autoMergeRequest{enabledAt}}}}", { owner: "civitaspo", name: "testing-csm-ci-client", number: pr.number });
+      assert(after.repository.pullRequest.autoMergeRequest === null, "GitHub auto-merge request remained enabled after the Server App merged");
       await assertAutomergeComment(ctx, pr, reservation, "merged", /squash-merged/u);
     } else {
       assert(terminalStatus(reservation)?.description?.includes("reason=external-merge"), "external merge was not recorded as such");
