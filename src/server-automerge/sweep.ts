@@ -12,7 +12,8 @@ export function activeSweepReservations(reservations: readonly ReservationRecord
 
 export function terminalRepairReservations(reservations: readonly ReservationRecord[], now: Date): ReservationRecord[] {
   const cutoff = now.getTime() - 3 * 24 * 60 * 60_000;
-  return reservations.filter((record) => record.state.kind === "terminal" && Date.parse(record.state.at) >= cutoff).slice(0, 64);
+  return reservations.filter((record) => record.state.kind === "terminal" && Date.parse(record.state.at) >= cutoff)
+    .sort((a, b) => Date.parse(b.state.kind === "terminal" ? b.state.at : "") - Date.parse(a.state.kind === "terminal" ? a.state.at : "") || b.deploymentId - a.deploymentId).slice(0, 64);
 }
 
 export function installedRepositoryId(repositories: readonly { id: number | bigint; full_name: string }[], name: string): number | undefined {

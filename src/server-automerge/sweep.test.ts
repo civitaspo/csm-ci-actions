@@ -55,8 +55,10 @@ test("terminal repair selects at most 64 reservations terminated within three da
   const active = reservation(2, 2, { kind: "active" });
   const selected = terminalRepairReservations([old, active, ...recent], new Date("2026-10-30T00:00:00.000Z"));
   expect(selected).toHaveLength(64);
-  expect(selected[0]?.deploymentId).toBe(10);
-  expect(selected.at(-1)?.deploymentId).toBe(73);
+  expect(selected[0]?.deploymentId).toBe(79);
+  expect(selected.at(-1)?.deploymentId).toBe(16);
+  const newer = reservation(3, 3, { kind: "terminal", state: "success", at: "2026-10-29T23:00:00.000Z", description: "merged", reason: "merged" });
+  expect(terminalRepairReservations([...recent, newer], new Date("2026-10-30T00:00:00.000Z"))[0]?.deploymentId).toBe(3);
 });
 
 test("unresolved repositories are skipped until expiration, then isolated for server-side expiry", () => {

@@ -37814,31 +37814,45 @@ async function current(args) {
     throw new Error("display pull request identity changed");
   return { record: latest, head: string2().regex(/^[0-9a-f]{40}$/u).parse(pull.head.sha) };
 }
-async function candidates(args) {
-  const raw = await args.client.paginate(args.client.rest.repos.listDeployments, { ...splitRepository(args.repository), environment: ENVIRONMENT2, per_page: 100 });
+async function candidates(args, head) {
+  const raw = [];
+  for (const sha of [head, undefined]) {
+    for (let page = 1;page <= 3; page++) {
+      const response = await args.client.rest.repos.listDeployments({ ...splitRepository(args.repository), environment: ENVIRONMENT2, ...sha ? { sha } : {}, per_page: 100, page });
+      raw.push(...response.data);
+      if (response.data.length < 100)
+        break;
+      if (sha && page === 3)
+        throw new Error("display head lookup exceeded its page limit");
+    }
+  }
+  const seen = new Set;
   return raw.flatMap((value) => {
     const parsed = Deployment.safeParse(value);
     if (!parsed.success)
       return [];
     const deployment = parsed.data;
     const payload = parsePayload2(deployment.payload);
+    if (seen.has(deployment.id))
+      return [];
+    seen.add(deployment.id);
     return deployment.environment === ENVIRONMENT2 && deployment.task === TASK2 && deployment.creator?.type === "Bot" && deployment.creator.id === args.serverBotId && payload?.server_repository === args.serverRepository && payload.reservation_deployment_id === args.record.deploymentId ? [deployment] : [];
   }).sort((a, b) => a.id - b.id);
 }
 async function reconcileAutomergeDisplay(args) {
   let observed = await current(args);
-  let deployments = await candidates(args);
+  let deployments = await candidates(args, observed.head);
   let matching = deployments.filter((deployment) => deployment.sha === observed.head);
   if (!matching.length) {
     observed = await current(args);
     try {
       await args.client.rest.repos.createDeployment({ ...splitRepository(args.repository), ref: observed.head, task: TASK2, environment: ENVIRONMENT2, auto_merge: false, required_contexts: [], transient_environment: false, production_environment: false, payload: { server_repository: args.serverRepository, reservation_deployment_id: args.record.deploymentId } });
     } catch (error) {
-      deployments = await candidates(args);
+      deployments = await candidates(args, observed.head);
       if (!deployments.some((deployment) => deployment.sha === observed.head))
         throw error;
     }
-    deployments = await candidates(args);
+    deployments = await candidates(args, observed.head);
     matching = deployments.filter((deployment) => deployment.sha === observed.head);
     if (!matching.length)
       throw new Error("created client display is not yet observable");
@@ -37852,6 +37866,8 @@ async function reconcileAutomergeDisplay(args) {
     if (trusted[0]?.state === desired && trusted[0].log_url === args.runUrl && trusted[0].environment_url === args.runUrl)
       continue;
     observed = await current(args);
+    if (observed.head !== canonical?.sha)
+      throw new Error("display head changed during reconciliation");
     const finalState = deployment.id === canonical?.id && deployment.sha === observed.head ? displayState(observed.record, args.serverBotId) : "inactive";
     try {
       await args.client.rest.repos.createDeploymentStatus({ ...splitRepository(args.repository), deployment_id: deployment.id, state: finalState, log_url: args.runUrl, environment_url: args.runUrl, auto_inactive: false });
@@ -37862,16 +37878,21 @@ async function reconcileAutomergeDisplay(args) {
         throw error;
     }
   }
+  if ((await current(args)).head !== canonical?.sha)
+    throw new Error("display head changed during reconciliation");
   return canonical?.id;
 }
 async function syncAutomergeDisplay(args) {
   if (!args.client)
-    return { kind: "unavailable" };
+    return { kind: "unavailable", reason: "client deployment token unavailable" };
   try {
     const deploymentId = await reconcileAutomergeDisplay({ ...args, client: args.client });
     return deploymentId ? { kind: "synced", deploymentId } : { kind: "synced" };
-  } catch {
-    return { kind: "unavailable" };
+  } catch (error) {
+    const safeMessages = ["display reservation no longer exists", "display pull request identity changed", "display head lookup exceeded its page limit", "created client display is not yet observable", "display head changed during reconciliation"];
+    const message = error instanceof Error ? error.message : "";
+    const status = typeof error === "object" && error !== null && "status" in error && typeof error.status === "number" ? error.status : undefined;
+    return { kind: "unavailable", reason: safeMessages.includes(message) ? message : status ? `GitHub request failed (HTTP ${status})` : "GitHub request or response failed" };
   }
 }
 
@@ -37913,7 +37934,7 @@ async function main() {
     const displayToken = getInput("display-deployments-token");
     const display = await syncAutomergeDisplay({ server: ctx.deployments, reader: ctx.server, ...displayToken ? { client: github(displayToken) } : {}, serverRepository, repository: ctx.repository, serverBotId: config.apps.server_bot_id, record: result.reservation, runUrl, now: ctx.now() });
     if (display.kind === "unavailable")
-      warning("Client display synchronization unavailable");
+      warning(`Client display synchronization unavailable: ${display.reason}`);
     await summarizeReservation({ record: result.reservation, serverRepository, serverUrl: ctx.serverRun.serverUrl, runUrl, state, displayFailure: Boolean(result.displayFailure), displaySyncFailure: display.kind === "unavailable", ...display.kind === "synced" && display.deploymentId ? { displayDeploymentId: display.deploymentId } : {} });
   }
   info(`merge command ${result.kind}`);

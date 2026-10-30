@@ -38,7 +38,7 @@ async function main(): Promise<void> {
     const runUrl = `${ctx.serverRun.serverUrl}/${serverRepository}/actions/runs/${ctx.serverRun.id}/attempts/${ctx.serverRun.attempt}`;
     const displayToken = core.getInput("display-deployments-token");
     const display = await syncAutomergeDisplay({ server: ctx.deployments, reader: ctx.server, ...(displayToken ? { client: github(displayToken) } : {}), serverRepository, repository: ctx.repository, serverBotId: config.apps.server_bot_id, record: result.reservation, runUrl, now: ctx.now() });
-    if (display.kind === "unavailable") core.warning("Client display synchronization unavailable");
+    if (display.kind === "unavailable") core.warning(`Client display synchronization unavailable: ${display.reason}`);
     await summarizeReservation({ record: result.reservation, serverRepository, serverUrl: ctx.serverRun.serverUrl, runUrl, state, displayFailure: Boolean(result.displayFailure), displaySyncFailure: display.kind === "unavailable", ...(display.kind === "synced" && display.deploymentId ? { displayDeploymentId: display.deploymentId } : {}) });
   }
   core.info(`merge command ${result.kind}`);

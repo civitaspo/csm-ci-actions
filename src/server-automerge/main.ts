@@ -111,8 +111,8 @@ async function main(): Promise<void> {
       const runUrl = `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`;
       const readToken = core.getInput("server-token");
       const displayToken = core.getInput("display-deployments-token");
-      const display = readToken ? await syncAutomergeDisplay({ server: deployments, reader: github(readToken), ...(displayToken ? { client: github(displayToken) } : {}), serverRepository, repository, serverBotId: config.apps.server_bot_id, record, runUrl, now: new Date() }) : { kind: "unavailable" as const };
-      if (display.kind === "unavailable") core.warning("Client display synchronization unavailable");
+      const display = readToken ? await syncAutomergeDisplay({ server: deployments, reader: github(readToken), ...(displayToken ? { client: github(displayToken) } : {}), serverRepository, repository, serverBotId: config.apps.server_bot_id, record, runUrl, now: new Date() }) : { kind: "unavailable" as const, reason: "client read token unavailable" };
+      if (display.kind === "unavailable") core.warning(`Client display synchronization unavailable: ${display.reason}`);
       await summarizeReservation({ record, repository, serverRepository, serverUrl: serverRun.serverUrl, runUrl, state: "error: evaluation failed", displaySyncFailure: display.kind === "unavailable", ...(display.kind === "synced" && display.deploymentId ? { displayDeploymentId: display.deploymentId } : {}) });
     }
     if (record && record.state.kind === "terminal") {
@@ -141,7 +141,7 @@ async function main(): Promise<void> {
     const runUrl = `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`;
     const token = core.getInput("display-deployments-token");
     const display = await syncAutomergeDisplay({ server: deployments, reader: server, ...(token ? { client: github(token) } : {}), serverRepository, repository, serverBotId: config.apps.server_bot_id, record, runUrl, now: new Date() });
-    if (display.kind === "unavailable") core.warning("Client display synchronization unavailable");
+    if (display.kind === "unavailable") core.warning(`Client display synchronization unavailable: ${display.reason}`);
     await summarizeReservation({ record, repository, serverRepository, serverUrl: serverRun.serverUrl, runUrl, state, displaySyncFailure: display.kind === "unavailable", ...(display.kind === "synced" && display.deploymentId ? { displayDeploymentId: display.deploymentId } : {}) });
   };
   if (mode === "repair") {

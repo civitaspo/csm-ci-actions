@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { github } from "./github.ts";
 import { fakeFetch } from "./testing.ts";
-import { reconcileAutomergeDisplay } from "./automerge-display.ts";
+import { reconcileAutomergeDisplay, syncAutomergeDisplay } from "./automerge-display.ts";
 import { type ReservationRecord } from "./automerge-github.ts";
 
 const sha = "a".repeat(40);
@@ -15,15 +15,17 @@ function deployment(id: number, ref: string, creator = 3000, data: unknown = cor
   return { id, sha: ref, task: "csm-ci:automerge-display", environment: "csm-ci-automerge-display", payload: data, creator: { id: creator, type: "Bot" } };
 }
 
-function harness(options: { deployments: unknown[]; deploymentsThen?: unknown[][]; createStatus?: number; statusError?: number; statusThen?: unknown[][]; terminal?: string; terminalThen?: string[]; pullId?: number; pullNodeId?: string }) {
+function harness(options: { deployments: unknown[]; deploymentsThen?: unknown[][]; createStatus?: number; statusError?: number; statusThen?: unknown[][]; terminal?: string; terminalThen?: string[]; pullId?: number; pullNodeId?: string; headsThen?: readonly string[] }) {
   const response = (state?: string) => {
     const status = state ? [{ id: "S_1", state, description: "csm-ci:automerge:reason=cancelled| cancelled", createdAt: "2026-10-29T00:00:01.000Z", creator: { __typename: "Bot", databaseId: 3000 } }] : [];
     return { data: { repository: { deployments: { nodes: [{ id: "D_77", databaseId: 77, task: "csm-ci:automerge", payload, createdAt: payload.accepted_at, creator: { __typename: "Bot", databaseId: 3000 }, statuses: { nodes: status, pageInfo: { hasNextPage: false } } }], pageInfo: { hasNextPage: false, endCursor: null } } } } };
   };
   const server = fakeFetch([{ method: "POST", path: "/graphql", body: response(options.terminal), ...(options.terminalThen ? { then: options.terminalThen.map((state) => response(state)) } : {}) }]);
-  const reader = fakeFetch([{ method: "GET", path: "/repos/owner/client/pulls/12", body: { node_id: options.pullNodeId ?? "PR_12", head: { sha }, base: { repo: { id: options.pullId ?? 42 } } } }]);
+  const pull = (head: string) => ({ node_id: options.pullNodeId ?? "PR_12", head: { sha: head }, base: { repo: { id: options.pullId ?? 42 } } });
+  const reader = fakeFetch([{ method: "GET", path: "/repos/owner/client/pulls/12", body: pull(sha), ...(options.headsThen ? { then: options.headsThen.map(pull) } : {}) }]);
   const all = [...options.deployments, ...(options.deploymentsThen?.flat() ?? [])];
-  const routes = [{ method: "GET", path: "/repos/owner/client/deployments", body: options.deployments, ...(options.deploymentsThen ? { then: options.deploymentsThen } : {}) }, { method: "POST", path: "/repos/owner/client/deployments", status: options.createStatus ?? 201, body: options.createStatus ? { message: "timeout" } : { id: 2 } }, ...all.flatMap((value) => {
+  const responses = [options.deployments, ...(options.deploymentsThen ?? [])].flatMap((items) => [items, items]);
+  const routes = [{ method: "GET", path: "/repos/owner/client/deployments", body: responses[0], then: responses.slice(1) }, { method: "POST", path: "/repos/owner/client/deployments", status: options.createStatus ?? 201, body: options.createStatus ? { message: "timeout" } : { id: 2 } }, ...all.flatMap((value) => {
     if (typeof value !== "object" || value === null || !("id" in value)) return [];
     return [{ method: "GET", path: `/repos/owner/client/deployments/${value.id}/statuses`, body: [], ...(options.statusThen ? { then: options.statusThen } : {}) }, { method: "POST", path: `/repos/owner/client/deployments/${value.id}/statuses`, status: options.statusError ?? 201, body: options.statusError ? { message: "timeout" } : { id: 10 } }];
   })];
@@ -57,6 +59,37 @@ test("reconstructs a missing terminal display during repair", async () => {
 test("reports failure if a created display is not visible for reconciliation", async () => {
   const h = harness({ deployments: [] });
   await expect(reconcileAutomergeDisplay(h.args)).rejects.toThrow("created client display is not yet observable");
+});
+
+test("bounds a crowded head lookup without creating a duplicate", async () => {
+  const h = harness({ deployments: [] });
+  const fetch = Object.assign(async (input: Parameters<typeof globalThis.fetch>[0], init?: Parameters<typeof globalThis.fetch>[1]) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    if (url.pathname === "/repos/owner/client/deployments" && (init?.method ?? "GET") === "GET") {
+      expect(url.searchParams.get("sha")).toBe(sha);
+      return Response.json(Array.from({ length: 100 }, (_, index) => deployment(index + 1, sha, 9)));
+    }
+    return h.client(input, init);
+  }, { preconnect: globalThis.fetch.preconnect });
+  const result = await syncAutomergeDisplay({ ...h.args, client: github("display", fetch) });
+  expect(result).toEqual({ kind: "unavailable", reason: "display head lookup exceeded its page limit" });
+  expect(h.client.calls.some((call) => call.startsWith("POST /repos/owner/client/deployments"))).toBe(false);
+});
+
+test("limits old-head discovery to the three newest environment pages", async () => {
+  const h = harness({ deployments: [deployment(2, sha)] });
+  const pages: number[] = [];
+  const fetch = Object.assign(async (input: Parameters<typeof globalThis.fetch>[0], init?: Parameters<typeof globalThis.fetch>[1]) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    if (url.pathname === "/repos/owner/client/deployments" && (init?.method ?? "GET") === "GET") {
+      if (url.searchParams.has("sha")) return Response.json([deployment(2, sha)]);
+      pages.push(Number(url.searchParams.get("page")));
+      return Response.json(Array.from({ length: 100 }, (_, index) => deployment(1000 + index, old, 9)));
+    }
+    return h.client(input, init);
+  }, { preconnect: globalThis.fetch.preconnect });
+  expect(await reconcileAutomergeDisplay({ ...h.args, client: github("display", fetch) })).toBe(2);
+  expect(pages).toEqual([1, 2, 3]);
 });
 
 test("recovers an ambiguous deployment creation from the correlated Server Bot record", async () => {
@@ -97,6 +130,12 @@ test("rereads the server state before writing so cancellation is not displayed a
   await reconcileAutomergeDisplay(h.args);
   const write = h.client.requests.find((request) => request.method === "POST");
   expect(JSON.parse(write?.body ?? "{}").state).toBe("inactive");
+});
+
+test.each([{ headsThen: [old], writes: 0 }, { headsThen: [sha, old], writes: 0 }, { headsThen: [sha, sha, old], writes: 1 }])("reports a head change during synchronization instead of reporting the old display as current (%j)", async ({ headsThen, writes }) => {
+  const h = harness({ deployments: [deployment(2, sha)], headsThen });
+  expect(await syncAutomergeDisplay(h.args)).toEqual({ kind: "unavailable", reason: "display head changed during reconciliation" });
+  expect(h.client.requests.filter((request) => request.method === "POST")).toHaveLength(writes);
 });
 
 test("does not write a display for a changed immutable repository identity", async () => {
