@@ -238,9 +238,9 @@ gh api repos/<owner>/<repo>/rulesets/<id> | jq '{name, target, enforcement, cond
 Use this when csm-ci itself cannot merge, for example when the server's label workflow fails for every request so no `/approve` or `/merge` can run. Each bypass needs the repository owner's explicit authorization and covers one merge. The same procedure applies to the server repository itself.
 
 1. Confirm that the fix PR's own checks pass and that it is the smallest change that restores csm-ci.
-2. Stop repo-settings from touching the repository, because a scheduled run re-activates `integrity`, `review-and-checks` and `release-tags`. Disable the workflow with `gh workflow disable csm-ci-repo-settings -R <owner>/<server-repo>`, or uninstall the Server App from the repository.
+2. Stop repo-settings from touching the repository, because a scheduled run re-activates `integrity`, `review-and-checks`, `release-tags` and, on the server repository, `automerge-display`. Disable the workflow with `gh workflow disable csm-ci-repo-settings -R <owner>/<server-repo>`, or uninstall the Server App from the repository.
 3. Save every ruleset you will touch with `gh api repos/<owner>/<repo>/rulesets/<id>`.
-4. Disable only the rulesets that block the merge, usually `controlled-merges` and `review-and-checks`, with the command above. Keep `integrity` and `release-tags` active.
+4. Disable only the rulesets that block the merge, usually `controlled-merges` and `review-and-checks`, with the command above. Keep `integrity` and `release-tags` active. The server's `automerge-display` can also stay active because it protects only the display branch.
 5. Merge with `gh pr merge <number> --squash --match-head-commit <reviewed-head-sha>`. Restore `enforcement: active` right after, even if the merge fails.
 6. Compare each restored ruleset with its saved copy field by field, and confirm that the merge commit is signed and its tree equals the reviewed head.
 7. Re-enable the repo-settings workflow, then prove recovery with a real request such as `/approve` on an open PR.
