@@ -27,7 +27,7 @@ Follow this workflow for changes to csm-ci-actions and its live testing environm
 
 ## Verify before opening a pull request
 
-Use the tool versions in `mise.toml` and run all required local checks:
+For documentation-only changes, review the diff and check formatting; do not run tests or build tooling. For all other changes, use the tool versions in `mise.toml` and run all required local checks:
 
 ```sh
 mise install
