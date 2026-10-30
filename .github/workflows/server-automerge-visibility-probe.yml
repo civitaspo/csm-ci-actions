@@ -12,6 +12,12 @@ on:
       client-sha:
         type: string
         required: true
+      old-client-sha:
+        type: string
+        required: false
+      display-sha:
+        type: string
+        required: false
       probe-id:
         type: string
         required: true
@@ -41,15 +47,23 @@ jobs:
           MODE: ${{ inputs.mode }}
           PULL_NUMBER: ${{ inputs.pull-number }}
           CLIENT_SHA: ${{ inputs.client-sha }}
+          OLD_CLIENT_SHA: ${{ inputs.old-client-sha }}
+          DISPLAY_SHA: ${{ inputs.display-sha }}
           PROBE_ID: ${{ inputs.probe-id }}
           SERVER_TIP: ${{ inputs.server-tip }}
         run: |
           test "$GITHUB_REPOSITORY" = "civitaspo/testing-csm-ci-server"
-          [[ "$MODE" == create || "$MODE" == cleanup ]]
+          [[ "$MODE" == create || "$MODE" == refresh || "$MODE" == finish || "$MODE" == cleanup ]]
           [[ "$PULL_NUMBER" =~ ^[1-9][0-9]{0,8}$ ]]
           [[ "$CLIENT_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$PROBE_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]
           if [[ "$MODE" == cleanup && -n "$SERVER_TIP" ]]; then [[ "$SERVER_TIP" =~ ^[0-9a-f]{40}$ ]]; fi
+          if [[ "$MODE" == refresh || "$MODE" == finish ]]; then
+            [[ "$OLD_CLIENT_SHA" =~ ^[0-9a-f]{40}$ && "$DISPLAY_SHA" =~ ^[0-9a-f]{40}$ ]]
+            actual="$(gh api "repos/civitaspo/testing-csm-ci-client/pulls/$PULL_NUMBER" --jq '.head.sha')"
+            state="$(gh api "repos/civitaspo/testing-csm-ci-client/pulls/$PULL_NUMBER" --jq '.state')"
+            test "$actual" = "$DISPLAY_SHA" && test "$state" = open
+          fi
           if [[ "$MODE" == create ]]; then
             actual="$(gh api "repos/civitaspo/testing-csm-ci-client/pulls/$PULL_NUMBER" --jq '.head.sha')"
             state="$(gh api "repos/civitaspo/testing-csm-ci-client/pulls/$PULL_NUMBER" --jq '.state')"
@@ -92,7 +106,7 @@ jobs:
           permission-contents: write
           permission-deployments: write
       - id: client-token
-        if: inputs.mode == 'create'
+        if: inputs.mode == 'create' || inputs.mode == 'refresh' || inputs.mode == 'finish'
         continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
@@ -117,6 +131,8 @@ jobs:
           MODE: ${{ inputs.mode }}
           PULL_NUMBER: ${{ inputs.pull-number }}
           CLIENT_SHA: ${{ inputs.client-sha }}
+          OLD_CLIENT_SHA: ${{ inputs.old-client-sha }}
+          DISPLAY_SHA: ${{ inputs.display-sha }}
           PROBE_ID: ${{ inputs.probe-id }}
           SERVER_TIP: ${{ inputs.server-tip }}
           SERVER_TOKEN: ${{ steps.server-token.outputs.token }}

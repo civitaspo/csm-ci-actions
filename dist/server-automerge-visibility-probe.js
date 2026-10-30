@@ -36947,9 +36947,9 @@ function assert2(condition, message) {
     throw new Error(message);
 }
 function parseMode(value) {
-  if (value === "create" || value === "cleanup")
+  if (value === "create" || value === "refresh" || value === "finish" || value === "cleanup")
     return value;
-  throw new Error("mode must be create or cleanup");
+  throw new Error("mode must be create, refresh, finish, or cleanup");
 }
 function parseInteger(value, name) {
   if (!/^[1-9][0-9]{0,8}$/u.test(value))
@@ -37056,6 +37056,25 @@ async function createStatus(gh, deployment, server, runUrl) {
     auto_inactive: false
   });
 }
+async function updateClientDisplay(clientRead, client, pullNumber, oldSha, newSha, probeId, finish) {
+  await ensureOpenClientPull(clientRead, pullNumber, newSha);
+  const deployments = await listProbeDeployments(client, CLIENT_REPOSITORY, CLIENT_ENVIRONMENT, probeId);
+  const config = await loadCurrentServerConfig(github(required2("SERVER_TOKEN")), SERVER_REPOSITORY, "csm-ci.yaml");
+  const previous = deployments.find((deployment) => deployment.sha === oldSha);
+  assert2(previous && deployments.filter((deployment) => deployment.sha === oldSha).length === 1, "expected one owned client deployment at the previous head");
+  assert2(previous.creator?.type === "Bot" && previous.creator.id === config.apps.server_bot_id, "previous client deployment has a foreign creator");
+  const { owner, repo } = splitRepository(CLIENT_REPOSITORY);
+  if (finish) {
+    await client.rest.repos.createDeploymentStatus({ owner, repo, deployment_id: previous.id, state: "success", description: `automerge visibility probe merged ${probeId}`, log_url: `https://github.com/${SERVER_REPOSITORY}/actions/runs/${required2("RUN_ID")}`, auto_inactive: false });
+  } else {
+    await client.rest.repos.createDeploymentStatus({ owner, repo, deployment_id: previous.id, state: "inactive", description: `automerge visibility probe previous head ${probeId}`, auto_inactive: false });
+    const deployment = await createDeployment(client, { repository: CLIENT_REPOSITORY, environment: CLIENT_ENVIRONMENT, sha: newSha, probeId, pullNumber, serverBotId: config.apps.server_bot_id });
+    await createStatus(client, deployment, false, `https://github.com/${SERVER_REPOSITORY}/actions/runs/${required2("RUN_ID")}`);
+    notice(`client deployment ${deployment.id} for PR #${pullNumber} uses ${newSha} with queued status; previous ${oldSha} is inactive`);
+  }
+  if (finish)
+    notice(`client deployment ${previous.id} for PR #${pullNumber} uses ${newSha} with success status`);
+}
 function parseProbeId(value) {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value))
     throw new Error("probe-id must be a UUID v4");
@@ -37152,7 +37171,7 @@ async function cleanup(server, client, pullNumber, clientSha, probeId, expectedT
     await removeProbeDeployments(server, SERVER_REPOSITORY, SERVER_ENVIRONMENT, probeId, pullNumber, expectedTip, config.apps.server_bot_id);
   }
   if (process.env.CLIENT_TOKEN_RESULT === "success" && process.env.CLIENT_TOKEN) {
-    await removeProbeDeployments(client, CLIENT_REPOSITORY, CLIENT_ENVIRONMENT, probeId, pullNumber, clientSha, config.apps.server_bot_id);
+    await removeProbeDeployments(client, CLIENT_REPOSITORY, CLIENT_ENVIRONMENT, probeId, pullNumber, undefined, config.apps.server_bot_id);
   } else {
     warning("client cleanup skipped because the Server App client Deployments token is unavailable");
   }
@@ -37195,10 +37214,13 @@ async function main() {
   const clientToken = process.env.CLIENT_TOKEN;
   const server = github(serverToken ?? "");
   const client = github(clientToken ?? "");
-  if (mode === "create") {
+  if (mode === "create" || mode === "refresh" || mode === "finish") {
     assert2(process.env.SERVER_TOKEN_RESULT === "success" && serverToken, "Server App Contents and Deployments token was not issued");
     assert2(process.env.CLIENT_READ_TOKEN_RESULT === "success" && process.env.CLIENT_READ_TOKEN, "Server App client pull request read token was not issued; no resources were created");
-    await createProbe(server, github(required2("CLIENT_READ_TOKEN")), client, pullNumber, clientSha, probeId);
+    if (mode === "create")
+      await createProbe(server, github(required2("CLIENT_READ_TOKEN")), client, pullNumber, clientSha, probeId);
+    else
+      await updateClientDisplay(github(required2("CLIENT_READ_TOKEN")), client, pullNumber, required2("OLD_CLIENT_SHA"), required2("DISPLAY_SHA"), probeId, mode === "finish");
     return;
   }
   assert2(process.env.SERVER_TOKEN_RESULT === "success" && serverToken, "Server App cleanup token was not issued");

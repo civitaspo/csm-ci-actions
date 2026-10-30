@@ -174,6 +174,24 @@ async function probeDeployments(ctx: Parameters<Scenario["run"]>[0], repository:
   });
 }
 
+async function observeProbeStatuses(ctx: Parameters<Scenario["run"]>[0], probeId: string, expected: readonly { sha: string; state: string }[], windowMs = 60_000): Promise<void> {
+  const deadline = Date.now() + windowMs;
+  while (Date.now() < deadline) {
+    const deployments = await probeDeployments(ctx, CLIENT, CLIENT_PROBE_ENVIRONMENT, probeId);
+    const matches = await Promise.all(expected.map(async ({ sha, state }) => {
+      const deployment = deployments.find((item) => item.sha === sha);
+      if (!deployment) return false;
+      const statuses = await ctx.gh.paginate(ctx.gh.rest.repos.listDeploymentStatuses, {
+        owner: "civitaspo", repo: "testing-csm-ci-client", deployment_id: Number(deployment.id), per_page: 100,
+      });
+      return statuses[0]?.state === state;
+    }));
+    if (matches.every(Boolean)) return;
+    await sleep(Math.min(5_000, Math.max(0, deadline - Date.now())));
+  }
+  throw new Error(`timed out after ${windowMs}ms waiting for probe deployment statuses ${expected.map(({ sha, state }) => `${sha}:${state}`).join(", ")}`);
+}
+
 async function reserve(ctx: Parameters<Scenario["run"]>[0], pr: Pr): Promise<{ comment: Awaited<ReturnType<typeof postComment>>; record: AutomergeRecord }> {
   const comment = await postComment(ctx, pr, "/merge");
   const info = fromComment(pr, comment);
@@ -683,6 +701,7 @@ export const merge: Scenario[] = [
     const probeId = visibilityProbeId(ctx);
     const branch = `codex/automerge-visibility-probe-${probeId}`;
     let serverTip: string | undefined;
+    let currentHead = pr.head;
     try {
       const created = await dispatch(ctx, SERVER, VISIBILITY_PROBE_WORKFLOW, {
         mode: "create", "pull-number": String(pr.number), "client-sha": pr.head, "probe-id": probeId,
@@ -690,13 +709,35 @@ export const merge: Scenario[] = [
       assert(created.conclusion === "success", `visibility probe creation concluded ${created.conclusion} (${created.html_url})`);
       const { data: ref } = await ctx.gh.rest.git.getRef({ ...splitRepository(SERVER), ref: `heads/${branch}` });
       serverTip = ref.object.sha;
-      const serverDeployments = await probeDeployments(ctx, SERVER, SERVER_PROBE_ENVIRONMENT, probeId);
-      assert(serverDeployments.length === 1 && serverDeployments[0]!.sha === serverTip, `expected one Server App deployment at ${serverTip}, found ${serverDeployments.length}`);
+      await until(`Server App probe deployment for ${serverTip}`, async () => {
+        const current = await probeDeployments(ctx, SERVER, SERVER_PROBE_ENVIRONMENT, probeId);
+        assert(current.length <= 1, `expected at most one Server App deployment, found ${current.length}`);
+        return current.length === 1 && current[0]!.sha === serverTip ? current : undefined;
+      });
       const clientDeployments = await probeDeployments(ctx, CLIENT, CLIENT_PROBE_ENVIRONMENT, probeId);
-      assert(clientDeployments.length <= 1 && clientDeployments.every((deployment) => deployment.sha === pr.head), "client display deployments do not match the pull request head");
-      console.log(`visibility probe observation window: PR ${CLIENT}#${pr.number}; server environment https://github.com/${SERVER}/deployments/${SERVER_PROBE_ENVIRONMENT}; server deployment ${serverDeployments[0]!.id}; client environment https://github.com/${CLIENT}/deployments/${CLIENT_PROBE_ENVIRONMENT}; client deployment ${clientDeployments[0]?.id ?? "unavailable"}; workflow ${created.html_url}; e2e lock remains held for 120 seconds`);
-      await sleep(120_000);
-      assert(clientDeployments.length === 1, `Server App client Deployments write is unavailable or no display deployment was created (${created.html_url})`);
+      console.log(`visibility probe initial observation: PR ${CLIENT}#${pr.number}; queued client deployment ${clientDeployments[0]?.id ?? "unavailable"}; workflow ${created.html_url}; polling for 60 seconds`);
+      await observeProbeStatuses(ctx, probeId, [{ sha: pr.head, state: "queued" }]);
+      const visibleClientDeployments = await probeDeployments(ctx, CLIENT, CLIENT_PROBE_ENVIRONMENT, probeId);
+      assert(visibleClientDeployments.length === 1 && visibleClientDeployments[0]!.sha === pr.head, `expected one client display deployment at ${pr.head} after status confirmation (${created.html_url})`);
+
+      currentHead = await pushSignedCommit(ctx, pr, currentHead);
+      const refreshed = await dispatch(ctx, SERVER, VISIBILITY_PROBE_WORKFLOW, {
+        mode: "refresh", "pull-number": String(pr.number), "client-sha": pr.head, "old-client-sha": pr.head,
+        "display-sha": currentHead, "probe-id": probeId,
+      });
+      assert(refreshed.conclusion === "success", `visibility probe refresh concluded ${refreshed.conclusion} (${refreshed.html_url})`);
+      console.log(`visibility probe changed-head observation: PR ${CLIENT}#${pr.number}; old SHA ${pr.head} inactive; new SHA ${currentHead} queued; workflow ${refreshed.html_url}; polling for 60 seconds`);
+      await observeProbeStatuses(ctx, probeId, [{ sha: pr.head, state: "inactive" }, { sha: currentHead, state: "queued" }]);
+      const changedHeadDeployments = await probeDeployments(ctx, CLIENT, CLIENT_PROBE_ENVIRONMENT, probeId);
+      assert(changedHeadDeployments.some((deployment) => deployment.sha === pr.head) && changedHeadDeployments.some((deployment) => deployment.sha === currentHead), "expected display deployments for both client head SHAs");
+
+      const finished = await dispatch(ctx, SERVER, VISIBILITY_PROBE_WORKFLOW, {
+        mode: "finish", "pull-number": String(pr.number), "client-sha": pr.head, "old-client-sha": currentHead,
+        "display-sha": currentHead, "probe-id": probeId,
+      });
+      assert(finished.conclusion === "success", `visibility probe terminal status concluded ${finished.conclusion} (${finished.html_url})`);
+      console.log(`visibility probe terminal observation: PR ${CLIENT}#${pr.number}; new SHA ${currentHead} success; workflow ${finished.html_url}; polling for 60 seconds`);
+      await observeProbeStatuses(ctx, probeId, [{ sha: pr.head, state: "inactive" }, { sha: currentHead, state: "success" }]);
     } finally {
       if (!serverTip) {
         try {

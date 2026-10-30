@@ -7,7 +7,7 @@ on:
       mode:
         description: Create an isolated probe or remove its owned resources.
         type: choice
-        options: [create, cleanup]
+        options: [create, refresh, finish, cleanup]
         required: true
       pull-number:
         description: Open testing client pull request used by the probe.
@@ -17,6 +17,14 @@ on:
         description: Current head SHA of the testing client pull request.
         type: string
         required: true
+      old-client-sha:
+        description: Previously displayed client head SHA.
+        type: string
+        required: false
+      display-sha:
+        description: Updated client head SHA for refresh or finish.
+        type: string
+        required: false
       probe-id:
         description: UUID v4 used to identify this probe's resources.
         type: string
@@ -42,6 +50,8 @@ jobs:
       mode: ${{ inputs.mode }}
       pull-number: ${{ inputs.pull-number }}
       client-sha: ${{ inputs.client-sha }}
+      old-client-sha: ${{ inputs.old-client-sha }}
+      display-sha: ${{ inputs.display-sha }}
       probe-id: ${{ inputs.probe-id }}
       server-tip: ${{ inputs.server-tip }}
     secrets:
