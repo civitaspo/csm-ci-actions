@@ -2,6 +2,26 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.6.0] - 2026-10-31
+
+### 🚀 Features
+
+- *(merge)* Identify automerge reservations in deployments ([#212](https://github.com/civitaspo/csm-ci-actions/pull/212))
+- *(automerge)* Project reservation status to clients ([#213](https://github.com/civitaspo/csm-ci-actions/pull/213))
+
+### 📚 Documentation
+
+- *(merge)* Grant sweep caller contents read ([#206](https://github.com/civitaspo/csm-ci-actions/pull/206))
+- *(release)* Fix attestation signer workflow ([#208](https://github.com/civitaspo/csm-ci-actions/pull/208))
+- *(merge)* Specify automerge deployment visibility ([#210](https://github.com/civitaspo/csm-ci-actions/pull/210))
+- Skip tests for documentation-only changes ([#211](https://github.com/civitaspo/csm-ci-actions/pull/211))
+- *(agents)* Allow narrowing e2e suites when impact is shown to be closed ([#216](https://github.com/civitaspo/csm-ci-actions/pull/216))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(deps)* Update civitaspo/csm-ci-actions action to v0.5.0 ([#193](https://github.com/civitaspo/csm-ci-actions/pull/193))
+- *(deps)* Update jdx/jactionlint action to v2.4.0 ([#196](https://github.com/civitaspo/csm-ci-actions/pull/196))
+
 ## [0.5.0] - 2026-10-29
 
 ### 🚀 Features
