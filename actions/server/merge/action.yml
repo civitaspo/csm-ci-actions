@@ -21,6 +21,8 @@ inputs:
     required: true
   display-commit-token:
     description: Optional server-scoped Contents write token for display commits.
+  display-deployments-token:
+    description: Optional client-scoped Deployments write token for display projection.
   repository:
     description: owner/repo of the client repository.
     required: true

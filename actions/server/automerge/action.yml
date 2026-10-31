@@ -16,6 +16,9 @@ inputs:
   server-token:
     description: Server App token with contents, pull requests, checks, and issues read access on the client repository.
     required: false
+  display-deployments-token:
+    description: Server App token with deployments write access on the client repository.
+    required: false
   notification-token:
     description: Server App token with issues and pull requests write access on the client repository.
     required: false
@@ -42,6 +45,10 @@ outputs:
     description: JSON array of active reservation repository, pull_number, and deployment_id values.
   count:
     description: Number of reservations returned by list mode.
+  repair-matrix:
+    description: JSON array of terminal reservations selected for display repair.
+  repair-count:
+    description: Number of terminal reservations selected for display repair.
   ready:
     description: true when the reservation is ready to merge.
   head:

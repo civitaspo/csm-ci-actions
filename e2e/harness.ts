@@ -41,8 +41,8 @@ export function assert(ok: unknown, message: string): asserts ok {
   if (!ok) throw new Error(message);
 }
 
-export async function until<T>(what: string, fn: () => Promise<T | undefined>): Promise<T> {
-  const deadline = Date.now() + TIMEOUT_MS;
+export async function until<T>(what: string, fn: () => Promise<T | undefined>, timeoutMs = TIMEOUT_MS): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
   for (;;) {
     const value = await fn();
     if (value !== undefined) return value;
@@ -125,14 +125,14 @@ export async function dispatch(ctx: Ctx, repository: string, workflow: string, i
     if (correlation) return findRecentRunByTitle(pages(), since, `${workflow.replace(/\.yml$/, "")} ${correlation}`);
     return (await recentItems(pages(), since))[0];
   });
-  return waitRun(ctx, repository, run.id);
+  return waitRun(ctx, repository, run.id, workflow === "csm-ci-automerge.yml" ? 30 * 60_000 : TIMEOUT_MS);
 }
 
-export async function waitRun(ctx: Ctx, repository: string, id: number): Promise<Run> {
+export async function waitRun(ctx: Ctx, repository: string, id: number, timeoutMs = TIMEOUT_MS): Promise<Run> {
   const run = await until(`run ${id}`, async () => {
     const { data } = await ctx.gh.rest.actions.getWorkflowRun({ ...splitRepository(repository), run_id: id });
     return data.status === "completed" ? data : undefined;
-  });
+  }, timeoutMs);
   ctx.urls.push(run.html_url);
   return run;
 }

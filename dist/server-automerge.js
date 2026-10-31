@@ -37143,6 +37143,17 @@ async function findReservationsForPull(args) {
   const { repositoryId, pullNumber, ...listArgs } = args;
   return (await listReservations(listArgs)).filter((r) => r.payload.repository_id === repositoryId && r.payload.pull_number === pullNumber);
 }
+async function getReservation(args) {
+  const { owner, repo } = splitRepository(args.serverRepository);
+  const { data } = await args.server.rest.repos.getDeployment({ owner, repo, deployment_id: args.record.deploymentId });
+  const deployment = CreatedDeployment.parse(data);
+  const payload = parsePayload(data.payload);
+  if (deployment.id !== args.record.deploymentId || deployment.node_id !== args.record.nodeId || deployment.task !== TASK || data.environment !== ENVIRONMENT || deployment.creator?.type !== "Bot" || deployment.creator.id !== args.serverBotId || JSON.stringify(payload.success ? payload.data : null) !== JSON.stringify(ReservationPayloadSchema.parse(args.record.payload)))
+    throw new Error("display reservation no longer exists");
+  const raw = await args.server.paginate(args.server.rest.repos.listDeploymentStatuses, { owner, repo, deployment_id: deployment.id, per_page: 100 });
+  const statuses = raw.map((value) => mapStatus(RestStatus.parse(value)));
+  return { ...args.record, statuses, state: reservationState({ statuses, serverBotId: args.serverBotId }) };
+}
 async function createReservationStatus(args) {
   const { owner, repo } = splitRepository(args.serverRepository);
   const body = { owner, repo, deployment_id: args.deploymentId, state: args.state, description: truncateDeploymentDescription(args.description), log_url: args.serverRunUrl, environment_url: args.pullUrl, auto_inactive: false };
@@ -37243,11 +37254,11 @@ function receiptFooter(input) {
 // src/lib/automerge-summary.ts
 function reservationSummary(args, observedAt) {
   const { record } = args;
-  const repository = record.payload.repository;
+  const repository = args.repository ?? record.payload.repository;
   const pullUrl = `${args.serverUrl}/${repository}/pull/${record.payload.pull_number}`;
   const apiUrl = `https://api.github.com/repos/${args.serverRepository}/deployments/${record.deploymentId}`;
   return `<h3>Automerge reservation ${record.deploymentId}</h3>
-<ul><li>Client PR: <a href="${escapeHtml(pullUrl)}">${escapeHtml(repository)}#${record.payload.pull_number}</a></li><li>Server: ${escapeHtml(args.serverRepository)}; <a href="${escapeHtml(apiUrl)}">Deployment ${record.deploymentId} (API JSON)</a></li><li>Observed: ${escapeHtml(args.state)} at ${observedAt.toISOString()}</li><li><a href="${escapeHtml(args.runUrl)}">Server Actions run</a></li>${args.displayFailure ? "<li>Display commit unavailable; reservation uses the default branch.</li>" : ""}</ul>
+<ul><li>Client PR: <a href="${escapeHtml(pullUrl)}">${escapeHtml(repository)}#${record.payload.pull_number}</a></li><li>Server: ${escapeHtml(args.serverRepository)}; <a href="${escapeHtml(apiUrl)}">Deployment ${record.deploymentId} (API JSON)</a></li><li>Observed: ${escapeHtml(args.state)} at ${observedAt.toISOString()}</li><li><a href="${escapeHtml(args.runUrl)}">Server Actions run</a></li>${args.displayDeploymentId ? `<li>Client display Deployment ${args.displayDeploymentId}; <a href="${escapeHtml(`${args.serverUrl}/${repository}/deployments/${"csm-ci-automerge-display"}`)}">environment list</a></li>` : ""}${args.displayFailure ? "<li>Display commit unavailable; reservation uses the default branch.</li>" : ""}${args.displaySyncFailure ? "<li>Client display synchronization unavailable.</li>" : ""}</ul>
 `;
 }
 async function summarizeReservation(args) {
@@ -37255,6 +37266,121 @@ async function summarizeReservation(args) {
     await summary.addRaw(reservationSummary(args, new Date)).write();
   } catch {
     warning("Unable to write automerge reservation summary");
+  }
+}
+
+// src/lib/automerge-display.ts
+var ENVIRONMENT2 = "csm-ci-automerge-display";
+var TASK2 = "csm-ci:automerge-display";
+var Payload = object({ server_repository: string2(), reservation_deployment_id: number2().int().positive() });
+var Deployment = object({ id: number2().int().positive(), sha: string2().regex(/^[0-9a-f]{40}$/u), task: string2(), environment: string2(), created_at: exports_iso.datetime(), payload: unknown(), creator: object({ id: number2().int().positive(), type: string2() }).nullable() });
+var Status = object({ id: number2().int().positive(), state: string2(), log_url: string2().nullable(), environment_url: string2().nullable(), creator: object({ id: number2().int().positive(), type: string2() }).nullable() });
+function parsePayload2(value) {
+  try {
+    let decoded = value;
+    for (let depth = 0;depth < 2 && typeof decoded === "string"; depth++)
+      decoded = JSON.parse(decoded);
+    const parsed = Payload.safeParse(decoded);
+    return parsed.success ? parsed.data : undefined;
+  } catch {
+    return;
+  }
+}
+function displayState(record, serverBotId) {
+  if (record.state.kind === "terminal")
+    return record.state.state === "success" ? "success" : "inactive";
+  const latest = record.statuses.filter((status) => status.creator.type === "Bot" && status.creator.databaseId === serverBotId).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.id - a.id)[0];
+  return latest?.state === "error" ? "error" : "queued";
+}
+async function current(args) {
+  const { record } = args;
+  const latest = await getReservation({ server: args.server, serverRepository: args.serverRepository, serverBotId: args.serverBotId, record });
+  const { data: pull } = await args.reader.rest.pulls.get({ ...splitRepository(args.repository), pull_number: record.payload.pull_number });
+  if (Number(pull.base.repo?.id) !== record.payload.repository_id || pull.node_id !== record.payload.pull_node_id)
+    throw new Error("display pull request identity changed");
+  return { record: latest, head: string2().regex(/^[0-9a-f]{40}$/u).parse(pull.head.sha) };
+}
+async function candidates(args, head) {
+  const raw = [];
+  for (const sha of [head, undefined]) {
+    for (let page = 1;page <= 3; page++) {
+      const response = await args.client.rest.repos.listDeployments({ ...splitRepository(args.repository), environment: ENVIRONMENT2, ...sha ? { sha } : {}, per_page: 100, page });
+      raw.push(...response.data);
+      if (!sha && response.data.some((deployment) => Date.parse(exports_iso.datetime().parse(deployment.created_at)) < Date.parse(args.record.createdAt)))
+        break;
+      if (response.data.length < 100)
+        break;
+      if (page === 3)
+        throw new Error(sha ? "display head lookup exceeded its page limit" : "display history lookup exceeded its page limit");
+    }
+  }
+  const seen = new Set;
+  return raw.flatMap((value) => {
+    const parsed = Deployment.safeParse(value);
+    if (!parsed.success)
+      return [];
+    const deployment = parsed.data;
+    const payload = parsePayload2(deployment.payload);
+    if (seen.has(deployment.id))
+      return [];
+    seen.add(deployment.id);
+    return deployment.environment === ENVIRONMENT2 && deployment.task === TASK2 && deployment.creator?.type === "Bot" && deployment.creator.id === args.serverBotId && payload?.server_repository === args.serverRepository && payload.reservation_deployment_id === args.record.deploymentId ? [deployment] : [];
+  }).sort((a, b) => a.id - b.id);
+}
+async function reconcileAutomergeDisplay(args) {
+  let observed = await current(args);
+  let deployments = await candidates(args, observed.head);
+  let matching = deployments.filter((deployment) => deployment.sha === observed.head);
+  if (!matching.length) {
+    observed = await current(args);
+    try {
+      await args.client.rest.repos.createDeployment({ ...splitRepository(args.repository), ref: observed.head, task: TASK2, environment: ENVIRONMENT2, auto_merge: false, required_contexts: [], transient_environment: false, production_environment: false, payload: { server_repository: args.serverRepository, reservation_deployment_id: args.record.deploymentId } });
+    } catch (error) {
+      deployments = await candidates(args, observed.head);
+      if (!deployments.some((deployment) => deployment.sha === observed.head))
+        throw error;
+    }
+    deployments = await candidates(args, observed.head);
+    matching = deployments.filter((deployment) => deployment.sha === observed.head);
+    if (!matching.length)
+      throw new Error("created client display is not yet observable");
+  }
+  const canonical = matching[0];
+  for (const deployment of deployments) {
+    observed = await current(args);
+    const desired = deployment.id === canonical?.id && deployment.sha === observed.head ? displayState(observed.record, args.serverBotId) : "inactive";
+    const statuses = await args.client.paginate(args.client.rest.repos.listDeploymentStatuses, { ...splitRepository(args.repository), deployment_id: deployment.id, per_page: 100 });
+    const trusted = statuses.map((value) => Status.safeParse(value)).flatMap((result) => result.success && result.data.creator?.type === "Bot" && result.data.creator.id === args.serverBotId ? [result.data] : []).sort((a, b) => b.id - a.id);
+    if (trusted[0]?.state === desired)
+      continue;
+    observed = await current(args);
+    if (observed.head !== canonical?.sha)
+      throw new Error("display head changed during reconciliation");
+    const finalState = deployment.id === canonical?.id && deployment.sha === observed.head ? displayState(observed.record, args.serverBotId) : "inactive";
+    try {
+      await args.client.rest.repos.createDeploymentStatus({ ...splitRepository(args.repository), deployment_id: deployment.id, state: finalState, log_url: args.runUrl, environment_url: args.runUrl, auto_inactive: false });
+    } catch (error) {
+      const after = await args.client.paginate(args.client.rest.repos.listDeploymentStatuses, { ...splitRepository(args.repository), deployment_id: deployment.id, per_page: 100 });
+      const latest = after.map((value) => Status.safeParse(value)).flatMap((status) => status.success && status.data.creator?.type === "Bot" && status.data.creator.id === args.serverBotId ? [status.data] : []).sort((a, b) => b.id - a.id)[0];
+      if (latest?.state !== finalState || latest.log_url !== args.runUrl || latest.environment_url !== args.runUrl)
+        throw error;
+    }
+  }
+  if ((await current(args)).head !== canonical?.sha)
+    throw new Error("display head changed during reconciliation");
+  return canonical?.id;
+}
+async function syncAutomergeDisplay(args) {
+  if (!args.client)
+    return { kind: "unavailable", reason: "client deployment token unavailable" };
+  try {
+    const deploymentId = await reconcileAutomergeDisplay({ ...args, client: args.client });
+    return deploymentId ? { kind: "synced", deploymentId } : { kind: "synced" };
+  } catch (error) {
+    const safeMessages = ["display reservation no longer exists", "display pull request identity changed", "display head lookup exceeded its page limit", "display history lookup exceeded its page limit", "created client display is not yet observable", "display head changed during reconciliation"];
+    const message = error instanceof Error ? error.message : "";
+    const status = typeof error === "object" && error !== null && "status" in error && typeof error.status === "number" ? error.status : undefined;
+    return { kind: "unavailable", reason: safeMessages.includes(message) ? message : status ? `GitHub request failed (HTTP ${status})` : "GitHub request or response failed" };
   }
 }
 
@@ -37795,6 +37921,10 @@ function activeSweepReservations(reservations) {
   }
   return [...latestByPull.values()].reverse();
 }
+function terminalRepairReservations(reservations, now) {
+  const cutoff = now.getTime() - 3 * 24 * 60 * 60000;
+  return reservations.filter((record) => record.state.kind === "terminal" && Date.parse(record.state.at) >= cutoff).sort((a, b) => Date.parse(b.state.kind === "terminal" ? b.state.at : "") - Date.parse(a.state.kind === "terminal" ? a.state.at : "") || b.deploymentId - a.deploymentId).slice(0, 64);
+}
 function installedRepositoryId(repositories, name) {
   const id = repositories.find((repository) => repository.full_name.toLowerCase() === name.toLowerCase())?.id;
   return id === undefined ? undefined : Number(id);
@@ -37884,6 +38014,10 @@ async function main() {
     }));
     setOutput("matrix", JSON.stringify(matrix));
     setOutput("count", String(matrix.length));
+    const terminal = terminalRepairReservations(reservations, new Date);
+    const repair = terminal.map((record) => ({ repository: repositories.get(record.payload.repository_id) ?? record.payload.repository, repository_owner: splitRepository(repositories.get(record.payload.repository_id) ?? record.payload.repository).owner, pull_number: record.payload.pull_number, deployment_id: record.deploymentId }));
+    setOutput("repair-matrix", JSON.stringify(repair));
+    setOutput("repair-count", String(repair.length));
     return;
   }
   const repository = getInput("repository", { required: true }).toLowerCase();
@@ -37892,7 +38026,7 @@ async function main() {
     throw new Error("pull-number must be a positive integer");
   const id = getInput("deployment-id");
   const serverRun = { serverUrl: env("GITHUB_SERVER_URL"), repository: serverRepository, id: env("GITHUB_RUN_ID"), attempt: env("GITHUB_RUN_ATTEMPT") };
-  if (mode === "resolve") {
+  if (mode === "resolve" || mode === "resolve-repair") {
     if (!id) {
       const repository = getInput("repository", { required: true }).toLowerCase();
       const parts = splitRepository(repository);
@@ -37904,7 +38038,7 @@ async function main() {
       return;
     }
     const records = await listReservations(listArgs);
-    const record = id ? records.find((item) => String(item.deploymentId) === id && item.payload.pull_number === pullNumber && item.state.kind === "active") : undefined;
+    const record = id ? records.find((item) => String(item.deploymentId) === id && item.payload.pull_number === pullNumber && (mode === "resolve-repair" ? item.state.kind === "terminal" : item.state.kind === "active")) : undefined;
     if (!record) {
       setOutput("resolved", "false");
       return;
@@ -37913,6 +38047,10 @@ async function main() {
     const installed = await discovery.paginate("GET /installation/repositories", { per_page: 100 });
     const repository = resolveRepositoryName({ deploymentId: id, repository: getInput("repository"), repositoryId: record.payload.repository_id, repositories: installed });
     if (!repository) {
+      if (mode === "resolve-repair") {
+        warning("Client display repair could not resolve the repository");
+        await summarizeReservation({ record, serverRepository, serverUrl: serverRun.serverUrl, runUrl: `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, state: record.state.kind === "terminal" ? `${record.state.state}: ${record.state.reason}` : "active", displaySyncFailure: true });
+      }
       setOutput("resolved", "false");
       return;
     }
@@ -37936,7 +38074,17 @@ async function main() {
     }
     if (record && record.state.kind === "active") {
       await createReservationStatus({ server: deployments, serverRepository, serverBotId: config.apps.server_bot_id, deploymentId: record.deploymentId, serverRunUrl: `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, pullUrl: `${serverRun.serverUrl}/${repository}/pull/${pullNumber}`, state: "error", description: getInput("failure-message") || "evaluation failed" });
-      await summarizeReservation({ record, serverRepository, serverUrl: serverRun.serverUrl, runUrl: `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, state: "error: evaluation failed" });
+      const runUrl = `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`;
+      const readToken = getInput("server-token");
+      const displayToken = getInput("display-deployments-token");
+      const display = readToken ? await syncAutomergeDisplay({ server: deployments, reader: github(readToken), ...displayToken ? { client: github(displayToken) } : {}, serverRepository, repository, serverBotId: config.apps.server_bot_id, record, runUrl, now: new Date }) : { kind: "unavailable", reason: "client read token unavailable" };
+      if (display.kind === "unavailable")
+        warning(`Client display synchronization unavailable: ${display.reason}`);
+      await summarizeReservation({ record, repository, serverRepository, serverUrl: serverRun.serverUrl, runUrl, state: "error: evaluation failed", displaySyncFailure: display.kind === "unavailable", ...display.kind === "synced" && display.deploymentId ? { displayDeploymentId: display.deploymentId } : {} });
+    }
+    if (record && record.state.kind === "terminal") {
+      warning("Client display repair failed");
+      await summarizeReservation({ record, repository, serverRepository, serverUrl: serverRun.serverUrl, runUrl: `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, state: `${record.state.state}: ${record.state.reason}`, displaySyncFailure: true });
     }
     return;
   }
@@ -37961,17 +38109,29 @@ async function main() {
     reloadConfig: () => loadCurrentServerConfig(configReader, serverRepository, configPath),
     now: () => new Date
   };
+  const summarize = async (state) => {
+    const runUrl = `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`;
+    const token = getInput("display-deployments-token");
+    const display = await syncAutomergeDisplay({ server: deployments, reader: server, ...token ? { client: github(token) } : {}, serverRepository, repository, serverBotId: config.apps.server_bot_id, record, runUrl, now: new Date });
+    if (display.kind === "unavailable")
+      warning(`Client display synchronization unavailable: ${display.reason}`);
+    await summarizeReservation({ record, repository, serverRepository, serverUrl: serverRun.serverUrl, runUrl, state, displaySyncFailure: display.kind === "unavailable", ...display.kind === "synced" && display.deploymentId ? { displayDeploymentId: display.deploymentId } : {} });
+  };
+  if (mode === "repair") {
+    await summarize(record.state.kind === "terminal" ? `${record.state.state}: ${record.state.reason}` : "active");
+    return;
+  }
   if (mode === "evaluate") {
     const evaluation = await evaluateReservation(ctx, record);
     const decision = evaluation.decision;
-    await summarizeReservation({ record, serverRepository, serverUrl: serverRun.serverUrl, runUrl: `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, state: decision.kind === "terminal" ? `${decision.state}: ${decision.reason}` : decision.kind === "wait" ? `queued: ${decision.reason}` : "ready" });
+    await summarize(decision.kind === "terminal" ? `${decision.state}: ${decision.reason}` : decision.kind === "wait" ? `queued: ${decision.reason}` : "ready");
     setOutput("ready", String(evaluation.ready));
     setOutput("head", evaluation.head);
     return;
   }
   if (mode === "merge") {
     const outcome = await mergeReservation(ctx, record, getInput("head", { required: true }));
-    await summarizeReservation({ record, serverRepository, serverUrl: serverRun.serverUrl, runUrl: `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, state: `${outcome.result}: ${outcome.mergeCommit}` });
+    await summarize(`${outcome.result}: ${outcome.mergeCommit}`);
     return;
   }
   throw new Error(`unknown automerge action mode: ${mode}`);
