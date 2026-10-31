@@ -1,6 +1,7 @@
 import * as core from "@actions/core";
 import { type MergeArgs, type MergeContext, acceptMerge } from "../lib/merge.ts";
 import { github, loadCurrentServerConfig } from "../lib/github.ts";
+import { summarizeReservation } from "../lib/automerge-summary.ts";
 
 function env(name: string): string {
   const value = process.env[name];
@@ -14,20 +15,27 @@ async function main(): Promise<void> {
   const configReader = github(core.getInput("github-token", { required: true }));
   const configPath = core.getInput("config-path", { required: true });
   const config = await loadCurrentServerConfig(configReader, serverRepository, configPath);
+  const displayToken = core.getInput("display-commit-token");
   const ctx: MergeContext = {
     server: github(core.getInput("server-token", { required: true })),
     deployments: github(core.getInput("deployments-token", { required: true })),
+    ...(displayToken ? { displayCommit: github(displayToken) } : {}),
     notify: github(core.getInput("notification-token", { required: true })),
     config,
     reloadConfig: () => loadCurrentServerConfig(configReader, serverRepository, configPath),
     repository: core.getInput("repository", { required: true }).toLowerCase(),
     serverRepository,
     serverRun: { serverUrl: env("GITHUB_SERVER_URL"), repository: serverRepository, id: env("GITHUB_RUN_ID"), attempt: env("GITHUB_RUN_ATTEMPT") },
+    onAcceptanceFailure: (record, displayFailure) => summarizeReservation({ record, serverRepository, serverUrl: env("GITHUB_SERVER_URL"), runUrl: `${env("GITHUB_SERVER_URL")}/${serverRepository}/actions/runs/${env("GITHUB_RUN_ID")}/attempts/${env("GITHUB_RUN_ATTEMPT")}`, state: "reservation created; acceptance incomplete", displayFailure }),
     now: () => new Date(),
   };
   const args = JSON.parse(core.getInput("args", { required: true })) as MergeArgs;
   const result = await acceptMerge(ctx, args);
   if (result.reservation) core.setOutput("reservation-id", String(result.reservation.deploymentId));
+  if (result.reservation) {
+    const state = result.kind === "accepted" ? `queued: waiting for approval of ${result.reservation.payload.accepted_head.slice(0, 7)}` : result.kind === "cancelled" ? "inactive: cancelled" : result.reservation.state.kind === "active" ? `active: ${result.reservation.state.waitingReason ?? "waiting"}` : `${result.reservation.state.state}: ${result.reservation.state.reason}`;
+    await summarizeReservation({ record: result.reservation, serverRepository, serverUrl: ctx.serverRun.serverUrl, runUrl: `${ctx.serverRun.serverUrl}/${serverRepository}/actions/runs/${ctx.serverRun.id}/attempts/${ctx.serverRun.attempt}`, state, displayFailure: Boolean(result.displayFailure) });
+  }
   core.info(`merge command ${result.kind}`);
 }
 

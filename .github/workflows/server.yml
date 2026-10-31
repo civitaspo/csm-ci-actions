@@ -196,6 +196,16 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-deployments: write
+      - id: automerge-display-token
+        if: needs.intake.outputs.kind == 'merge'
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
       - id: merge-notify-token
         if: needs.intake.outputs.kind == 'merge'
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
@@ -215,6 +225,7 @@ jobs:
           server-token: ${{ steps.merge-read-token.outputs.token }}
           notification-token: ${{ steps.merge-notify-token.outputs.token }}
           deployments-token: ${{ steps.automerge-deployments-token.outputs.token }}
+          display-commit-token: ${{ steps.automerge-display-token.outputs.token }}
           repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
           args: ${{ needs.intake.outputs.args }}
       - if: needs.intake.outputs.kind == 'policy-check'

@@ -67,6 +67,21 @@ describe("inspectRepoSettings", () => {
     bypass_actors: [{ actor_id: 1, actor_type: "Integration", bypass_mode: "pull_request" }],
   };
 
+  test("plans the display branch ruleset only for the server", async () => {
+    for (const isServer of [false, true]) {
+      const name = isServer ? "server" : "client";
+      const fetch = fakeFetch([{ method: "GET", path: `/repos/owner/${name}/rulesets`, body: [] }]);
+      const plan = await inspectRepoSettings({ adminGH: github("admin", fetch), config: configWithSettings(), target: { name: `owner/${name}`, isServer }, mode: "schedule", targets: { settings: false, rulesets: true, releases: false } });
+      expect(plan.changes.rulesets.includes("automerge-display")).toBe(isServer);
+    }
+    expect(repoSettingsRuleSets(config(), true).find((rule) => rule.name === "automerge-display")).toEqual({
+      name: "automerge-display", enforcement: "active", target: "branch",
+      conditions: { ref_name: { include: ["refs/heads/csm-ci/automerge"], exclude: [] } },
+      rules: [{ type: "creation" }, { type: "update" }, { type: "deletion" }],
+      bypass_actors: [{ actor_id: config().apps.server_app_id, actor_type: "Integration", bypass_mode: "always" }],
+    });
+  });
+
   test("schedule preserves a disabled controlled-merges emergency stop", async () => {
     const fetch = fakeFetch([
       { method: "GET", path: "/repos/owner/client", body: repository },

@@ -26650,6 +26650,7 @@ class Summary {
   }
 }
 var _summary = new Summary;
+var summary = _summary;
 // node_modules/@actions/core/lib/platform.js
 import os3 from "os";
 
@@ -37215,6 +37216,48 @@ function ambiguousWrite(error) {
   return typeof error === "object" && error !== null && "status" in error && (error.status === 502 || error.status === 503 || error.status === 504);
 }
 
+// src/lib/notify.ts
+function hasServerMarker(comments, text, serverBotId) {
+  return comments.some((c) => Number(c.user?.id) === serverBotId && (c.body ?? "").includes(text));
+}
+async function postResult(gh, repository, issueNumber, markerText, body) {
+  await gh.rest.issues.createComment({ ...splitRepository(repository), issue_number: issueNumber, body: `${markerText}
+${body}` });
+}
+function escapeHtml(text) {
+  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
+}
+function receiptFooter(input) {
+  const { repository, pullNumber, commentId, head, serverRun, mergeCommit } = input;
+  const link = (url, label) => `<a href="${escapeHtml(url)}">${escapeHtml(label)}</a>`;
+  const repoUrl = `${serverRun.serverUrl}/${repository}`;
+  const links = [
+    link(`${repoUrl}/pull/${pullNumber}#issuecomment-${commentId}`, "Request"),
+    link(`${repoUrl}/commit/${head}`, `Head ${head.slice(0, 7)}`),
+    ...mergeCommit ? [link(`${repoUrl}/commit/${mergeCommit}`, `Squash commit ${mergeCommit.slice(0, 7)}`)] : [],
+    link(`${serverRun.serverUrl}/${serverRun.repository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, `Server run ${serverRun.id}, attempt ${serverRun.attempt}`)
+  ];
+  return `<sub>${links.join(" · ")}</sub>`;
+}
+
+// src/lib/automerge-summary.ts
+function reservationSummary(args, observedAt) {
+  const { record } = args;
+  const repository = record.payload.repository;
+  const pullUrl = `${args.serverUrl}/${repository}/pull/${record.payload.pull_number}`;
+  const apiUrl = `https://api.github.com/repos/${args.serverRepository}/deployments/${record.deploymentId}`;
+  return `<h3>Automerge reservation ${record.deploymentId}</h3>
+<ul><li>Client PR: <a href="${escapeHtml(pullUrl)}">${escapeHtml(repository)}#${record.payload.pull_number}</a></li><li>Server: ${escapeHtml(args.serverRepository)}; <a href="${escapeHtml(apiUrl)}">Deployment ${record.deploymentId} (API JSON)</a></li><li>Observed: ${escapeHtml(args.state)} at ${observedAt.toISOString()}</li><li><a href="${escapeHtml(args.runUrl)}">Server Actions run</a></li>${args.displayFailure ? "<li>Display commit unavailable; reservation uses the default branch.</li>" : ""}</ul>
+`;
+}
+async function summarizeReservation(args) {
+  try {
+    await summary.addRaw(reservationSummary(args, new Date)).write();
+  } catch {
+    warning("Unable to write automerge reservation summary");
+  }
+}
+
 // src/lib/command.ts
 var COMMAND_TTL_MS = 60 * 60000;
 
@@ -37397,30 +37440,6 @@ async function fetchCommitFacts(gh, repository, pullNumber) {
   return facts;
 }
 
-// src/lib/notify.ts
-function hasServerMarker(comments, text, serverBotId) {
-  return comments.some((c) => Number(c.user?.id) === serverBotId && (c.body ?? "").includes(text));
-}
-async function postResult(gh, repository, issueNumber, markerText, body) {
-  await gh.rest.issues.createComment({ ...splitRepository(repository), issue_number: issueNumber, body: `${markerText}
-${body}` });
-}
-function escapeHtml(text) {
-  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
-}
-function receiptFooter(input) {
-  const { repository, pullNumber, commentId, head, serverRun, mergeCommit } = input;
-  const link = (url, label) => `<a href="${escapeHtml(url)}">${escapeHtml(label)}</a>`;
-  const repoUrl = `${serverRun.serverUrl}/${repository}`;
-  const links = [
-    link(`${repoUrl}/pull/${pullNumber}#issuecomment-${commentId}`, "Request"),
-    link(`${repoUrl}/commit/${head}`, `Head ${head.slice(0, 7)}`),
-    ...mergeCommit ? [link(`${repoUrl}/commit/${mergeCommit}`, `Squash commit ${mergeCommit.slice(0, 7)}`)] : [],
-    link(`${serverRun.serverUrl}/${serverRun.repository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, `Server run ${serverRun.id}, attempt ${serverRun.attempt}`)
-  ];
-  return `<sub>${links.join(" · ")}</sub>`;
-}
-
 // src/lib/policy-report.ts
 var stateSchema = object({ node: object({
   id: string2(),
@@ -37469,6 +37488,18 @@ async function approverApprovedHead(server, config, repository, pull) {
   }, undefined);
   return latest?.state === "APPROVED" && latest.commit_id === pull.headSha;
 }
+// src/lib/automerge-display-commit.ts
+var Sha = string2().regex(/^[0-9a-f]{40}$/u);
+var Commit = object({
+  oid: Sha,
+  messageHeadline: string2(),
+  messageBody: string2(),
+  changedFilesIfAvailable: number2().nullable(),
+  parents: object({ nodes: array(object({ oid: Sha })) }),
+  author: object({ user: object({ databaseId: number2().int().positive() }).nullable() }).nullable(),
+  signature: object({ isValid: boolean2(), wasSignedByGitHub: boolean2() }).nullable()
+});
+
 // src/lib/merge.ts
 async function pullFacts(server, repository, number) {
   const { data: p } = await server.rest.pulls.get({ ...splitRepository(repository), pull_number: number });
@@ -37506,7 +37537,7 @@ async function postAutomergeComment(ctx, record, event, text, head) {
 
 ${receiptFooter({ repository: ctx.repository, pullNumber: record.payload.pull_number, commentId: record.payload.command_comment_id, head, serverRun: ctx.serverRun })}
 
-<a href="https://github.com/${ctx.serverRepository}/deployments/${record.deploymentId}">Automerge deployment ${record.deploymentId}</a>`;
+<a href="https://api.github.com/repos/${ctx.serverRepository}/deployments/${record.deploymentId}">Automerge deployment ${record.deploymentId} (API JSON)</a>`;
   try {
     await postResult(ctx.notify, ctx.repository, record.payload.pull_number, markerText, body);
   } catch (error) {
@@ -37841,6 +37872,7 @@ async function main() {
         state: "inactive",
         description: terminalDescription("expired", "reservation expired while client repository was unavailable; notification unavailable")
       });
+      await summarizeReservation({ record, serverRepository, serverUrl: serverRun.serverUrl, runUrl: `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, state: "inactive: expired" });
     }
     if (ready.length > 256)
       warning(`Automerge sweep has ${ready.length} active reservations; evaluating the first 256`);
@@ -37902,8 +37934,10 @@ async function main() {
       if (repositoryId !== undefined)
         record = activeReservationForPullByRepositoryId(records, repositoryId, pullNumber);
     }
-    if (record && record.state.kind === "active")
+    if (record && record.state.kind === "active") {
       await createReservationStatus({ server: deployments, serverRepository, serverBotId: config.apps.server_bot_id, deploymentId: record.deploymentId, serverRunUrl: `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, pullUrl: `${serverRun.serverUrl}/${repository}/pull/${pullNumber}`, state: "error", description: getInput("failure-message") || "evaluation failed" });
+      await summarizeReservation({ record, serverRepository, serverUrl: serverRun.serverUrl, runUrl: `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, state: "error: evaluation failed" });
+    }
     return;
   }
   const server = github(getInput("server-token", { required: true }));
@@ -37929,12 +37963,15 @@ async function main() {
   };
   if (mode === "evaluate") {
     const evaluation = await evaluateReservation(ctx, record);
+    const decision = evaluation.decision;
+    await summarizeReservation({ record, serverRepository, serverUrl: serverRun.serverUrl, runUrl: `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, state: decision.kind === "terminal" ? `${decision.state}: ${decision.reason}` : decision.kind === "wait" ? `queued: ${decision.reason}` : "ready" });
     setOutput("ready", String(evaluation.ready));
     setOutput("head", evaluation.head);
     return;
   }
   if (mode === "merge") {
-    await mergeReservation(ctx, record, getInput("head", { required: true }));
+    const outcome = await mergeReservation(ctx, record, getInput("head", { required: true }));
+    await summarizeReservation({ record, serverRepository, serverUrl: serverRun.serverUrl, runUrl: `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, state: `${outcome.result}: ${outcome.mergeCommit}` });
     return;
   }
   throw new Error(`unknown automerge action mode: ${mode}`);

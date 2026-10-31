@@ -2,6 +2,7 @@ import * as core from "@actions/core";
 import { createReservationStatus, findReservationsForPull, listReservations } from "../lib/automerge-github.ts";
 import { terminalDescription } from "../lib/automerge.ts";
 import { github, loadCurrentServerConfig, splitRepository } from "../lib/github.ts";
+import { summarizeReservation } from "../lib/automerge-summary.ts";
 import { evaluateReservation, mergeReservation, type MergeContext } from "../lib/merge.ts";
 import { automergeConcurrencyKey } from "../lib/request.ts";
 import { activeReservationForPullByRepositoryId, activeSweepReservations, evaluationReservation, installedRepositoryId, partitionSweepRepositories, resolveRepositoryName, sweepBatch } from "./sweep.ts";
@@ -37,6 +38,7 @@ async function main(): Promise<void> {
         pullUrl: `${serverRun.serverUrl}/${record.payload.repository}/pull/${record.payload.pull_number}`,
         state: "inactive", description: terminalDescription("expired", "reservation expired while client repository was unavailable; notification unavailable"),
       });
+      await summarizeReservation({ record, serverRepository, serverUrl: serverRun.serverUrl, runUrl: `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, state: "inactive: expired" });
     }
     if (ready.length > 256) core.warning(`Automerge sweep has ${ready.length} active reservations; evaluating the first 256`);
     const matrix = sweepBatch(ready).map(({ record, repository }) => ({
@@ -95,7 +97,10 @@ async function main(): Promise<void> {
       const repositoryId = installedRepositoryId(installed, repository);
       if (repositoryId !== undefined) record = activeReservationForPullByRepositoryId(records, repositoryId, pullNumber);
     }
-    if (record && record.state.kind === "active") await createReservationStatus({ server: deployments, serverRepository, serverBotId: config.apps.server_bot_id, deploymentId: record.deploymentId, serverRunUrl: `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, pullUrl: `${serverRun.serverUrl}/${repository}/pull/${pullNumber}`, state: "error", description: core.getInput("failure-message") || "evaluation failed" });
+    if (record && record.state.kind === "active") {
+      await createReservationStatus({ server: deployments, serverRepository, serverBotId: config.apps.server_bot_id, deploymentId: record.deploymentId, serverRunUrl: `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, pullUrl: `${serverRun.serverUrl}/${repository}/pull/${pullNumber}`, state: "error", description: core.getInput("failure-message") || "evaluation failed" });
+      await summarizeReservation({ record, serverRepository, serverUrl: serverRun.serverUrl, runUrl: `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, state: "error: evaluation failed" });
+    }
     return;
   }
   const server = github(core.getInput("server-token", { required: true }));
@@ -116,12 +121,15 @@ async function main(): Promise<void> {
   };
   if (mode === "evaluate") {
     const evaluation = await evaluateReservation(ctx, record);
+    const decision = evaluation.decision;
+    await summarizeReservation({ record, serverRepository, serverUrl: serverRun.serverUrl, runUrl: `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, state: decision.kind === "terminal" ? `${decision.state}: ${decision.reason}` : decision.kind === "wait" ? `queued: ${decision.reason}` : "ready" });
     core.setOutput("ready", String(evaluation.ready));
     core.setOutput("head", evaluation.head);
     return;
   }
   if (mode === "merge") {
-    await mergeReservation(ctx, record, core.getInput("head", { required: true }));
+    const outcome = await mergeReservation(ctx, record, core.getInput("head", { required: true }));
+    await summarizeReservation({ record, serverRepository, serverUrl: serverRun.serverUrl, runUrl: `${serverRun.serverUrl}/${serverRepository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, state: `${outcome.result}: ${outcome.mergeCommit}` });
     return;
   }
   throw new Error(`unknown automerge action mode: ${mode}`);

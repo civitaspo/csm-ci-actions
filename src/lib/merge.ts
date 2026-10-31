@@ -7,12 +7,15 @@ import { Rejection } from "./request.ts";
 import { evaluateTrust, fetchCommitFacts } from "./trust.ts";
 import { AUTOMERGE_LABEL, automergeMarker, canCancelReservation, decide, ReservationPayloadSchema, terminalDescription, type Decision, type ReservationPayload } from "./automerge.ts";
 import { createReservation, createReservationStatus, findReservationsForPull, type ReservationRecord } from "./automerge-github.ts";
+import { createAutomergeDisplayCommit } from "./automerge-display-commit.ts";
 import { type GitHub, isNetworkFailure, splitRepository } from "./github.ts";
 
 export type MergeArgs = { pull_number: number; comment_id: number };
 export type MergeContext = {
   server: GitHub;
   deployments: GitHub;
+  displayCommit?: GitHub;
+  onAcceptanceFailure?: (record: ReservationRecord, displayFailure: boolean) => Promise<void>;
   notify: GitHub;
   write?: GitHub;
   config: Config;
@@ -86,7 +89,7 @@ async function postAutomergeComment(ctx: MergeContext, record: ReservationRecord
   const markerText = automergeMarker(record.deploymentId, event);
   const comments = await ctx.notify.paginate(ctx.notify.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: record.payload.pull_number, per_page: 100 });
   if (hasServerMarker(comments, markerText, ctx.config.apps.server_bot_id)) return;
-  const body = `csm-ci: ${escapeHtml(text)}\n\n${receiptFooter({ repository: ctx.repository, pullNumber: record.payload.pull_number, commentId: record.payload.command_comment_id, head, serverRun: ctx.serverRun })}\n\n<a href="https://github.com/${ctx.serverRepository}/deployments/${record.deploymentId}">Automerge deployment ${record.deploymentId}</a>`;
+  const body = `csm-ci: ${escapeHtml(text)}\n\n${receiptFooter({ repository: ctx.repository, pullNumber: record.payload.pull_number, commentId: record.payload.command_comment_id, head, serverRun: ctx.serverRun })}\n\n<a href="https://api.github.com/repos/${ctx.serverRepository}/deployments/${record.deploymentId}">Automerge deployment ${record.deploymentId} (API JSON)</a>`;
   try {
     await postResult(ctx.notify, ctx.repository, record.payload.pull_number, markerText, body);
   } catch (error) {
@@ -152,7 +155,7 @@ async function readiness(ctx: MergeContext, pull: PullFacts): Promise<{ kind: "r
   return { kind: "ready" };
 }
 
-export async function acceptMerge(ctx: MergeContext, args: MergeArgs): Promise<{ kind: "accepted" | "replay" | "cancelled" | "cancel-noop"; reservation?: ReservationRecord }> {
+export async function acceptMerge(ctx: MergeContext, args: MergeArgs): Promise<{ kind: "accepted" | "replay" | "cancelled" | "cancel-noop"; reservation?: ReservationRecord; displayFailure?: string }> {
   await refreshConfig(ctx);
   const pull = await pullFacts(ctx.server, ctx.repository, args.pull_number);
   const comment = await fetchComment(ctx.server, ctx.repository, args.comment_id);
@@ -213,12 +216,26 @@ export async function acceptMerge(ctx: MergeContext, args: MergeArgs): Promise<{
     expires_at: new Date(acceptedAt.getTime() + 7 * 24 * 60 * 60_000).toISOString(),
   });
   const { data: serverRepo } = await ctx.deployments.rest.repos.get(splitRepository(ctx.serverRepository));
-  const record = await createReservation({ server: ctx.deployments, serverRepository: ctx.serverRepository, defaultBranch: serverRepo.default_branch, serverBotId: ctx.config.apps.server_bot_id, payload });
-  await createReservationStatus({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, deploymentId: record.deploymentId, serverRunUrl: runUrl(ctx.serverRun), pullUrl: pullUrl(ctx.serverRun.serverUrl, ctx.repository, pull.number), state: "queued", description: `waiting for approval of ${pull.headSha.slice(0, 7)}` });
-  await ctx.notify.rest.reactions.createForIssueComment({ ...splitRepository(ctx.repository), comment_id: comment.id, content: "rocket" });
-  await postAutomergeComment(ctx, record, "accepted", `Merge reserved until ${payload.expires_at}. It follows head changes and requires approval and checks for the current head. Cancel with /merge cancel. The ${AUTOMERGE_LABEL} label shows the reservation state.`, pull.headSha);
-  await setLabel(ctx, pull.number, true);
-  return { kind: "accepted", reservation: record };
+  let displayCommit: string | undefined;
+  let displayFailure: string | undefined;
+  if (ctx.displayCommit) {
+    try {
+      displayCommit = await createAutomergeDisplayCommit({ server: ctx.displayCommit, serverRepository: ctx.serverRepository, defaultBranch: serverRepo.default_branch, serverBotId: ctx.config.apps.server_bot_id, payload });
+    } catch (error) {
+      displayFailure = error instanceof Error ? error.message : String(error);
+    }
+  } else displayFailure = "display commit token unavailable";
+  const record = await createReservation({ server: ctx.deployments, serverRepository: ctx.serverRepository, defaultBranch: serverRepo.default_branch, ...(displayCommit ? { displayCommit } : {}), serverBotId: ctx.config.apps.server_bot_id, payload });
+  try {
+    await createReservationStatus({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, deploymentId: record.deploymentId, serverRunUrl: runUrl(ctx.serverRun), pullUrl: pullUrl(ctx.serverRun.serverUrl, ctx.repository, pull.number), state: "queued", description: `waiting for approval of ${pull.headSha.slice(0, 7)}` });
+    await ctx.notify.rest.reactions.createForIssueComment({ ...splitRepository(ctx.repository), comment_id: comment.id, content: "rocket" });
+    await postAutomergeComment(ctx, record, "accepted", `Merge reserved until ${payload.expires_at}. It follows head changes and requires approval and checks for the current head. Cancel with /merge cancel. The ${AUTOMERGE_LABEL} label shows the reservation state.`, pull.headSha);
+    await setLabel(ctx, pull.number, true);
+  } catch (error) {
+    await ctx.onAcceptanceFailure?.(record, Boolean(displayFailure));
+    throw error;
+  }
+  return { kind: "accepted", reservation: record, ...(displayFailure ? { displayFailure } : {}) };
 }
 
 async function cancelReservation(ctx: MergeContext, pull: Awaited<ReturnType<typeof pullFacts>>, comment: CommentFacts, args: MergeArgs): Promise<{ kind: "cancelled" | "cancel-noop"; reservation?: ReservationRecord }> {

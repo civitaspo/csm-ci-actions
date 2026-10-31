@@ -75,6 +75,8 @@ GitHub's platform auto-merge did not merge pull requests while an active `update
 
 The run evidence above covers the existing platform auto-merge flow. It does not verify deployment-based csm-ci automerge or the Server App's Deployments permission.
 
+When GitHub auto-merged [testing-csm-ci-client#1629](https://github.com/civitaspo/testing-csm-ci-client/pull/1629), its GraphQL `autoMergeRequest` and REST `auto_merge` remained present after the PR was merged. Presence on a merged PR therefore does not establish that a request is still active. The [e2e run](https://github.com/civitaspo/csm-ci-actions/actions/runs/41036154906) recorded the race; it did not verify the Server App disabling the request before merging.
+
 #### Automerge visibility experiment
 
 The Server App-backed experiment used client PR [#1468](https://github.com/civitaspo/testing-csm-ci-client/pull/1468), server commit SHA `04b26ced712e77438e8dab37f07986ce714116e1`, server reservation Deployment ID `7429796665`, and client display Deployment ID `7429796953`. The probe run is [40996047629](https://github.com/civitaspo/csm-ci-actions/actions/runs/40996047629); the server create/visibility run is [40996239541](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40996239541); cleanup completed in [40996499228](https://github.com/civitaspo/testing-csm-ci-server/actions/runs/40996499228). The cleanup run removed the experiment's test state.

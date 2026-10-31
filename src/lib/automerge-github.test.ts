@@ -172,6 +172,13 @@ test("creates deployments with object payloads and the specified environment set
   });
 });
 
+test("uses the immutable display commit SHA as the reservation ref", async () => {
+  const h = harness();
+  const displayCommit = "b".repeat(40);
+  await createReservation({ server: h.server, serverRepository, defaultBranch: "main", displayCommit, serverBotId, payload });
+  expect(h.restWrites[0]?.body.ref).toBe(displayCommit);
+});
+
 test("recovers a deployment after its create response is lost without issuing a second write", async () => {
   const h = harness();
   h.loseDeploymentResponse();
