@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.6.1] - 2026-10-31
+
+### ⚙️ Miscellaneous Tasks
+
+- *(deps)* Update civitaspo/csm-ci-actions action to v0.6.0 ([#217](https://github.com/civitaspo/csm-ci-actions/pull/217))
+
 ## [0.6.0] - 2026-10-31
 
 ### 🚀 Features
