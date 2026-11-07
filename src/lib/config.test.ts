@@ -107,6 +107,9 @@ describe("parseConfig", () => {
     ["cargo-raw with empty targets", releaseConfig("{ build_type: cargo-raw, binary: app, targets: [] }"), /Too small/],
     ["cargo-raw with unsupported target", releaseConfig("{ build_type: cargo-raw, binary: app, targets: [x86_64-pc-windows-msvc] }"), /Invalid option/],
     ["cargo-raw with duplicate targets", releaseConfig("{ build_type: cargo-raw, binary: app, targets: [x86_64-unknown-linux-musl, x86_64-unknown-linux-musl] }"), /duplicate cargo-raw target/],
+    ["cargo-raw with empty version probe args", releaseConfig("{ build_type: cargo-raw, binary: app, targets: [x86_64-unknown-linux-musl], version_probe_args: [] }"), /Too small/],
+    ["cargo-raw with a NUL version probe argument", releaseConfig("{ build_type: cargo-raw, binary: app, targets: [x86_64-unknown-linux-musl], version_probe_args: [\"bad\\0arg\"] }"), /NUL bytes/],
+    ["cargo-raw with too many version probe arguments", releaseConfig(`{ build_type: cargo-raw, binary: app, targets: [x86_64-unknown-linux-musl], version_probe_args: [${Array(33).fill("x").join(", ")}] }`), /Too big/],
     ["cargo-raw with unknown fields", releaseConfig("{ build_type: cargo-raw, binary: app, targets: [x86_64-unknown-linux-musl], extra: true }"), /Unrecognized key/],
     ["non-cargo build with target triples", releaseConfig("{ build_type: none, targets: [x86_64-unknown-linux-gnu] }"), /Unrecognized key/],
   ];

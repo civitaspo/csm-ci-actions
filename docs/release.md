@@ -29,7 +29,24 @@ release:
 
 `binary` must start with an ASCII letter or digit, contain only ASCII letters, digits, underscores and hyphens, and have at most 64 characters. Choose a nonempty subset of these six targets without duplicates: Darwin arm64/x86_64, Linux GNU arm64/x86_64, or Linux musl arm64/x86_64. Each target runs natively with Rust 1.99.1 and locked dependencies. Linux musl builds bind the C compiler and Cargo linker to the native musl toolchain and must be statically linked. Linux GNU builds use the Ubuntu 24.04 runner's glibc toolchain; the verifier rejects binaries requiring symbols newer than GLIBC_2.39, proving compatibility with glibc 2.39 or newer without claiming a lower minimum. Before upload, the builder verifies executable format, architecture, Linux linkage and glibc symbol requirements, and the reported `<binary> <version>` (with optional SemVer build metadata). The trusted source merge SHA is provided to build scripts as `CSM_CI_SOURCE_REVISION`, after validation against the release plan's 40-character SHA. The builder also confirms the reconstructed source snapshot has no tracked or untracked changes, then sets `CSM_CI_SOURCE_CLEAN=true`; consumers may report a clean source revision only when they honor this signal. Output names are `<binary>-<target>`, with no archive or version in the filename. The existing `cargo` archive builder is unchanged.
 
-For `cargo-raw`, the publisher requires exactly the configured binaries and rejects other outputs. It creates one `<binary>-<target>.sha256` file per binary, containing its SHA256 and filename. A supplied sidecar must match the recomputed content exactly. All binaries and sidecars are included in `SHA256SUMS` and attestation. Upload the complete asset set to the draft before publishing; an immutable release cannot accept later binary uploads.
+Set `version_probe_args` when downstream tooling needs structured metadata from each executable:
+
+```yaml
+release:
+  build_type: cargo-raw
+  binary: my-cli
+  targets: [aarch64-apple-darwin, x86_64-unknown-linux-gnu]
+  version_probe_args: [version, --json]
+```
+
+The builder invokes those arguments directly on the absolute path of the just-built executable. It
+does not search `PATH` or use a shell. The probe gets a reduced environment, has a 10-second time
+limit and a 64 KiB output limit, and must write one valid JSON object to stdout. The object is
+preserved under `version_json`; csm-ci does not interpret product-specific keys. This is opt-in,
+and the captured object will be public as part of the release, so it must contain no credentials or
+other secret data. A probe is omitted when `version_probe_args` is unset.
+
+For `cargo-raw`, every target also produces `<binary>-<rust-target>.artifact.json` beside its executable. The manifest records the release version, normalized target, Rust target, source revision, clean build flag, binary SHA256 and measured runtime floor (`minimum_os` from the Mach-O deployment load command, or `minimum_libc` from the GNU runner). Statically linked musl targets have neither runtime floor field. When configured, the complete probe object is included as `version_json`. The asset validator recomputes the binary digest and checks its target, planned version and trusted source revision; it rejects a dirty build, a malformed floor or an inconsistent manifest. The publisher requires exactly the configured binaries, manifests and generated checksum files, and rejects other outputs. It creates one `<binary>-<target>.sha256` file per binary, containing its SHA256 and filename. A supplied checksum sidecar must match the recomputed content exactly. Binaries, manifests and checksum files are included in `SHA256SUMS` and attestation. No separate `.artifact.json.sha256` file is generated. Upload the complete asset set to the draft before publishing; an immutable release cannot accept later binary uploads.
 
 Use `terraform-provider` for a root Go module published to the Terraform Registry:
 

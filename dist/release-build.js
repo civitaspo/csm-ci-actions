@@ -14698,7 +14698,8 @@ var ReleaseSchema = discriminatedUnion("build_type", [
   strictObject({
     build_type: literal("cargo-raw"),
     binary: string2().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}(?![\s\S])/u, "binary must be a safe Cargo binary name of at most 64 characters"),
-    targets: array(_enum(CARGO_RAW_TARGETS)).min(1).refine((targets) => new Set(targets).size === targets.length, "duplicate cargo-raw target")
+    targets: array(_enum(CARGO_RAW_TARGETS)).min(1).refine((targets) => new Set(targets).size === targets.length, "duplicate cargo-raw target"),
+    version_probe_args: array(string2().min(1).max(256).refine((arg) => !arg.includes("\x00"), "arguments must not contain NUL bytes")).min(1).max(32).optional()
   })
 ]);
 var OPS = ["approve", "merge", "policy-check", "securefix", "release"];
@@ -14970,9 +14971,10 @@ function padToRecord(tar) {
 }
 
 // src/release/cargo-raw.ts
-import { execFileSync } from "node:child_process";
-import { accessSync, chmodSync, constants as constants2, copyFileSync, lstatSync as lstatSync2, mkdirSync as mkdirSync2, realpathSync, statSync } from "node:fs";
-import { join as join2, resolve } from "node:path";
+import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { accessSync, chmodSync, constants as constants2, copyFileSync, lstatSync as lstatSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, realpathSync, statSync, writeFileSync as writeFileSync2 } from "node:fs";
+import { dirname as dirname2, join as join2, resolve } from "node:path";
 var RAW_TARGETS = {
   "aarch64-apple-darwin": ["Mach-O 64-bit", "arm64"],
   "aarch64-unknown-linux-gnu": ["ELF 64-bit LSB", "ARM aarch64"],
@@ -14984,6 +14986,75 @@ var RAW_TARGETS = {
 var SEMVER = String.raw`(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?`;
 var escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 var MAX_GLIBC = [2, 39, 0];
+var VERSION_PROBE_TIMEOUT_MS = 1e4;
+var VERSION_PROBE_MAX_BUFFER = 64 * 1024;
+var NORMALIZED_TARGETS = {
+  "aarch64-apple-darwin": "macos-aarch64",
+  "x86_64-apple-darwin": "macos-x86_64",
+  "aarch64-unknown-linux-gnu": "linux-aarch64",
+  "x86_64-unknown-linux-gnu": "linux-x86_64",
+  "aarch64-unknown-linux-musl": "linux-musl-aarch64",
+  "x86_64-unknown-linux-musl": "linux-musl-x86_64"
+};
+var RawArtifactSchema = strictObject({
+  version: string2().regex(new RegExp(`^${SEMVER}$`, "u")),
+  target: _enum(["macos-aarch64", "macos-x86_64", "linux-aarch64", "linux-x86_64", "linux-musl-aarch64", "linux-musl-x86_64"]),
+  rust_target: _enum(Object.keys(RAW_TARGETS)),
+  minimum_os: string2().regex(/^\d+\.\d+(?:\.\d+)?$/u).optional(),
+  minimum_libc: string2().regex(/^glibc \d+\.\d+(?:\.\d+)?$/u).optional(),
+  source_revision: string2().regex(/^[a-f0-9]{40}$/u),
+  dirty: boolean2(),
+  sha256: string2().regex(/^[a-f0-9]{64}$/u),
+  version_json: record(string2(), unknown()).optional()
+}).superRefine((artifact, ctx) => {
+  const expectedTarget = NORMALIZED_TARGETS[artifact.rust_target];
+  if (artifact.target !== expectedTarget)
+    ctx.addIssue({ code: "custom", path: ["target"], message: "does not match rust_target" });
+  const needsOs = artifact.rust_target.endsWith("-apple-darwin");
+  const needsGlibc = artifact.rust_target.endsWith("linux-gnu");
+  if (needsOs !== (artifact.minimum_os !== undefined))
+    ctx.addIssue({ code: "custom", path: ["minimum_os"], message: "must be present exactly for macOS targets" });
+  if (needsGlibc !== (artifact.minimum_libc !== undefined))
+    ctx.addIssue({ code: "custom", path: ["minimum_libc"], message: "must be present exactly for Linux GNU targets" });
+  if (needsGlibc && artifact.minimum_libc !== undefined) {
+    const version = /^glibc (.+)$/u.exec(artifact.minimum_libc)?.[1];
+    const parsed = version === undefined ? undefined : parseRuntimeVersion(version);
+    if (parsed === undefined || compareVersions(parsed, MAX_GLIBC) < 0) {
+      ctx.addIssue({ code: "custom", path: ["minimum_libc"], message: "must report glibc 2.39 or newer" });
+    }
+  }
+});
+function parseVersionProbeArgs(value) {
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("cargo-raw version probe arguments must be a JSON array of strings");
+  }
+  ensure(Array.isArray(parsed) && parsed.length <= 32 && parsed.every((arg) => typeof arg === "string" && arg.length > 0 && arg.length <= 256 && !arg.includes("\x00")), "cargo-raw version probe arguments must be a JSON array of at most 32 nonempty strings of at most 256 characters");
+  return parsed.length === 0 ? undefined : parsed;
+}
+function captureVersionJson(executable, args, limits = {}) {
+  const result = spawnSync(executable, args, {
+    cwd: dirname2(executable),
+    encoding: "utf8",
+    env: { PATH: process.env.PATH ?? "", LANG: "C", LC_ALL: "C" },
+    maxBuffer: limits.maxBuffer ?? VERSION_PROBE_MAX_BUFFER,
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: limits.timeoutMs ?? VERSION_PROBE_TIMEOUT_MS
+  });
+  const timedOut = result.error instanceof Error && result.error.code === "ETIMEDOUT";
+  ensure(!result.error, timedOut ? "cargo-raw version probe timed out" : "cargo-raw version probe could not be started or exceeded its output limit");
+  ensure(result.status === 0, "cargo-raw version probe exited unsuccessfully");
+  let parsed;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    throw new Error("cargo-raw version probe must write one valid JSON object to stdout");
+  }
+  ensure(typeof parsed === "object" && parsed !== null && !Array.isArray(parsed), "cargo-raw version probe must write one valid JSON object to stdout");
+  return parsed;
+}
 function glibcVersionNumber(version) {
   const match = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:\.(0|[1-9][0-9]*))?$/u.exec(version);
   if (!match)
@@ -15021,14 +15092,50 @@ function validateVersion(binary, version, reported) {
   const metadata = version.includes("+") ? "" : String.raw`(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?`;
   ensure(new RegExp(`^${escape(`${binary} ${version}`)}${metadata}$`, "u").test(reported), "cargo-raw binary reports an unexpected version");
 }
+function parseRuntimeVersion(value) {
+  const match = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:\.(0|[1-9][0-9]*))?$/u.exec(value);
+  if (!match)
+    return;
+  return [Number(match[1]), Number(match[2]), Number(match[3] ?? 0)];
+}
+function parseMinimumMacOs(otoolOutput) {
+  const versions = otoolOutput.split(/(?=^Load command \d+\s*$)/mu).flatMap((section) => {
+    const commandName = /^\s*cmd\s+(LC_BUILD_VERSION|LC_VERSION_MIN_MACOSX)\s*$/mu.exec(section)?.[1];
+    if (commandName === "LC_BUILD_VERSION")
+      return [/^\s*minos\s+([0-9]+\.[0-9]+(?:\.[0-9]+)?)\s*$/mu.exec(section)?.[1]];
+    if (commandName === "LC_VERSION_MIN_MACOSX")
+      return [/^\s*version\s+([0-9]+\.[0-9]+(?:\.[0-9]+)?)\s*$/mu.exec(section)?.[1]];
+    return [];
+  }).filter((version) => version !== undefined);
+  ensure(versions.length > 0, "cargo-raw macOS binary does not declare a minimum operating system version");
+  const parsed = versions.map(parseRuntimeVersion);
+  ensure(parsed.every((version) => version !== undefined), "cargo-raw macOS binary has an invalid minimum operating system version");
+  const maximum = parsed.reduce((current, version) => compareVersions(version, current) > 0 ? version : current, [0, 0, 0]);
+  return maximum[2] === 0 ? `${maximum[0]}.${maximum[1]}` : `${maximum[0]}.${maximum[1]}.${maximum[2]}`;
+}
+function runtimeFloor(target, executable) {
+  if (target.endsWith("-apple-darwin"))
+    return { minimum_os: parseMinimumMacOs(command("otool", "-l", executable)) };
+  if (target.endsWith("linux-gnu")) {
+    const version = /^glibc\s+(\d+\.\d+(?:\.\d+)?)$/u.exec(command("getconf", "GNU_LIBC_VERSION"))?.[1];
+    ensure(version !== undefined, "cargo-raw Linux GNU runner did not report its glibc version");
+    const parsed = parseRuntimeVersion(version);
+    ensure(parsed !== undefined && compareVersions(parsed, MAX_GLIBC) >= 0, "cargo-raw Linux GNU runner must provide glibc 2.39 or newer");
+    return { minimum_libc: `glibc ${version}` };
+  }
+  return {};
+}
 var command = (...args) => execFileSync(args[0], args.slice(1), { encoding: "utf8" }).trim();
-function verifyRaw(args) {
-  if (args.length === 4 && args[0] === "--validate") {
+function verifyRaw(args, sourceMetadata) {
+  if ((args.length === 4 || args.length === 5) && args[0] === "--validate") {
     validateInputs(args[1], args[2], args[3]);
+    if (args[4] !== undefined)
+      parseVersionProbeArgs(args[4]);
     return;
   }
-  ensure(args.length === 5, "usage: release-build raw BINARY_PATH TARGET BINARY VERSION OUTPUT_DIRECTORY");
+  ensure(args.length === 5 || args.length === 6, "usage: release-build raw BINARY_PATH TARGET BINARY VERSION OUTPUT_DIRECTORY [VERSION_PROBE_ARGS_JSON]");
   const [source, target, binary, version, destination] = args;
+  const versionProbeArgs = args[5] === undefined ? undefined : parseVersionProbeArgs(args[5]);
   validateInputs(target, binary, version);
   const path = realpathSync(resolve(source));
   let executable = false;
@@ -15045,21 +15152,35 @@ function verifyRaw(args) {
   validateFormat(target, description, headers, dynamic, versions);
   const reported = command(path, "--version");
   validateVersion(binary, version, reported);
+  ensure(sourceMetadata !== undefined && /^[a-f0-9]{40}$/u.test(sourceMetadata.sourceRevision) && sourceMetadata.sourceClean, "cargo-raw requires a clean source snapshot with a trusted 40-character source revision");
   mkdirSync2(destination, { recursive: true });
   const output = join2(destination, `${binary}-${target}`);
   copyFileSync(path, output);
   chmodSync(output, 493);
+  const digest = createHash("sha256").update(readFileSync2(output)).digest("hex");
+  const artifact = {
+    version,
+    target: NORMALIZED_TARGETS[target],
+    rust_target: target,
+    ...runtimeFloor(target, path),
+    source_revision: sourceMetadata.sourceRevision,
+    dirty: !sourceMetadata.sourceClean,
+    sha256: digest,
+    ...versionProbeArgs === undefined ? {} : { version_json: captureVersionJson(path, versionProbeArgs) }
+  };
+  writeFileSync2(join2(destination, `${binary}-${target}.artifact.json`), `${JSON.stringify(artifact, null, 2)}
+`, { flag: "wx" });
   return `verified ${target}: ${description}; ${reported}`;
 }
 
 // src/release/terraform-collect.ts
-import { constants as constants3, copyFileSync as copyFileSync2, lstatSync as lstatSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync2, realpathSync as realpathSync2 } from "node:fs";
+import { constants as constants3, copyFileSync as copyFileSync2, lstatSync as lstatSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync3, realpathSync as realpathSync2 } from "node:fs";
 import { basename as basename2, join as join3, sep } from "node:path";
 var regular = (path) => lstatSync3(path).isFile();
 function collect(client, destination) {
   const manifest = join3(client, "dist/artifacts.json");
   ensure(regular(manifest), "GoReleaser did not produce a regular artifacts.json manifest");
-  const artifacts = JSON.parse(readFileSync2(manifest, "utf8"));
+  const artifacts = JSON.parse(readFileSync3(manifest, "utf8"));
   ensure(Array.isArray(artifacts), "GoReleaser artifacts manifest is not a list");
   const files = [];
   for (const artifact of artifacts) {
@@ -15095,8 +15216,12 @@ function releaseBuild(args) {
     packageCargo(rest[0], rest[1]);
     return;
   }
-  if (command === "raw")
-    return verifyRaw(rest);
+  if (command === "raw") {
+    const sourceRevision = process.env.CSM_CI_SOURCE_REVISION;
+    const sourceClean = process.env.CSM_CI_SOURCE_CLEAN;
+    const sourceMetadata = sourceRevision === undefined && sourceClean === undefined ? undefined : { sourceRevision: sourceRevision ?? "", sourceClean: sourceClean === "true" };
+    return verifyRaw(rest, sourceMetadata);
+  }
   if (command === "terraform") {
     ensure(rest.length === 2, "usage: release-build terraform CLIENT_DIRECTORY DESTINATION");
     collect(resolve2(rest[0]), resolve2(rest[1]));

@@ -48,6 +48,8 @@ export const ReleaseSchema = z.discriminatedUnion("build_type", [
     build_type: z.literal("cargo-raw"),
     binary: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}(?![\s\S])/u, "binary must be a safe Cargo binary name of at most 64 characters"),
     targets: z.array(z.enum(CARGO_RAW_TARGETS)).min(1).refine((targets) => new Set(targets).size === targets.length, "duplicate cargo-raw target"),
+    version_probe_args: z.array(z.string().min(1).max(256).refine((arg) => !arg.includes("\0"), "arguments must not contain NUL bytes"))
+      .min(1).max(32).optional(),
   }),
 ]);
 export type Release = z.infer<typeof ReleaseSchema>;

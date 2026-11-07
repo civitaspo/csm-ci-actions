@@ -36606,7 +36606,8 @@ var ReleaseSchema = discriminatedUnion("build_type", [
   strictObject({
     build_type: literal("cargo-raw"),
     binary: string2().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}(?![\s\S])/u, "binary must be a safe Cargo binary name of at most 64 characters"),
-    targets: array(_enum(CARGO_RAW_TARGETS)).min(1).refine((targets) => new Set(targets).size === targets.length, "duplicate cargo-raw target")
+    targets: array(_enum(CARGO_RAW_TARGETS)).min(1).refine((targets) => new Set(targets).size === targets.length, "duplicate cargo-raw target"),
+    version_probe_args: array(string2().min(1).max(256).refine((arg) => !arg.includes("\x00"), "arguments must not contain NUL bytes")).min(1).max(32).optional()
   })
 ]);
 var OPS = ["approve", "merge", "policy-check", "securefix", "release"];
@@ -36919,6 +36920,79 @@ import { createHash as createHash2 } from "node:crypto";
 import { lstat as lstat2, mkdir as mkdir2, readFile, readdir as readdir2, writeFile as writeFile2 } from "node:fs/promises";
 import { join as join2 } from "node:path";
 
+// src/release/ensure.ts
+function ensure(condition, message) {
+  if (!condition)
+    throw new Rejection(message);
+}
+
+// src/release/cargo-raw.ts
+var RAW_TARGETS = {
+  "aarch64-apple-darwin": ["Mach-O 64-bit", "arm64"],
+  "aarch64-unknown-linux-gnu": ["ELF 64-bit LSB", "ARM aarch64"],
+  "x86_64-apple-darwin": ["Mach-O 64-bit", "x86_64"],
+  "x86_64-unknown-linux-gnu": ["ELF 64-bit LSB", "x86-64"],
+  "aarch64-unknown-linux-musl": ["ELF 64-bit LSB", "ARM aarch64"],
+  "x86_64-unknown-linux-musl": ["ELF 64-bit LSB", "x86-64"]
+};
+var SEMVER = String.raw`(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?`;
+var MAX_GLIBC = [2, 39, 0];
+var VERSION_PROBE_MAX_BUFFER = 64 * 1024;
+var NORMALIZED_TARGETS = {
+  "aarch64-apple-darwin": "macos-aarch64",
+  "x86_64-apple-darwin": "macos-x86_64",
+  "aarch64-unknown-linux-gnu": "linux-aarch64",
+  "x86_64-unknown-linux-gnu": "linux-x86_64",
+  "aarch64-unknown-linux-musl": "linux-musl-aarch64",
+  "x86_64-unknown-linux-musl": "linux-musl-x86_64"
+};
+var RawArtifactSchema = strictObject({
+  version: string2().regex(new RegExp(`^${SEMVER}$`, "u")),
+  target: _enum(["macos-aarch64", "macos-x86_64", "linux-aarch64", "linux-x86_64", "linux-musl-aarch64", "linux-musl-x86_64"]),
+  rust_target: _enum(Object.keys(RAW_TARGETS)),
+  minimum_os: string2().regex(/^\d+\.\d+(?:\.\d+)?$/u).optional(),
+  minimum_libc: string2().regex(/^glibc \d+\.\d+(?:\.\d+)?$/u).optional(),
+  source_revision: string2().regex(/^[a-f0-9]{40}$/u),
+  dirty: boolean2(),
+  sha256: string2().regex(/^[a-f0-9]{64}$/u),
+  version_json: record(string2(), unknown()).optional()
+}).superRefine((artifact, ctx) => {
+  const expectedTarget = NORMALIZED_TARGETS[artifact.rust_target];
+  if (artifact.target !== expectedTarget)
+    ctx.addIssue({ code: "custom", path: ["target"], message: "does not match rust_target" });
+  const needsOs = artifact.rust_target.endsWith("-apple-darwin");
+  const needsGlibc = artifact.rust_target.endsWith("linux-gnu");
+  if (needsOs !== (artifact.minimum_os !== undefined))
+    ctx.addIssue({ code: "custom", path: ["minimum_os"], message: "must be present exactly for macOS targets" });
+  if (needsGlibc !== (artifact.minimum_libc !== undefined))
+    ctx.addIssue({ code: "custom", path: ["minimum_libc"], message: "must be present exactly for Linux GNU targets" });
+  if (needsGlibc && artifact.minimum_libc !== undefined) {
+    const version = /^glibc (.+)$/u.exec(artifact.minimum_libc)?.[1];
+    const parsed = version === undefined ? undefined : parseRuntimeVersion(version);
+    if (parsed === undefined || compareVersions(parsed, MAX_GLIBC) < 0) {
+      ctx.addIssue({ code: "custom", path: ["minimum_libc"], message: "must report glibc 2.39 or newer" });
+    }
+  }
+});
+function validateRawArtifact(value, expected) {
+  const artifact = RawArtifactSchema.parse(value);
+  ensure(artifact.version === expected.version, "cargo-raw artifact version does not match the release plan");
+  ensure(artifact.source_revision === expected.sourceRevision, "cargo-raw artifact source revision does not match the release plan");
+  ensure(artifact.rust_target === expected.rustTarget, "cargo-raw artifact Rust target does not match the release plan");
+  ensure(artifact.sha256 === expected.sha256, "cargo-raw artifact digest does not match the binary");
+  ensure(artifact.dirty === false, "cargo-raw artifact reports a dirty source build");
+  return artifact;
+}
+function compareVersions(left, right) {
+  return left[0] - right[0] || left[1] - right[1] || left[2] - right[2];
+}
+function parseRuntimeVersion(value) {
+  const match = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:\.(0|[1-9][0-9]*))?$/u.exec(value);
+  if (!match)
+    return;
+  return [Number(match[1]), Number(match[2]), Number(match[3] ?? 0)];
+}
+
 // src/release/terraform.ts
 import { resolve } from "node:path";
 
@@ -36928,12 +37002,6 @@ import { createHash } from "node:crypto";
 import { closeSync, constants as constants3, fsyncSync, linkSync, lstatSync, mkdtempSync, openSync, readFileSync as readFileSync2, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-
-// src/release/ensure.ts
-function ensure(condition, message) {
-  if (!condition)
-    throw new Rejection(message);
-}
 
 // src/release/strict-json.ts
 var NUMBER = /-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|NaN|-?Infinity/uy;
@@ -37359,7 +37427,7 @@ async function prepareAssets(directory, release) {
   }
   if (release?.build_type === "cargo-raw") {
     const binaries = release.targets.map((target) => `${release.binary}-${target}`);
-    const expected = new Set(binaries.flatMap((name) => [name, `${name}.sha256`]));
+    const expected = new Set(binaries.flatMap((name) => [name, `${name}.sha256`, `${name}.artifact.json`]));
     for (const asset of assets) {
       if (!expected.has(asset.name))
         throw new Rejection(`unexpected cargo-raw asset ${JSON.stringify(asset.name)}`);
@@ -37369,6 +37437,26 @@ async function prepareAssets(directory, release) {
       const binary = assets.find((asset) => asset.name === name);
       if (!binary)
         throw new Rejection(`missing cargo-raw binary ${JSON.stringify(name)}`);
+      const artifactName = `${name}.artifact.json`;
+      const artifactAsset = assets.find((asset) => asset.name === artifactName);
+      if (!artifactAsset)
+        throw new Rejection(`missing cargo-raw artifact ${JSON.stringify(artifactName)}`);
+      let artifactJson;
+      try {
+        artifactJson = JSON.parse(await readFile(artifactAsset.path, "utf8"));
+      } catch {
+        throw new Rejection(`cargo-raw artifact ${JSON.stringify(artifactName)} is not valid JSON`);
+      }
+      try {
+        validateRawArtifact(artifactJson, {
+          version: release.version,
+          sourceRevision: release.sourceRevision,
+          rustTarget: name.slice(release.binary.length + 1),
+          sha256: binary.sha256
+        });
+      } catch (error) {
+        throw new Rejection(`cargo-raw artifact ${JSON.stringify(artifactName)} is invalid: ${error instanceof Error ? error.message : String(error)}`);
+      }
       const sidecar = `${name}.sha256`;
       const content = `${binary.sha256}  ${name}
 `;
@@ -37507,6 +37595,8 @@ async function publishRelease(gh, input) {
     if (!input.terraform)
       throw new Rejection("Terraform publication requires the verified public key and source timestamp");
     local = await prepareAssets(input.directory, { ...plan.release, version: plan.version, ...input.terraform });
+  } else if (plan.release.build_type === "cargo-raw") {
+    local = await prepareAssets(input.directory, { ...plan.release, version: plan.version, sourceRevision: plan.mergeSha });
   } else {
     local = await prepareAssets(input.directory, plan.release);
   }

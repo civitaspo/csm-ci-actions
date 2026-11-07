@@ -3,10 +3,12 @@ import { lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Rejection } from "../lib/request.ts";
 import type { Release } from "../lib/config.ts";
+import { validateRawArtifact } from "./cargo-raw.ts";
 import { terraformAssets, type TerraformVerification } from "./terraform.ts";
 
 export type AssetDigest = { name: string; sha256: string; path: string };
-export type AssetRelease = Exclude<Release, { build_type: "terraform-provider" }>
+export type AssetRelease = Exclude<Release, { build_type: "terraform-provider" | "cargo-raw" }>
+  | (Extract<Release, { build_type: "cargo-raw" }> & { version: string; sourceRevision: string })
   | (Extract<Release, { build_type: "terraform-provider" }> & TerraformVerification);
 
 export async function prepareAssets(directory: string, release?: AssetRelease): Promise<AssetDigest[]> {
@@ -32,7 +34,7 @@ export async function prepareAssets(directory: string, release?: AssetRelease): 
   }
   if (release?.build_type === "cargo-raw") {
     const binaries = release.targets.map((target) => `${release.binary}-${target}`);
-    const expected = new Set(binaries.flatMap((name) => [name, `${name}.sha256`]));
+    const expected = new Set(binaries.flatMap((name) => [name, `${name}.sha256`, `${name}.artifact.json`]));
     for (const asset of assets) {
       if (!expected.has(asset.name)) throw new Rejection(`unexpected cargo-raw asset ${JSON.stringify(asset.name)}`);
     }
@@ -40,6 +42,22 @@ export async function prepareAssets(directory: string, release?: AssetRelease): 
     for (const name of binaries) {
       const binary = assets.find((asset) => asset.name === name);
       if (!binary) throw new Rejection(`missing cargo-raw binary ${JSON.stringify(name)}`);
+      const artifactName = `${name}.artifact.json`;
+      const artifactAsset = assets.find((asset) => asset.name === artifactName);
+      if (!artifactAsset) throw new Rejection(`missing cargo-raw artifact ${JSON.stringify(artifactName)}`);
+      let artifactJson: unknown;
+      try { artifactJson = JSON.parse(await readFile(artifactAsset.path, "utf8")); }
+      catch { throw new Rejection(`cargo-raw artifact ${JSON.stringify(artifactName)} is not valid JSON`); }
+      try {
+        validateRawArtifact(artifactJson, {
+          version: release.version,
+          sourceRevision: release.sourceRevision,
+          rustTarget: name.slice(release.binary.length + 1),
+          sha256: binary.sha256,
+        });
+      } catch (error) {
+        throw new Rejection(`cargo-raw artifact ${JSON.stringify(artifactName)} is invalid: ${error instanceof Error ? error.message : String(error)}`);
+      }
       const sidecar = `${name}.sha256`;
       const content = `${binary.sha256}  ${name}\n`;
       if (assets.some((asset) => asset.name === sidecar)) {
