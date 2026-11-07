@@ -201,7 +201,7 @@ async function noMerge(ctx: Parameters<Scenario["run"]>[0], pr: Pr): Promise<voi
   assert(!data.merged && data.state === "open", `request unexpectedly merged pull request #${pr.number}`);
 }
 
-async function withPendingRequiredCheck(ctx: Parameters<Scenario["run"]>[0], pr: Pr, run: (context: string) => Promise<void>): Promise<void> {
+async function withPendingRequiredCheck(ctx: Parameters<Scenario["run"]>[0], pr: Pr, run: (release: () => Promise<void>) => Promise<void>): Promise<void> {
   const address = splitRepository(CLIENT);
   const context = `csm-ci-e2e-pending-${pr.number}`;
   const { data: ruleset } = await ctx.gh.rest.repos.createRepoRuleset({
@@ -213,9 +213,21 @@ async function withPendingRequiredCheck(ctx: Parameters<Scenario["run"]>[0], pr:
     rules: [{ type: "required_status_checks", parameters: { do_not_enforce_on_create: false, strict_required_status_checks_policy: false, required_status_checks: [{ context }] } }],
     bypass_actors: [],
   });
+  let released = false;
+  const release = async (): Promise<void> => {
+    if (released) return;
+    const state = await ctx.gh.graphql<{ repository: { pullRequest: { autoMergeRequest: unknown | null; merged: boolean } | null } }>(
+      "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){merged autoMergeRequest{enabledAt}}}}",
+      { owner: address.owner, name: address.repo, number: pr.number },
+    );
+    const pull = state.repository.pullRequest;
+    assert(pull && (pull.merged || pull.autoMergeRequest === null), "cannot release the temporary required-check ruleset while native auto-merge may still be active");
+    await ctx.gh.rest.repos.deleteRepoRuleset({ ...address, ruleset_id: ruleset.id });
+    released = true;
+  };
   try {
-    await ctx.gh.rest.repos.createCommitStatus({ ...address, sha: pr.head, state: "pending", context, description: "Held by the csm-ci merge reservation E2E fixture" });
-    await run(context);
+    // The required status context has no status, so the rule itself holds native auto-merge.
+    await run(release);
   } finally {
     // Keep the required-check gate in place until native auto-merge is confirmed off.
     // Otherwise a failed test could release GitHub's native merge while cleaning up.
@@ -234,7 +246,10 @@ async function withPendingRequiredCheck(ctx: Parameters<Scenario["run"]>[0], pr:
     );
     const finalPull = verified.repository.pullRequest;
     assert(finalPull && (finalPull.merged || finalPull.autoMergeRequest === null), "leaving the temporary required-check ruleset in place because native auto-merge could not be confirmed off");
-    await ctx.gh.rest.repos.deleteRepoRuleset({ ...address, ruleset_id: ruleset.id });
+    if (!released) {
+      await ctx.gh.rest.repos.deleteRepoRuleset({ ...address, ruleset_id: ruleset.id });
+      released = true;
+    }
   }
 }
 
@@ -420,7 +435,7 @@ export const merge: Scenario[] = [
     await dismissApproval(ctx, pr);
     const { data: repo } = await ctx.gh.rest.repos.get({ ...splitRepository(CLIENT) });
     assert(repo.allow_auto_merge, "testing client repository must have allow_auto_merge enabled for this scenario");
-    await withPendingRequiredCheck(ctx, pr, async (context) => {
+    await withPendingRequiredCheck(ctx, pr, async (releaseRequiredCheck) => {
       const { data: pull } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
       await ctx.gh.graphql("mutation($pull:ID!){enablePullRequestAutoMerge(input:{pullRequestId:$pull,mergeMethod:SQUASH}){pullRequest{autoMergeRequest{enabledAt}}}}", { pull: pull.node_id });
       const enabled = await ctx.gh.graphql<{ repository: { pullRequest: { autoMergeRequest: { enabledAt: string } | null } } }>("query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){autoMergeRequest{enabledAt}}}}", { owner: "civitaspo", name: "testing-csm-ci-client", number: pr.number });
@@ -428,10 +443,10 @@ export const merge: Scenario[] = [
       await reserve(ctx, pr);
       const afterAcceptance = await ctx.gh.graphql<{ repository: { pullRequest: { autoMergeRequest: unknown | null } } }>("query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){autoMergeRequest{enabledAt}}}}", { owner: "civitaspo", name: "testing-csm-ci-client", number: pr.number });
       assert(afterAcceptance.repository.pullRequest.autoMergeRequest === null, "CSM accepted the reservation while GitHub auto-merge remained enabled");
+      await releaseRequiredCheck();
 
       const approval = await postComment(ctx, pr, "/approve");
       await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: approval.id } }, approval.since, "success");
-      await ctx.gh.rest.repos.createCommitStatus({ ...splitRepository(CLIENT), sha: pr.head, state: "success", context, description: "Released by the csm-ci merge reservation E2E fixture" });
       const sweep = await dispatch(ctx, SERVER, "csm-ci-automerge.yml");
       assert(sweep.conclusion === "success", `automerge sweep concluded ${sweep.conclusion} (${sweep.html_url})`);
       const merged = await until(`merge of #${pr.number}`, async () => {
