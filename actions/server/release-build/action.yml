@@ -19,6 +19,9 @@ inputs:
   binary:
     description: Safe Cargo binary name, required for cargo-raw.
     required: false
+  source-revision:
+    description: Trusted source merge SHA, required for cargo-raw.
+    required: false
 runs:
   using: composite
   steps:
@@ -141,8 +144,23 @@ runs:
         TARGET: ${{ inputs.target }}
         BINARY: ${{ inputs.binary }}
         VERSION: ${{ inputs.version }}
+        SOURCE_REVISION: ${{ inputs.source-revision }}
       run: |
         node "$GITHUB_ACTION_PATH/../../../dist/release-build.js" raw --validate "$TARGET" "$BINARY" "$VERSION"
+        if ! [[ "$SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "cargo-raw requires a trusted 40-character source revision" >&2
+          exit 1
+        fi
+        if ! status="$(git -C "$CLIENT_PATH" status --porcelain --untracked-files=all)"; then
+          echo "cargo-raw could not check source snapshot status" >&2
+          exit 1
+        fi
+        if [ -n "$status" ]; then
+          echo "cargo-raw source snapshot must be clean before compilation" >&2
+          exit 1
+        fi
+        export CSM_CI_SOURCE_REVISION="$SOURCE_REVISION"
+        export CSM_CI_SOURCE_CLEAN=true
         rustup toolchain install 1.99.1 --profile minimal --no-self-update
         rustup target add --toolchain 1.99.1 "$TARGET"
         if [[ "$TARGET" == *linux-musl ]]; then

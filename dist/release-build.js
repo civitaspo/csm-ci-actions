@@ -14677,7 +14677,9 @@ var CARGO_TARGETS = [
 ];
 var CARGO_RAW_TARGETS = [
   "aarch64-apple-darwin",
+  "aarch64-unknown-linux-gnu",
   "x86_64-apple-darwin",
+  "x86_64-unknown-linux-gnu",
   "aarch64-unknown-linux-musl",
   "x86_64-unknown-linux-musl"
 ];
@@ -14970,30 +14972,63 @@ function padToRecord(tar) {
 // src/release/cargo-raw.ts
 import { execFileSync } from "node:child_process";
 import { accessSync, chmodSync, constants as constants2, copyFileSync, lstatSync as lstatSync2, mkdirSync as mkdirSync2, realpathSync, statSync } from "node:fs";
-import { join as join2, resolve } from "node:path";
+import { basename as basename2, join as join2, resolve } from "node:path";
 var RAW_TARGETS = {
   "aarch64-apple-darwin": ["Mach-O 64-bit", "arm64"],
+  "aarch64-unknown-linux-gnu": ["ELF 64-bit LSB", "ARM aarch64"],
   "x86_64-apple-darwin": ["Mach-O 64-bit", "x86_64"],
+  "x86_64-unknown-linux-gnu": ["ELF 64-bit LSB", "x86-64"],
   "aarch64-unknown-linux-musl": ["ELF 64-bit LSB", "ARM aarch64"],
   "x86_64-unknown-linux-musl": ["ELF 64-bit LSB", "x86-64"]
 };
 var SEMVER = String.raw`(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?`;
 var escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+var MAX_GLIBC = [2, 39, 0];
+function glibcVersionNumber(version) {
+  const match = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:\.(0|[1-9][0-9]*))?$/u.exec(version);
+  if (!match)
+    return;
+  return [Number(match[1]), Number(match[2]), Number(match[3] ?? 0)];
+}
+function compareVersions(left, right) {
+  return left[0] - right[0] || left[1] - right[1] || left[2] - right[2];
+}
+function validateGlibcRequirements(target, headers, dynamic, versions) {
+  const loader = target.startsWith("aarch64-") ? "ld-linux-aarch64.so.1" : "ld-linux-x86-64.so.2";
+  const interpreter = /^\s*\[Requesting program interpreter:\s*([^\]]+)\]\s*$/mu.exec(headers)?.[1]?.trim();
+  ensure(interpreter !== undefined && basename2(interpreter) === loader, "cargo-raw GNU Linux binary must use the target glibc dynamic loader");
+  const hasLibcDependency = dynamic.split(`
+`).some((line) => /^\s*0x[0-9a-f]+\s+\(NEEDED\)\s+Shared library:\s+\[libc\.so\.6\]\s*$/iu.test(line));
+  ensure(hasLibcDependency, "cargo-raw GNU Linux binary must link against glibc");
+  const needed = /Version needs section[\s\S]*?(?=Version (?:definition|symbols?) section|$)/u.exec(versions)?.[0] ?? "";
+  const requirements = [...needed.matchAll(/Name: GLIBC_([A-Za-z0-9_.-]+)/gu)].map((match) => match[1]);
+  ensure(requirements.length > 0, "cargo-raw GNU Linux binary must declare its glibc symbol requirements");
+  const parsed = requirements.map(glibcVersionNumber);
+  ensure(parsed.every((version) => version !== undefined), "cargo-raw GNU Linux binary has an invalid glibc requirement");
+  const maximum = parsed.reduce((current, version) => compareVersions(version, current) > 0 ? version : current, [0, 0, 0]);
+  ensure(compareVersions(maximum, MAX_GLIBC) <= 0, `cargo-raw GNU Linux binary requires GLIBC_${maximum[0]}.${maximum[1]}${maximum[2] === 0 ? "" : `.${maximum[2]}`}, above the supported GLIBC_2.39 baseline`);
+}
 function validateInputs(target, binary, version) {
   ensure(Object.hasOwn(RAW_TARGETS, target), "unsupported cargo-raw target");
   ensure(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u.test(binary), "binary must be a safe Cargo binary name of at most 64 characters");
   ensure(new RegExp(`^${SEMVER}$`, "u").test(version), "cargo-raw version must be valid SemVer");
 }
-function validateFormat(target, description, headers = "", dynamic = "") {
+function validateFormat(target, description, headers = "", dynamic = "", versions = "") {
   const [kind, architecture] = RAW_TARGETS[target] ?? ["", ""];
   ensure(description.includes(kind) && description.includes(architecture) && description.includes("executable"), "cargo-raw binary has the wrong executable format or architecture");
   ensure(!target.endsWith("linux-musl") || !(headers.includes("INTERP") || dynamic.includes("NEEDED")), "cargo-raw Linux binary must be statically linked");
+  if (target.endsWith("linux-gnu"))
+    validateGlibcRequirements(target, headers, dynamic, versions);
 }
 function validateVersion(binary, version, reported) {
   const metadata = version.includes("+") ? "" : String.raw`(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?`;
   ensure(new RegExp(`^${escape(`${binary} ${version}`)}${metadata}$`, "u").test(reported), "cargo-raw binary reports an unexpected version");
 }
 var command = (...args) => execFileSync(args[0], args.slice(1), { encoding: "utf8" }).trim();
+var readelf = (...args) => execFileSync("readelf", args, {
+  encoding: "utf8",
+  env: { ...process.env, LC_ALL: "C" }
+}).trim();
 function verifyRaw(args) {
   if (args.length === 4 && args[0] === "--validate") {
     validateInputs(args[1], args[2], args[3]);
@@ -15010,10 +15045,11 @@ function verifyRaw(args) {
   } catch {}
   ensure(!lstatSync2(source).isSymbolicLink() && statSync(path).isFile() && executable, "cargo-raw binary must be a regular executable file");
   const description = command("file", "-b", path);
-  const musl = target.endsWith("linux-musl");
-  const headers = musl ? command("readelf", "-l", path) : "";
-  const dynamic = musl ? command("readelf", "-d", path) : "";
-  validateFormat(target, description, headers, dynamic);
+  const linux = target.includes("linux-");
+  const headers = linux ? readelf("-l", path) : "";
+  const dynamic = linux ? readelf("-d", path) : "";
+  const versions = target.endsWith("linux-gnu") ? readelf("-V", path) : "";
+  validateFormat(target, description, headers, dynamic, versions);
   const reported = command(path, "--version");
   validateVersion(binary, version, reported);
   mkdirSync2(destination, { recursive: true });
@@ -15025,7 +15061,7 @@ function verifyRaw(args) {
 
 // src/release/terraform-collect.ts
 import { constants as constants3, copyFileSync as copyFileSync2, lstatSync as lstatSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync2, realpathSync as realpathSync2 } from "node:fs";
-import { basename as basename2, join as join3, sep } from "node:path";
+import { basename as basename3, join as join3, sep } from "node:path";
 var regular = (path) => lstatSync3(path).isFile();
 function collect(client, destination) {
   const manifest = join3(client, "dist/artifacts.json");
@@ -15049,13 +15085,13 @@ function collect(client, destination) {
   }
   ensure(files.length > 0, "GoReleaser produced no release archives");
   files.push(join3(client, "terraform-registry-manifest.json"));
-  const names = files.map((path) => basename2(path));
+  const names = files.map((path) => basename3(path));
   ensure(names.length === new Set(names).size, "duplicate GoReleaser asset name");
   for (const path of files)
     ensure(regular(path), "Terraform build output is not a regular file");
   mkdirSync3(destination, { recursive: true });
   for (const path of files)
-    copyFileSync2(path, join3(destination, basename2(path)), constants3.COPYFILE_EXCL);
+    copyFileSync2(path, join3(destination, basename3(path)), constants3.COPYFILE_EXCL);
 }
 
 // src/release/release-build.ts
