@@ -37805,7 +37805,14 @@ async function mergeReservation(ctx, record, head) {
     throw new Rejection("merge readiness changed before the final write");
   const targetContext = { ...ctx, repository: evaluated.repository };
   const pull = await pullFacts(ctx.server, evaluated.repository, record.payload.pull_number);
-  await disableAutoMerge(targetContext, pull.number);
+  await disableAutoMerge(targetContext, ctx.write, pull.number);
+  const afterDisarm = await pullFacts(ctx.server, evaluated.repository, pull.number);
+  if (afterDisarm.merged) {
+    await evaluateReservation(targetContext, record);
+    throw new Rejection(`pull request #${pull.number} was merged outside csm-ci`);
+  }
+  if (await fetchAutoMergeRequest(ctx.server, evaluated.repository, pull.number))
+    throw new Rejection(`GitHub auto-merge is still enabled for pull request #${pull.number}`);
   const latest = await evaluateReservation(targetContext, record);
   if (latest.decision.kind !== "merge" || latest.decision.head !== head)
     throw new Rejection("merge readiness changed after disabling auto-merge");
@@ -37861,7 +37868,18 @@ async function mergeReservation(ctx, record, head) {
   await setLabel(targetContext, pull.number, true);
   return { result: "merged", head, mergeCommit: mergedSha };
 }
-async function disableAutoMerge(ctx, pullNumber) {
+async function fetchAutoMergeRequest(server, repository, pullNumber) {
+  const { owner, repo } = splitRepository(repository);
+  const query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){autoMergeRequest{mergeMethod enabledBy{__typename ... on Bot{databaseId}}}}}}";
+  const state = await server.graphql(query, { owner, name: repo, number: pullNumber });
+  const pull = state.repository.pullRequest;
+  if (!pull)
+    throw new Rejection(`pull request #${pullNumber} no longer exists`);
+  return pull.autoMergeRequest;
+}
+async function disableAutoMerge(ctx, write, pullNumber) {
+  if (!write)
+    throw new Error("pull request write token is required to disable GitHub auto-merge");
   const { owner, repo } = splitRepository(ctx.repository);
   const query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){id autoMergeRequest{mergeMethod enabledBy{__typename ... on Bot{databaseId}}}}}}";
   const state = await ctx.server.graphql(query, { owner, name: repo, number: pullNumber });
@@ -37869,10 +37887,12 @@ async function disableAutoMerge(ctx, pullNumber) {
   if (!request)
     return;
   try {
-    await ctx.write?.graphql("mutation($id:ID!){disablePullRequestAutoMerge(input:{pullRequestId:$id}){clientMutationId}}", { id: state.repository.pullRequest.id });
+    await write.graphql("mutation($id:ID!){disablePullRequestAutoMerge(input:{pullRequestId:$id}){clientMutationId}}", { id: state.repository.pullRequest.id });
   } catch (error) {
-    const verify = await ctx.server.graphql(query, { owner, name: repo, number: pullNumber });
-    if (verify.repository.pullRequest.autoMergeRequest)
+    const current = await pullFacts(ctx.server, ctx.repository, pullNumber);
+    if (current.merged)
+      return;
+    if (await fetchAutoMergeRequest(ctx.server, ctx.repository, pullNumber))
       throw error;
   }
 }

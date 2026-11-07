@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { acceptMerge, evaluateReservation, mergeReservation, type MergeContext } from "./merge.ts";
+import { acceptMerge, evaluateReservation, mergeReservation, prepareMergeAcceptance, type MergeContext } from "./merge.ts";
 import { github } from "./github.ts";
 import { marker } from "./notify.ts";
 import { config, fakeFetch } from "./testing.ts";
@@ -13,24 +13,25 @@ function pull() {
   return { number: 12, state: "open", merged: false, merged_by: null, merge_commit_sha: null, draft: false, node_id: "PR_node", title: "Example (#12)", body: "Description", user: { id: 10, login: "alice", type: "User" }, head: { sha, repo: { full_name: "owner/repo" } }, base: { ref: "main", repo: { id: 123, full_name: "owner/repo", default_branch: "main" } } };
 }
 
-function setup(body: string, author = { id: 10, login: "alice", type: "User" }, activeReservation = false, options: { pull?: Record<string, unknown>; pullThen?: unknown[]; pullStatus?: number; repositoryStatus?: number; labelExists?: boolean; commentId?: number; editedAt?: string | null; payload?: Record<string, unknown>; headDate?: string; timeline?: unknown[]; reviews?: unknown[]; reviewsThen?: unknown[]; checks?: unknown[]; checksThen?: unknown[]; commits?: unknown[]; legacyReceipt?: "server" | "forged"; statuses?: { id: number; state: string; description: string; created_at: string; creator: { id: number; type: string } }[]; cancelReceipt?: boolean } = {}) {
+function setup(body: string, author = { id: 10, login: "alice", type: "User" }, activeReservation = false, options: { pull?: Record<string, unknown>; pullThen?: unknown[]; pullStatus?: number; repositoryStatus?: number; labelExists?: boolean; commentId?: number; editedAt?: string | null; payload?: Record<string, unknown>; headDate?: string; timeline?: unknown[]; reviews?: unknown[]; reviewsThen?: unknown[]; checks?: unknown[]; checksThen?: unknown[]; commits?: unknown[]; legacyReceipt?: "server" | "forged"; externalReceipt?: boolean; statuses?: { id: number; state: string; description: string; created_at: string; creator: { id: number; type: string } }[]; cancelReceipt?: boolean; autoMergeRequest?: unknown | null; autoMergeRequestThen?: unknown[] } = {}) {
   const commentId = options.commentId ?? 9;
   const comment = { id: commentId, node_id: "IC_node", body, issue_url: "https://api.github.com/repos/owner/repo/issues/12", created_at: "2026-10-24T11:30:00Z", updated_at: "2026-10-24T11:30:00Z", user: author };
   const payload = { version: 1, repository_id: 123, repository: "owner/repo", pull_number: 12, pull_node_id: "PR_node", base_ref: "main", merger: { id: 10, login: "alice", type: "User" }, mode: "human", command_comment_id: options.commentId ?? 88, accepted_head: sha, accepted_at: "2026-10-20T00:00:00.000Z", expires_at: "2026-10-27T00:00:00.000Z", ...options.payload };
   const deploymentNodes = activeReservation ? [{ id: "D_node", databaseId: 77, task: "csm-ci:automerge", payload, createdAt: "2026-10-20T00:00:00Z", creator: { __typename: "Bot", databaseId: 3000 }, statuses: { nodes: (options.statuses ?? []).map((status) => ({ id: String(status.id), state: status.state.toUpperCase(), description: status.description, createdAt: status.created_at, creator: { __typename: status.creator.type, databaseId: status.creator.id } })), pageInfo: { hasNextPage: false } } }] : [];
-  const emptyDeployments = { data: { node: { databaseId: 9, lastEditedAt: options.editedAt ?? null }, repository: { deployments: { nodes: deploymentNodes, pageInfo: { hasNextPage: false, endCursor: null } }, pullRequest: { id: "PR_node", autoMergeRequest: null } } } };
+  const emptyDeployments = { data: { node: { databaseId: 9, lastEditedAt: options.editedAt ?? null }, repository: { deployments: { nodes: deploymentNodes, pageInfo: { hasNextPage: false, endCursor: null } }, pullRequest: { id: "PR_node", autoMergeRequest: options.autoMergeRequest ?? null } } } };
   const serverFetch = fakeFetch([
     { method: "GET", path: `${P}/pulls/12`, ...(options.pullStatus ? { status: options.pullStatus } : {}), body: { ...pull(), ...options.pull }, ...(options.pullThen ? { then: options.pullThen } : {}) },
     { method: "GET", path: "/repositories/123", ...(options.repositoryStatus ? { status: options.repositoryStatus } : {}), body: { id: 123, full_name: "owner/repo" } },
     { method: "GET", path: `${P}/issues/comments/${commentId}`, body: comment },
-    { method: "GET", path: `${P}/issues/12/comments`, body: options.legacyReceipt ? [{ user: { id: options.legacyReceipt === "server" ? 3000 : 99, type: "Bot" }, body: marker("merge", 9) }] : [] },
-    { method: "POST", path: "/graphql", body: emptyDeployments },
+    { method: "GET", path: `${P}/issues/12/comments`, body: options.externalReceipt ? [{ user: { id: 3000, type: "Bot" }, body: marker("merge-external", 9) }] : options.legacyReceipt ? [{ user: { id: options.legacyReceipt === "server" ? 3000 : 99, type: "Bot" }, body: marker("merge", 9) }] : [] },
+    { method: "POST", path: "/graphql", body: emptyDeployments, ...(options.autoMergeRequestThen ? { then: options.autoMergeRequestThen.map((autoMergeRequest) => ({ ...emptyDeployments, data: { ...emptyDeployments.data, repository: { ...emptyDeployments.data.repository, pullRequest: { id: "PR_node", autoMergeRequest } } } })) } : {}) },
     { method: "GET", path: `${P}/commits/${sha}`, body: { sha, commit: { committer: { date: options.headDate ?? "2026-10-24T11:00:00Z" } } } },
     { method: "GET", path: `${P}/issues/12/timeline`, body: options.timeline ?? [] },
     { method: "GET", path: `${P}/pulls/12/commits`, body: options.commits ?? [{ sha, commit: { verification: { verified: true } }, author: { id: 10, login: "alice" }, committer: { id: 10, login: "alice" } }] },
     { method: "GET", path: `${P}/pulls/12/reviews`, body: options.reviews ?? [{ id: 4, user: { id: 4000 }, state: "APPROVED", commit_id: sha, submitted_at: "2026-10-24T11:20:00Z" }], ...(options.reviewsThen ? { then: options.reviewsThen } : {}) },
     { method: "GET", path: `${P}/commits/${sha}/check-runs`, body: options.checks ?? [{ id: 7, name: "status-check", app: { id: 15368 }, status: "completed", conclusion: "success", started_at: "2026-10-24T11:10:00Z" }], ...(options.checksThen ? { then: options.checksThen } : {}) },
   ]);
+  const acceptanceFetch = fakeFetch([{ method: "POST", path: "/graphql", body: { data: { disablePullRequestAutoMerge: { clientMutationId: null } } } }]);
   const notifyFetch = fakeFetch([
     { method: "POST", path: `${P}/issues/comments/${commentId}/reactions`, status: 201, body: { id: 1 } },
     { method: "GET", path: `${P}/issues/12/comments`, body: options.cancelReceipt ? [{ user: { id: 3000, type: "Bot" }, body: "<!-- csm-ci:automerge:cancel:9 -->" }] : [] },
@@ -48,14 +49,82 @@ function setup(body: string, author = { id: 10, login: "alice", type: "User" }, 
   ]);
   const configValue = config();
   const ctx: MergeContext = {
-    server: github("server", serverFetch), deployments: github("deployments", deploymentsFetch), notify: github("notify", notifyFetch),
+    server: github("server", serverFetch), acceptanceWrite: github("acceptance-write", acceptanceFetch), deployments: github("deployments", deploymentsFetch), notify: github("notify", notifyFetch),
     config: configValue, reloadConfig: async () => configValue, repository: "owner/repo", serverRepository: "owner/server",
     serverRun: { serverUrl: "https://github.com", repository: "owner/server", id: "1", attempt: "1" }, now: () => now,
   };
-  return { ctx, serverFetch, notifyFetch, deploymentsFetch, payload };
+  return { ctx, serverFetch, acceptanceFetch, notifyFetch, deploymentsFetch, payload };
 }
 
 describe("acceptMerge", () => {
+  test("prepares an authorized merge without writing to GitHub", async () => {
+    const { ctx, acceptanceFetch, notifyFetch, deploymentsFetch } = setup("/merge");
+    expect(await prepareMergeAcceptance(ctx, { pull_number: 12, comment_id: 9 })).toMatchObject({ kind: "accept", pull: { headSha: sha }, mode: "human" });
+    expect(acceptanceFetch.requests).toEqual([]);
+    expect(notifyFetch.requests).toEqual([]);
+    expect(deploymentsFetch.calls).not.toContain("POST /repos/owner/server/deployments");
+  });
+
+  test("disables native auto-merge after validating an authorized command and before creating a reservation", async () => {
+    const nativeRequest = { mergeMethod: "SQUASH", enabledBy: { __typename: "User" } };
+    const { ctx, serverFetch, acceptanceFetch, deploymentsFetch } = setup("/merge", { id: 10, login: "alice", type: "User" }, false, { autoMergeRequest: nativeRequest, autoMergeRequestThen: [nativeRequest, null] });
+    expect(await acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).toMatchObject({ kind: "accepted" });
+    expect(acceptanceFetch.requests[0]?.body).toContain("disablePullRequestAutoMerge");
+    expect(serverFetch.calls).toContain("GET /repos/owner/repo/pulls/12");
+    expect(deploymentsFetch.calls).toContain("POST /repos/owner/server/deployments");
+  });
+
+  test("does not disable native auto-merge for an unauthorized command", async () => {
+    const { ctx, acceptanceFetch } = setup("/merge", { id: 99, login: "stranger", type: "User" });
+    await expect(acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow("stranger is not one of the mergers");
+    expect(acceptanceFetch.requests).toEqual([]);
+  });
+
+  test("does not disable native auto-merge for an invalid command", async () => {
+    const { ctx, acceptanceFetch } = setup("/approve");
+    await expect(acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow("comment 9 is not /merge");
+    expect(acceptanceFetch.requests).toEqual([]);
+  });
+
+  test("fails closed without a reservation when the native request remains after disarm", async () => {
+    const nativeRequest = { mergeMethod: "SQUASH", enabledBy: { __typename: "User" } };
+    const { ctx, acceptanceFetch, deploymentsFetch } = setup("/merge", { id: 10, login: "alice", type: "User" }, false, { autoMergeRequest: nativeRequest });
+    await expect(acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow("auto-merge is still enabled");
+    expect(acceptanceFetch.requests[0]?.body).toContain("disablePullRequestAutoMerge");
+    expect(deploymentsFetch.calls).not.toContain("POST /repos/owner/server/deployments");
+  });
+
+  test("fails closed without a reservation when the pull request head changes during disarm", async () => {
+    const nativeRequest = { mergeMethod: "SQUASH", enabledBy: { __typename: "User" } };
+    const { ctx, deploymentsFetch } = setup("/merge", { id: 10, login: "alice", type: "User" }, false, {
+      autoMergeRequest: nativeRequest,
+      autoMergeRequestThen: [nativeRequest, null],
+      pullThen: [{ ...pull(), head: { sha: nextSha, repo: { full_name: "owner/repo" } } }],
+    });
+    await expect(acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow("changed while disabling GitHub auto-merge");
+    expect(deploymentsFetch.calls).not.toContain("POST /repos/owner/server/deployments");
+  });
+
+  test("reports an external merge before reservation when GitHub retains a stale auto-merge request", async () => {
+    const nativeRequest = { mergeMethod: "SQUASH", enabledBy: { __typename: "User" } };
+    const { ctx, acceptanceFetch, deploymentsFetch, notifyFetch } = setup("/merge", { id: 10, login: "alice", type: "User" }, false, {
+      autoMergeRequest: nativeRequest,
+      autoMergeRequestThen: [nativeRequest],
+      pullThen: [{ ...pull(), state: "closed", merged: true, merged_by: { id: 99 }, merge_commit_sha: "c".repeat(40) }],
+    });
+    expect(await acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).toEqual({ kind: "external-merge" });
+    expect(acceptanceFetch.requests[0]?.body).toContain("disablePullRequestAutoMerge");
+    expect(deploymentsFetch.calls).not.toContain("POST /repos/owner/server/deployments");
+    expect(notifyFetch.calls).toContain("POST /repos/owner/repo/issues/12/comments");
+  });
+
+  test("replays an external-merge receipt without another write", async () => {
+    const { ctx, acceptanceFetch, deploymentsFetch } = setup("/merge", { id: 10, login: "alice", type: "User" }, false, { externalReceipt: true });
+    expect(await acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).toEqual({ kind: "external-merge" });
+    expect(acceptanceFetch.requests).toEqual([]);
+    expect(deploymentsFetch.calls).not.toContain("POST /repos/owner/server/deployments");
+  });
+
   test("accepts /merge into a deployment and posts its durable receipt", async () => {
     const { ctx, deploymentsFetch, notifyFetch } = setup("/merge");
     expect(await acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).toMatchObject({ kind: "accepted", reservation: { deploymentId: 77 } });
@@ -427,7 +496,10 @@ describe("mergeReservation", () => {
 
   test("final revalidation passes current approval, policy and required check before squash merge", async () => {
     const { ctx, deploymentsFetch, record } = readyReservation();
-    const writeFetch = fakeFetch([{ method: "PUT", path: `${P}/pulls/12/merge`, status: 200, body: { merged: true, sha: "c".repeat(40) } }]);
+    const writeFetch = fakeFetch([
+      { method: "POST", path: "/graphql", body: { data: { disablePullRequestAutoMerge: { clientMutationId: null } } } },
+      { method: "PUT", path: `${P}/pulls/12/merge`, status: 200, body: { merged: true, sha: "c".repeat(40) } },
+    ]);
     ctx.write = github("write", writeFetch);
     expect(await mergeReservation(ctx, record, sha)).toEqual({ result: "merged", head: sha, mergeCommit: "c".repeat(40) });
     expect(writeFetch.calls).toEqual([`PUT ${P}/pulls/12/merge`]);
@@ -494,6 +566,19 @@ describe("mergeReservation", () => {
     expect(writeFetch.calls).toEqual([]);
   });
 
+  test("refuses the final squash merge while GitHub auto-merge remains enabled", async () => {
+    const nativeRequest = { mergeMethod: "SQUASH", enabledBy: { __typename: "User" } };
+    const { ctx, record, serverFetch } = readyReservation({ autoMergeRequest: nativeRequest, autoMergeRequestThen: [nativeRequest, nativeRequest] });
+    const writeFetch = fakeFetch([
+      { method: "POST", path: "/graphql", body: { data: { disablePullRequestAutoMerge: { clientMutationId: null } } } },
+      { method: "PUT", path: `${P}/pulls/12/merge`, status: 200, body: { merged: true, sha: "c".repeat(40) } },
+    ]);
+    ctx.write = github("write", writeFetch);
+    await expect(mergeReservation(ctx, record, sha)).rejects.toThrow("GitHub auto-merge is still enabled");
+    expect(writeFetch.calls).not.toContain(`PUT ${P}/pulls/12/merge`);
+    expect(serverFetch.calls).toContain("GET /repos/owner/repo/pulls/12");
+  });
+
   test("revalidates readiness before retrying a retryable merge response", async () => {
     const successCheck = { id: 7, name: "status-check", app: { id: 15368 }, status: "completed", conclusion: "success", started_at: "2026-10-24T11:10:00Z" };
     const failedCheck = { ...successCheck, id: 8, conclusion: "failure", started_at: "2026-10-24T11:11:00Z" };
@@ -519,6 +604,6 @@ describe("mergeReservation", () => {
     ctx.write = github("write", writeFetch);
     expect(await mergeReservation(ctx, record, sha)).toEqual({ result: "merged", head: sha, mergeCommit: "c".repeat(40) });
     expect(mergeWrites).toBe(1);
-    expect(serverFetch.calls.filter((call) => call === `GET ${P}/pulls/12`)).toHaveLength(6);
+    expect(serverFetch.calls.filter((call) => call === `GET ${P}/pulls/12`)).toHaveLength(7);
   });
 });
