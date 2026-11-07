@@ -20,7 +20,7 @@ inputs:
     description: Server App token with deployments:read for prepare or deployments:write for accept on the server repository.
     required: true
   acceptance-write-token:
-    description: Client-scoped Server App token with pull_requests:write used only to disable an existing native auto-merge request after acceptance validation.
+    description: Client-repository-scoped Server App token with contents:write and pull_requests:write, minted only for fresh valid acceptance and used only to disable an existing native auto-merge request.
     required: false
   display-commit-token:
     description: Optional server-scoped Contents write token for display commits.

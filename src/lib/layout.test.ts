@@ -102,7 +102,7 @@ describe("merge token boundary", () => {
     expect(merge?.with?.["notification-token"]).toBe("${{ steps.merge-notify-token.outputs.token }}");
   });
 
-  test("acceptance uses a separate client-scoped pull-request write token only for disarming native auto-merge", () => {
+  test("acceptance uses a separate repository-scoped token only for disarming native auto-merge", () => {
     const token = steps.find((step) => step.id === "merge-acceptance-write-token");
     expect(token?.uses).toMatch(/^actions\/create-github-app-token@/u);
     expect(token?.if).toBe("steps.merge-prepare.outputs.acceptance-kind == 'accept'");
@@ -111,11 +111,11 @@ describe("merge token boundary", () => {
       "private-key": "${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}",
       owner: "${{ needs.intake.outputs.owner }}",
       repositories: "${{ needs.intake.outputs.name }}",
+      "permission-contents": "write",
       "permission-pull-requests": "write",
     });
     const merge = steps.find((step) => step.with?.mode === "accept");
     expect(merge?.with?.["acceptance-write-token"]).toBe("${{ steps.merge-acceptance-write-token.outputs.token }}");
-    expect(token?.with).not.toHaveProperty("permission-contents");
     expect(token?.with).not.toHaveProperty("permission-issues");
     expect(token?.with).not.toHaveProperty("permission-checks");
   });
@@ -136,12 +136,12 @@ describe("merge token boundary", () => {
     expect(deploymentsWrite?.if).toBe("steps.merge-prepare.outputs.acceptance-kind == 'accept'");
   });
 
-  test.each(["merge-read-token", "merge-notify-token", "merge-acceptance-write-token", "automerge-deployments-token"])("keeps unrelated client write permissions off %s", (id) => {
+  test.each(["merge-read-token", "merge-notify-token", "automerge-deployments-token"])("keeps unrelated client write permissions off %s", (id) => {
     const token = steps.find((step) => step.id === id);
     expect(token).toBeDefined();
     expect(token?.with).not.toHaveProperty("permission-workflows");
     expect(token?.with?.["permission-contents"]).not.toBe("write");
-    if (id !== "merge-acceptance-write-token" && id !== "merge-notify-token") expect(token?.with?.["permission-pull-requests"]).not.toBe("write");
+    if (id !== "merge-notify-token") expect(token?.with?.["permission-pull-requests"]).not.toBe("write");
   });
 });
 

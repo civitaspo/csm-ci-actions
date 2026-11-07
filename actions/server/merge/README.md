@@ -14,7 +14,7 @@ See [merge behavior](../../../docs/merge.md) for authorization, auto-merge disar
 | `server-token` | Yes | None | Target-scoped Server App token with contents, pull requests, checks, and issues read access. |
 | `deployments-token` | Yes | None | Server repository token with `deployments:read` for `prepare` or `deployments:write` for `accept`. |
 | `notification-token` | No | None | Target-scoped Server App token with `issues:write` and `pull_requests:write`; required only for an accept path that writes a receipt. |
-| `acceptance-write-token` | No | None | Target-scoped Server App token with only `pull_requests:write`; minted only after `prepare` returns `accept` and used only to disarm native auto-merge. |
+| `acceptance-write-token` | No | None | Client-repository-scoped Server App token with `contents:write` and `pull_requests:write`; minted only after `prepare` returns `accept` and used only to disarm native auto-merge. GitHub does not scope this token to one pull request. |
 | `display-commit-token` | No | None | Server-scoped `contents:write` token for the optional reservation display commit. |
 | `display-deployments-token` | No | None | Client-scoped `deployments:write` token for the optional display projection. |
 | `repository` | Yes | None | Client repository as `owner/repo`. |
