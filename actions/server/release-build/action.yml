@@ -151,7 +151,11 @@ runs:
           echo "cargo-raw requires a trusted 40-character source revision" >&2
           exit 1
         fi
-        if [ -n "$(git -C "$CLIENT_PATH" status --porcelain --untracked-files=all)" ]; then
+        if ! status="$(git -C "$CLIENT_PATH" status --porcelain --untracked-files=all)"; then
+          echo "cargo-raw could not check source snapshot status" >&2
+          exit 1
+        fi
+        if [ -n "$status" ]; then
           echo "cargo-raw source snapshot must be clean before compilation" >&2
           exit 1
         fi

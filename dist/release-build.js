@@ -14981,7 +14981,7 @@ function padToRecord(tar) {
 // src/release/cargo-raw.ts
 import { execFileSync } from "node:child_process";
 import { accessSync, chmodSync, constants as constants2, copyFileSync, lstatSync as lstatSync2, mkdirSync as mkdirSync2, realpathSync, statSync } from "node:fs";
-import { join as join2, resolve } from "node:path";
+import { basename as basename2, join as join2, resolve } from "node:path";
 var RAW_TARGETS = {
   "aarch64-apple-darwin": ["Mach-O 64-bit", "arm64"],
   "aarch64-unknown-linux-gnu": ["ELF 64-bit LSB", "ARM aarch64"],
@@ -15004,8 +15004,11 @@ function compareVersions(left, right) {
 }
 function validateGlibcRequirements(target, headers, dynamic, versions) {
   const loader = target.startsWith("aarch64-") ? "ld-linux-aarch64.so.1" : "ld-linux-x86-64.so.2";
-  ensure(headers.includes("Requesting program interpreter:") && headers.includes(loader), "cargo-raw GNU Linux binary must use the target glibc dynamic loader");
-  ensure(dynamic.includes("NEEDED") && dynamic.includes("libc.so.6"), "cargo-raw GNU Linux binary must link against glibc");
+  const interpreter = /^\s*\[Requesting program interpreter:\s*([^\]]+)\]\s*$/mu.exec(headers)?.[1]?.trim();
+  ensure(interpreter !== undefined && basename2(interpreter) === loader, "cargo-raw GNU Linux binary must use the target glibc dynamic loader");
+  const hasLibcDependency = dynamic.split(`
+`).some((line) => /^\s*0x[0-9a-f]+\s+\(NEEDED\)\s+Shared library:\s+\[libc\.so\.6\]\s*$/iu.test(line));
+  ensure(hasLibcDependency, "cargo-raw GNU Linux binary must link against glibc");
   const needed = /Version needs section[\s\S]*?(?=Version (?:definition|symbols?) section|$)/u.exec(versions)?.[0] ?? "";
   const requirements = [...needed.matchAll(/Name: GLIBC_([A-Za-z0-9_.-]+)/gu)].map((match) => match[1]);
   ensure(requirements.length > 0, "cargo-raw GNU Linux binary must declare its glibc symbol requirements");
@@ -15031,6 +15034,10 @@ function validateVersion(binary, version, reported) {
   ensure(new RegExp(`^${escape(`${binary} ${version}`)}${metadata}$`, "u").test(reported), "cargo-raw binary reports an unexpected version");
 }
 var command = (...args) => execFileSync(args[0], args.slice(1), { encoding: "utf8" }).trim();
+var readelf = (...args) => execFileSync("readelf", args, {
+  encoding: "utf8",
+  env: { ...process.env, LC_ALL: "C" }
+}).trim();
 function verifyRaw(args) {
   if (args.length === 4 && args[0] === "--validate") {
     validateInputs(args[1], args[2], args[3]);
@@ -15048,9 +15055,9 @@ function verifyRaw(args) {
   ensure(!lstatSync2(source).isSymbolicLink() && statSync(path).isFile() && executable, "cargo-raw binary must be a regular executable file");
   const description = command("file", "-b", path);
   const linux = target.includes("linux-");
-  const headers = linux ? command("readelf", "-l", path) : "";
-  const dynamic = linux ? command("readelf", "-d", path) : "";
-  const versions = target.endsWith("linux-gnu") ? command("readelf", "-V", path) : "";
+  const headers = linux ? readelf("-l", path) : "";
+  const dynamic = linux ? readelf("-d", path) : "";
+  const versions = target.endsWith("linux-gnu") ? readelf("-V", path) : "";
   validateFormat(target, description, headers, dynamic, versions);
   const reported = command(path, "--version");
   validateVersion(binary, version, reported);
@@ -15063,7 +15070,7 @@ function verifyRaw(args) {
 
 // src/release/terraform-collect.ts
 import { constants as constants3, copyFileSync as copyFileSync2, lstatSync as lstatSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync2, realpathSync as realpathSync2 } from "node:fs";
-import { basename as basename2, join as join3, sep } from "node:path";
+import { basename as basename3, join as join3, sep } from "node:path";
 var regular = (path) => lstatSync3(path).isFile();
 function collect(client, destination) {
   const manifest = join3(client, "dist/artifacts.json");
@@ -15087,13 +15094,13 @@ function collect(client, destination) {
   }
   ensure(files.length > 0, "GoReleaser produced no release archives");
   files.push(join3(client, "terraform-registry-manifest.json"));
-  const names = files.map((path) => basename2(path));
+  const names = files.map((path) => basename3(path));
   ensure(names.length === new Set(names).size, "duplicate GoReleaser asset name");
   for (const path of files)
     ensure(regular(path), "Terraform build output is not a regular file");
   mkdirSync3(destination, { recursive: true });
   for (const path of files)
-    copyFileSync2(path, join3(destination, basename2(path)), constants3.COPYFILE_EXCL);
+    copyFileSync2(path, join3(destination, basename3(path)), constants3.COPYFILE_EXCL);
 }
 
 // src/release/release-build.ts
