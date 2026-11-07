@@ -19,7 +19,7 @@ function runEntry(action: "approve" | "merge" | "automerge", mode: string) {
       accepted_head: "a".repeat(40), accepted_at: acceptedAt, expires_at: new Date(Date.parse(acceptedAt) + 7 * 24 * 60 * 60_000).toISOString(),
     };
     const deploymentList = { data: { repository: { deployments: { nodes: [{ id: "deployment-node", databaseId: 123, task: "csm-ci:automerge", payload, createdAt: acceptedAt, creator: { __typename: "Bot", databaseId: 3000 }, statuses: { nodes: [], pageInfo: { hasNextPage: false } } }], pageInfo: { hasNextPage: false, endCursor: null } } } } };
-    const emptyDeploymentList = { data: { repository: { deployments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } };
+    const emptyDeploymentList = { data: { repository: { deployments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } }, pullRequest: { id: "pull-node", autoMergeRequest: null } } } };
     const initialGraphql = action === "automerge" ? deploymentList : { data: { node: { databaseId: 9, lastEditedAt: null } } };
     const laterGraphql = action === "merge" ? [emptyDeploymentList, emptyDeploymentList] : [];
     writeFileSync(outputs, "");
@@ -34,7 +34,7 @@ const fetch = fakeFetch([
   { method: "GET", path: "/repos/owner/server", body: { default_branch: "main" } },
   { method: "GET", path: "/repos/owner/repo", body: { id: 42, full_name: "owner/repo" } },
   { method: "GET", path: "/repositories/42", body: { id: 42, full_name: "owner/repo" } },
-  { method: "GET", path: "/repos/owner/repo/pulls/12", body: pull, then: [{ ...pull, state: "closed" }] },
+  { method: "GET", path: "/repos/owner/repo/pulls/12", body: pull, then: ${action === "merge" ? "[pull]" : "[{ ...pull, state: \"closed\" }]"} },
   { method: "GET", path: "/repos/owner/repo/issues/comments/9", body: { id: 9, node_id: "comment-node", body: "/${action}", issue_url: "https://api.github.com/repos/owner/repo/issues/12", created_at: now, updated_at: now, user: { id: 10, login: "alice", type: "User" } } },
   { method: "POST", path: "/graphql", body: ${JSON.stringify(initialGraphql)}, then: ${JSON.stringify(laterGraphql)} },
   { method: "GET", path: "/repos/owner/server/deployments/123/statuses", body: [] },
@@ -59,7 +59,7 @@ globalThis.fetch = async (input, init) => {
       env: {
         PATH: process.env.PATH ?? "", GITHUB_REPOSITORY: "owner/server", GITHUB_SHA: "b".repeat(40),
         GITHUB_SERVER_URL: "https://github.example", GITHUB_RUN_ID: "9007199254740993", GITHUB_RUN_ATTEMPT: "3", GITHUB_OUTPUT: outputs,
-        "INPUT_GITHUB-TOKEN": "fixture", ...(mode === "error-status" ? {} : { "INPUT_SERVER-TOKEN": "fixture" }), "INPUT_APPROVER-TOKEN": "fixture", "INPUT_NOTIFICATION-TOKEN": "fixture", "INPUT_DEPLOYMENTS-TOKEN": "fixture",
+        "INPUT_GITHUB-TOKEN": "fixture", ...(mode === "error-status" ? {} : { "INPUT_SERVER-TOKEN": "fixture" }), "INPUT_APPROVER-TOKEN": "fixture", "INPUT_NOTIFICATION-TOKEN": "fixture", "INPUT_DEPLOYMENTS-TOKEN": "fixture", "INPUT_ACCEPTANCE-WRITE-TOKEN": "fixture",
         "INPUT_CONFIG-PATH": "csm-ci.yaml", INPUT_REPOSITORY: "owner/repo", INPUT_ARGS: '{"pull_number":12,"comment_id":9}',
         "INPUT_PULL-NUMBER": "12", "INPUT_DEPLOYMENT-ID": "123",
         INPUT_MODE: mode, INPUT_HEAD: "a".repeat(40), "INPUT_FAILURE-MESSAGE": "original wait failure",

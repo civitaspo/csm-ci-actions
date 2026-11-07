@@ -37566,6 +37566,17 @@ ${receiptFooter({ repository: ctx.repository, pullNumber: record.payload.pull_nu
       throw error;
   }
 }
+async function postExternalMergeReceipt(ctx, pullNumber, commentId, head) {
+  const receipt = marker("merge-external", commentId);
+  const comments = await ctx.notify.paginate(ctx.notify.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: pullNumber, per_page: 100 });
+  if (hasServerMarker(comments, receipt, ctx.config.apps.server_bot_id))
+    return;
+  const body = `${receipt}
+csm-ci: pull request #${pullNumber} was merged outside csm-ci before a merge reservation was created.
+
+${receiptFooter({ repository: ctx.repository, pullNumber, commentId, head, serverRun: ctx.serverRun })}`;
+  await postResult(ctx.notify, ctx.repository, pullNumber, receipt, body);
+}
 async function setLabel(ctx, pullNumber, shouldHave) {
   const repo = splitRepository(ctx.repository);
   const labels = await ctx.notify.paginate(ctx.notify.rest.issues.listLabelsOnIssue, { ...repo, issue_number: pullNumber, per_page: 100 });
@@ -37609,27 +37620,24 @@ ${message}
 ${receiptFooter({ repository: ctx.repository, pullNumber: record.payload.pull_number, commentId, head: record.payload.accepted_head, serverRun: ctx.serverRun })}`;
   await postResult(ctx.notify, ctx.repository, record.payload.pull_number, receipt, body);
 }
-async function acceptMerge(ctx, args) {
+async function prepareMergeAcceptance(ctx, args) {
   await refreshConfig(ctx);
   const pull = await pullFacts(ctx.server, ctx.repository, args.pull_number);
   const comment = await fetchComment(ctx.server, ctx.repository, args.comment_id);
   const command = validateComment(comment, ctx.repository, pull.number, ctx.now());
   if (command.name === "merge-cancel")
-    return cancelReservation(ctx, pull, comment, args);
+    return { kind: "cancel", pull, comment };
   if (command.name !== "merge")
     throw new Rejection(`comment ${comment.id} is not /merge`);
   const existing = await findReservationsForPull({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, repositoryId: pull.repositoryId, pullNumber: pull.number, now: ctx.now() });
   const replay = existing.find((record) => record.payload.command_comment_id === comment.id);
-  if (replay) {
-    if (replay.state.kind === "active") {
-      await postAutomergeComment(ctx, replay, "accepted", `Merge reserved until ${replay.payload.expires_at}. It follows head changes and requires approval and checks for the current head. Cancel with /merge cancel. The ${AUTOMERGE_LABEL} label shows the reservation state.`, replay.payload.accepted_head);
-      await setLabel(ctx, pull.number, true);
-    }
-    return { kind: "replay", reservation: replay };
-  }
+  if (replay)
+    return { kind: "replay", pull, comment, reservation: replay };
   const oldReceipts = await ctx.server.paginate(ctx.server.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: pull.number, per_page: 100 });
   if (hasServerMarker(oldReceipts, marker("merge", comment.id), ctx.config.apps.server_bot_id))
     throw new Rejection(`comment ${comment.id} was already handled`);
+  if (hasServerMarker(oldReceipts, marker("merge-external", comment.id), ctx.config.apps.server_bot_id))
+    return { kind: "external-merge-replay" };
   requireMergeEnabled(ctx);
   checkPullState(pull, true);
   await validateHeadBeforeComment(ctx, pull, comment);
@@ -37651,18 +37659,54 @@ async function acceptMerge(ctx, args) {
   } else
     throw new Rejection(`${author.login} has unsupported account type ${author.type}`);
   const active = existing.find((record) => record.state.kind === "active");
-  if (active) {
-    const markerText = `<!-- csm-ci:automerge:merge:${comment.id}:rejected -->`;
-    const comments = await ctx.notify.paginate(ctx.notify.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: pull.number, per_page: 100 });
-    if (!hasServerMarker(comments, markerText, ctx.config.apps.server_bot_id)) {
-      const body = `${markerText}
+  if (active)
+    return { kind: "conflict", pull, comment, active };
+  return { kind: "accept", pull, comment, merger, mode };
+}
+async function rejectActiveReservation(ctx, pull, comment, active) {
+  const markerText = `<!-- csm-ci:automerge:merge:${comment.id}:rejected -->`;
+  const comments = await ctx.notify.paginate(ctx.notify.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: pull.number, per_page: 100 });
+  if (!hasServerMarker(comments, markerText, ctx.config.apps.server_bot_id)) {
+    const body = `${markerText}
 Pull request is already reserved by ${active.payload.merger.login}.
 
 ${receiptFooter({ repository: ctx.repository, pullNumber: pull.number, commentId: comment.id, head: pull.headSha, serverRun: ctx.serverRun })}`;
-      await postResult(ctx.notify, ctx.repository, pull.number, markerText, body);
-    }
-    throw new Rejection(`pull request #${pull.number} already has an active merge reservation`);
+    await postResult(ctx.notify, ctx.repository, pull.number, markerText, body);
   }
+  throw new Rejection(`pull request #${pull.number} already has an active merge reservation`);
+}
+async function acceptMerge(ctx, args) {
+  const prepared = await prepareMergeAcceptance(ctx, args);
+  if (prepared.kind === "cancel")
+    return cancelReservation(ctx, prepared.pull, prepared.comment, args);
+  if (prepared.kind === "external-merge-replay")
+    return { kind: "external-merge" };
+  if (prepared.kind === "conflict")
+    return rejectActiveReservation(ctx, prepared.pull, prepared.comment, prepared.active);
+  if (prepared.kind === "replay") {
+    const { pull, reservation: replay } = prepared;
+    if (replay.state.kind === "active") {
+      await postAutomergeComment(ctx, replay, "accepted", `Merge reserved until ${replay.payload.expires_at}. It follows head changes and requires approval and checks for the current head. Cancel with /merge cancel. The ${AUTOMERGE_LABEL} label shows the reservation state.`, replay.payload.accepted_head);
+      await setLabel(ctx, pull.number, true);
+    }
+    return { kind: "replay", reservation: replay };
+  }
+  const { pull, comment, merger, mode } = prepared;
+  const acceptanceWrite = ctx.acceptanceWrite;
+  if (!acceptanceWrite)
+    throw new Error("acceptance pull request write token is required");
+  await disableAutoMerge(ctx, acceptanceWrite, pull.number);
+  const afterDisarm = await pullFacts(ctx.server, ctx.repository, pull.number);
+  if (afterDisarm.merged) {
+    await postExternalMergeReceipt(ctx, pull.number, comment.id, afterDisarm.headSha);
+    return { kind: "external-merge" };
+  }
+  if (afterDisarm.state !== "open" || afterDisarm.repositoryId !== pull.repositoryId || afterDisarm.nodeId !== pull.nodeId || afterDisarm.headSha !== pull.headSha) {
+    throw new Rejection(`pull request #${pull.number} changed while disabling GitHub auto-merge; retry /merge after reviewing the current pull request`);
+  }
+  const autoMerge = await fetchAutoMergeRequest(ctx.server, ctx.repository, pull.number);
+  if (autoMerge)
+    throw new Rejection(`GitHub auto-merge is still enabled for pull request #${pull.number}; csm-ci could not safely accept the request`);
   const acceptedAt = ctx.now();
   const payload = ReservationPayloadSchema.parse({
     version: 1,
@@ -37671,7 +37715,7 @@ ${receiptFooter({ repository: ctx.repository, pullNumber: pull.number, commentId
     pull_number: pull.number,
     pull_node_id: pull.nodeId,
     base_ref: pull.baseRef,
-    merger: { id: merger.id, login: merger.login, type: author.type },
+    merger: { id: merger.id, login: merger.login, type: mode === "bot" ? "Bot" : "User" },
     mode,
     command_comment_id: comment.id,
     accepted_head: pull.headSha,
@@ -37765,6 +37809,34 @@ function cancellationAuthorId(record) {
     return;
   const match = record.state.description?.match(/\bcancelled_by_id=(\d+)(?:\D|$)/);
   return match ? Number(match[1]) : undefined;
+}
+async function fetchAutoMergeRequest(server, repository, pullNumber) {
+  const { owner, repo } = splitRepository(repository);
+  const query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){autoMergeRequest{mergeMethod enabledBy{__typename ... on Bot{databaseId}}}}}}";
+  const state = await server.graphql(query, { owner, name: repo, number: pullNumber });
+  const pull = state.repository.pullRequest;
+  if (!pull)
+    throw new Rejection(`pull request #${pullNumber} no longer exists`);
+  return pull.autoMergeRequest;
+}
+async function disableAutoMerge(ctx, write, pullNumber) {
+  if (!write)
+    throw new Error("pull request write token is required to disable GitHub auto-merge");
+  const { owner, repo } = splitRepository(ctx.repository);
+  const query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){id autoMergeRequest{mergeMethod enabledBy{__typename ... on Bot{databaseId}}}}}}";
+  const state = await ctx.server.graphql(query, { owner, name: repo, number: pullNumber });
+  const request = state.repository.pullRequest.autoMergeRequest;
+  if (!request)
+    return;
+  try {
+    await write.graphql("mutation($id:ID!){disablePullRequestAutoMerge(input:{pullRequestId:$id}){clientMutationId}}", { id: state.repository.pullRequest.id });
+  } catch (error) {
+    const current = await pullFacts(ctx.server, ctx.repository, pullNumber);
+    if (current.merged)
+      return;
+    if (await fetchAutoMergeRequest(ctx.server, ctx.repository, pullNumber))
+      throw error;
+  }
 }
 function runUrl(run) {
   return `${run.serverUrl}/${run.repository}/actions/runs/${run.id}/attempts/${run.attempt}`;
@@ -37914,18 +37986,21 @@ function env(name) {
   return value;
 }
 async function main() {
-  if (getInput("mode", { required: true }) !== "accept")
+  const mode = getInput("mode", { required: true });
+  if (mode !== "prepare" && mode !== "accept")
     throw new Error("unknown merge action mode");
   const serverRepository = env("GITHUB_REPOSITORY");
   const configReader = github(getInput("github-token", { required: true }));
   const configPath = getInput("config-path", { required: true });
   const config = await loadCurrentServerConfig(configReader, serverRepository, configPath);
   const displayToken = getInput("display-commit-token");
+  const notificationToken = getInput("notification-token") || getInput("server-token", { required: true });
   const ctx = {
     server: github(getInput("server-token", { required: true })),
     deployments: github(getInput("deployments-token", { required: true })),
+    ...getInput("acceptance-write-token") ? { acceptanceWrite: github(getInput("acceptance-write-token")) } : {},
     ...displayToken ? { displayCommit: github(displayToken) } : {},
-    notify: github(getInput("notification-token", { required: true })),
+    notify: github(notificationToken),
     config,
     reloadConfig: () => loadCurrentServerConfig(configReader, serverRepository, configPath),
     repository: getInput("repository", { required: true }).toLowerCase(),
@@ -37935,7 +38010,17 @@ async function main() {
     now: () => new Date
   };
   const args = JSON.parse(getInput("args", { required: true }));
+  if (mode === "prepare") {
+    const prepared = await prepareMergeAcceptance(ctx, args);
+    setOutput("acceptance-kind", prepared.kind);
+    info(`merge request prepared as ${prepared.kind}`);
+    return;
+  }
   const result = await acceptMerge(ctx, args);
+  if (result.kind === "external-merge") {
+    info("pull request was merged outside csm-ci before the merge reservation was accepted");
+    return;
+  }
   if (result.reservation)
     setOutput("reservation-id", String(result.reservation.deploymentId));
   if (result.reservation) {
