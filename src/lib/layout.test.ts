@@ -88,7 +88,7 @@ describe("merge token boundary", () => {
   test("acceptance can write deployments on the server repository without client write permissions", () => {
     const token = steps.find((step) => step.id === "automerge-deployments-token");
     expect(token?.uses).toMatch(/^actions\/create-github-app-token@/u);
-    expect(token?.if).toBe("needs.intake.outputs.kind == 'merge'");
+    expect(token?.if).toBe("steps.merge-prepare.outputs.acceptance-kind == 'accept'");
     expect(token?.with).toEqual({
       "client-id": "${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}",
       "private-key": "${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}",
@@ -97,16 +97,51 @@ describe("merge token boundary", () => {
       "permission-deployments": "write",
     });
     const merge = steps.find((step) => step.with?.mode === "accept");
-    expect(merge?.with?.["deployments-token"]).toBe("${{ steps.automerge-deployments-token.outputs.token }}");
+    expect(merge?.with?.["deployments-token"]).toBe("${{ steps.automerge-deployments-token.outputs.token || steps.merge-read-deployments-token.outputs.token }}");
     expect(merge?.with?.["server-token"]).toBe("${{ steps.merge-read-token.outputs.token }}");
     expect(merge?.with?.["notification-token"]).toBe("${{ steps.merge-notify-token.outputs.token }}");
   });
 
-  test.each(["merge-read-token", "merge-notify-token", "automerge-deployments-token"])("keeps client merge permissions off %s", (id) => {
+  test("acceptance uses a separate repository-scoped token only for disarming native auto-merge", () => {
+    const token = steps.find((step) => step.id === "merge-acceptance-write-token");
+    expect(token?.uses).toMatch(/^actions\/create-github-app-token@/u);
+    expect(token?.if).toBe("steps.merge-prepare.outputs.acceptance-kind == 'accept'");
+    expect(token?.with).toEqual({
+      "client-id": "${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}",
+      "private-key": "${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}",
+      owner: "${{ needs.intake.outputs.owner }}",
+      repositories: "${{ needs.intake.outputs.name }}",
+      "permission-contents": "write",
+      "permission-pull-requests": "write",
+    });
+    const merge = steps.find((step) => step.with?.mode === "accept");
+    expect(merge?.with?.["acceptance-write-token"]).toBe("${{ steps.merge-acceptance-write-token.outputs.token }}");
+    expect(token?.with).not.toHaveProperty("permission-issues");
+    expect(token?.with).not.toHaveProperty("permission-checks");
+  });
+
+  test("prepares with read-only deployments access before conditionally minting acceptance write tokens", () => {
+    const prepare = steps.find((step) => step.id === "merge-prepare");
+    const readDeployments = steps.find((step) => step.id === "merge-read-deployments-token");
+    const acceptWrite = steps.find((step) => step.id === "merge-acceptance-write-token");
+    const deploymentsWrite = steps.find((step) => step.id === "automerge-deployments-token");
+    expect(prepare?.uses).toBe("./.csm-ci-actions/actions/server/merge");
+    expect(prepare?.with?.mode).toBe("prepare");
+    expect(prepare?.with?.["deployments-token"]).toBe("${{ steps.merge-read-deployments-token.outputs.token }}");
+    expect(readDeployments?.with?.["permission-deployments"]).toBe("read");
+    expect(readDeployments?.with?.["permission-pull-requests"]).toBeUndefined();
+    expect(steps.indexOf(prepare!)).toBeLessThan(steps.indexOf(acceptWrite!));
+    expect(steps.indexOf(prepare!)).toBeLessThan(steps.indexOf(deploymentsWrite!));
+    expect(acceptWrite?.if).toBe("steps.merge-prepare.outputs.acceptance-kind == 'accept'");
+    expect(deploymentsWrite?.if).toBe("steps.merge-prepare.outputs.acceptance-kind == 'accept'");
+  });
+
+  test.each(["merge-read-token", "merge-notify-token", "automerge-deployments-token"])("keeps unrelated client write permissions off %s", (id) => {
     const token = steps.find((step) => step.id === id);
     expect(token).toBeDefined();
     expect(token?.with).not.toHaveProperty("permission-workflows");
     expect(token?.with?.["permission-contents"]).not.toBe("write");
+    if (id !== "merge-notify-token") expect(token?.with?.["permission-pull-requests"]).not.toBe("write");
   });
 });
 
