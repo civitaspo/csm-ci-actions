@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { OWNER_IDENTITY } from "./pr-metadata.ts";
 import { prCase } from "./harness.ts";
 import { assert, CLIENT, closeReleasePrIfOwned, configureRelease, dispatch, expectOp, hasStatus, jobs, jobLog, openReleasePr, postComment, recentWorkflowRuns, SERVER, SERVER_BOT_ID, serverRuns, type Ctx, type Conclusion, type ReleaseBuildType, type Run, type Scenario, until, waitRun, withServerConfig, withoutReleaseOperation } from "./harness.ts";
@@ -93,7 +94,19 @@ async function completedRelease(ctx: Ctx, ver: string, buildType: ReleaseBuildTy
     assert(clientRun.conclusion === "success", `client release request concluded ${clientRun.conclusion} (${clientRun.html_url})`);
     const pipeline = await releasePipeline(ctx, merged.since, pr);
     return { pipeline, pr, sha: merged.sha, clientRun };
-  }, buildType === "goreleaser" ? { "dist/action.js": null } : buildType === "terraform-provider" ? terraformFixture : {}, intent));
+  }, buildType === "goreleaser" ? { "dist/action.js": null }
+    : buildType === "terraform-provider" ? terraformFixture
+    : buildType === "cargo-raw" ? {
+      "src/main.rs": `fn main() {
+    if std::env::args().skip(1).collect::<Vec<_>>() == ["version", "--json"] {
+        println!(r#"{"fixture":"cargo-raw-version-probe"}"#);
+    } else {
+        println!("testing-csm-ci-client {}", env!("RELEASE_VERSION"));
+    }
+}
+`,
+    }
+    : {}, intent));
 }
 
 function expectJob(result: ReleaseRun, name: string, conclusion: Conclusion): void {
@@ -118,7 +131,7 @@ function expectedNames(type: ReleaseBuildType, ver: string): string[] {
     ].sort();
   }
   if (type === "cargo-raw") return [
-    ...CARGO_RAW_TARGETS.flatMap((target) => [`testing-csm-ci-client-${target}`, `testing-csm-ci-client-${target}.sha256`]),
+    ...CARGO_RAW_TARGETS.flatMap((target) => [`testing-csm-ci-client-${target}`, `testing-csm-ci-client-${target}.artifact.json`, `testing-csm-ci-client-${target}.sha256`]),
     "SHA256SUMS",
   ].sort();
   if (type === "cargo") return [
@@ -144,6 +157,55 @@ async function publishedRelease(ctx: Ctx, ver: string, mergeSha: string, type: R
   return tag;
 }
 
+async function verifyCargoRawArtifacts(ctx: Ctx, tag: string, ver: string, mergeSha: string): Promise<void> {
+  const { data } = await ctx.gh.rest.repos.getReleaseByTag({ ...splitRepository(CLIENT), tag });
+  const assets = new Map(data.assets.map((asset) => [asset.name, asset.browser_download_url]));
+  const normalized: Record<string, string> = {
+    "aarch64-apple-darwin": "macos-aarch64",
+    "x86_64-apple-darwin": "macos-x86_64",
+    "aarch64-unknown-linux-gnu": "linux-aarch64",
+    "x86_64-unknown-linux-gnu": "linux-x86_64",
+    "aarch64-unknown-linux-musl": "linux-musl-aarch64",
+    "x86_64-unknown-linux-musl": "linux-musl-x86_64",
+  };
+  for (const rustTarget of CARGO_RAW_TARGETS) {
+    const name = `testing-csm-ci-client-${rustTarget}.artifact.json`;
+    const url = assets.get(name);
+    assert(url, `release ${tag} is missing ${name}`);
+    const response = await fetch(url, { redirect: "follow" });
+    assert(response.ok, `could not fetch ${name}: HTTP ${response.status}`);
+    const body = await response.text();
+    assert(body.length <= 64 * 1024, `${name} exceeds the 64 KiB limit`);
+    let artifact: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(body);
+      assert(typeof parsed === "object" && parsed !== null && !Array.isArray(parsed), `${name} must contain a JSON object`);
+      artifact = parsed as Record<string, unknown>;
+    } catch (error) {
+      throw new Error(`${name} is not valid JSON`, { cause: error });
+    }
+    assert(artifact.version === ver, `${name} has version ${String(artifact.version)}, expected ${ver}`);
+    assert(artifact.target === normalized[rustTarget], `${name} has an incorrect normalized target`);
+    assert(artifact.rust_target === rustTarget, `${name} has an incorrect Rust target`);
+    assert(artifact.source_revision === mergeSha, `${name} has an incorrect source revision`);
+    assert(artifact.dirty === false, `${name} does not report a clean build`);
+    assert(typeof artifact.sha256 === "string" && /^[a-f0-9]{64}$/u.test(artifact.sha256), `${name} has an invalid binary SHA256`);
+    const binaryName = `testing-csm-ci-client-${rustTarget}`;
+    const binaryUrl = assets.get(binaryName);
+    assert(binaryUrl, `release ${tag} is missing ${binaryName}`);
+    const binaryResponse = await fetch(binaryUrl, { redirect: "follow" });
+    assert(binaryResponse.ok, `could not fetch ${binaryName}: HTTP ${binaryResponse.status}`);
+    const binaryDigest = createHash("sha256").update(new Uint8Array(await binaryResponse.arrayBuffer())).digest("hex");
+    assert(artifact.sha256 === binaryDigest, `${name} SHA256 does not match its raw binary`);
+    assert(typeof artifact.version_json === "object" && artifact.version_json !== null && !Array.isArray(artifact.version_json), `${name} is missing version_json`);
+    assert((artifact.version_json as Record<string, unknown>).fixture === "cargo-raw-version-probe", `${name} did not capture the built binary's version probe output`);
+    const needsOs = rustTarget.endsWith("-apple-darwin");
+    const needsLibc = rustTarget.endsWith("linux-gnu");
+    assert(needsOs === (typeof artifact.minimum_os === "string"), `${name} has incorrect minimum_os evidence`);
+    assert(needsLibc === (typeof artifact.minimum_libc === "string"), `${name} has incorrect minimum_libc evidence`);
+  }
+}
+
 export async function verifyAttestations(ctx: Ctx, tag: string, mergeSha: string, terraformRun?: number): Promise<void> {
   const inputs: Record<string, string> = { tag, merge_sha: mergeSha, client_repository: CLIENT, signer_workflow: SIGNER, predicate_type: PREDICATE };
   if (terraformRun) {
@@ -162,6 +224,7 @@ async function success(ctx: Ctx, type: ReleaseBuildType): Promise<{ tag: string;
   expectJob(result.pipeline, "release-build", "success");
   expectJob(result.pipeline, "release-publish", "success");
   const tag = await publishedRelease(ctx, ver, result.sha, type);
+  if (type === "cargo-raw") await verifyCargoRawArtifacts(ctx, tag, ver, result.sha);
   await verifyAttestations(ctx, tag, result.sha);
   return { tag, sha: result.sha };
 }
