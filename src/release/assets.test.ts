@@ -27,7 +27,7 @@ describe("prepareAssets", () => {
     })).rejects.toThrow("Terraform assets must contain exactly one Registry manifest");
     await expect(readFile(join(directory, "SHA256SUMS"))).rejects.toThrow();
   });
-  test("creates individual raw checksums and attestation subjects for all four targets", async () => {
+  test("creates individual raw checksums and attestation subjects for all six targets", async () => {
     const directory = await tempDirectory();
     for (const target of CARGO_RAW_TARGETS) await writeFile(join(directory, `app-${target}`), "a");
     const assets = await prepareAssets(directory, rawRelease);
@@ -35,7 +35,7 @@ describe("prepareAssets", () => {
     for (const target of CARGO_RAW_TARGETS) {
       expect(await readFile(join(directory, `app-${target}.sha256`), "utf8")).toBe(`ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb  app-${target}\n`);
     }
-    expect((await readFile(join(directory, "SHA256SUMS"), "utf8")).trim().split("\n")).toHaveLength(8);
+    expect((await readFile(join(directory, "SHA256SUMS"), "utf8")).trim().split("\n")).toHaveLength(12);
     await expect(prepareAssets(directory, rawRelease)).resolves.toEqual(assets);
   });
 
