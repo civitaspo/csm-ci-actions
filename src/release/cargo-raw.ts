@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { accessSync, chmodSync, constants, copyFileSync, lstatSync, mkdirSync, realpathSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { ensure } from "./ensure.ts";
 
 export const RAW_TARGETS: Record<string, readonly [string, string]> = {
@@ -29,9 +29,12 @@ function compareVersions(left: readonly [number, number, number], right: readonl
 
 export function validateGlibcRequirements(target: string, headers: string, dynamic: string, versions: string): void {
   const loader = target.startsWith("aarch64-") ? "ld-linux-aarch64.so.1" : "ld-linux-x86-64.so.2";
-  ensure(headers.includes("Requesting program interpreter:") && headers.includes(loader),
+  const interpreter = /^\s*\[Requesting program interpreter:\s*([^\]]+)\]\s*$/mu.exec(headers)?.[1]?.trim();
+  ensure(interpreter !== undefined && basename(interpreter) === loader,
     "cargo-raw GNU Linux binary must use the target glibc dynamic loader");
-  ensure(dynamic.includes("NEEDED") && dynamic.includes("libc.so.6"),
+  const hasLibcDependency = dynamic.split("\n").some((line) =>
+    /^\s*0x[0-9a-f]+\s+\(NEEDED\)\s+Shared library:\s+\[libc\.so\.6\]\s*$/iu.test(line));
+  ensure(hasLibcDependency,
     "cargo-raw GNU Linux binary must link against glibc");
   const needed = /Version needs section[\s\S]*?(?=Version (?:definition|symbols?) section|$)/u.exec(versions)?.[0] ?? "";
   const requirements = [...needed.matchAll(/Name: GLIBC_([A-Za-z0-9_.-]+)/gu)].map((match) => match[1]!);
@@ -65,6 +68,10 @@ export function validateVersion(binary: string, version: string, reported: strin
 }
 
 const command = (...args: [string, ...string[]]) => execFileSync(args[0], args.slice(1), { encoding: "utf8" }).trim();
+const readelf = (...args: string[]) => execFileSync("readelf", args, {
+  encoding: "utf8",
+  env: { ...process.env, LC_ALL: "C" },
+}).trim();
 
 export function verifyRaw(args: string[]): string | undefined {
   if (args.length === 4 && args[0] === "--validate") {
@@ -83,9 +90,9 @@ export function verifyRaw(args: string[]): string | undefined {
   ensure(!lstatSync(source).isSymbolicLink() && statSync(path).isFile() && executable, "cargo-raw binary must be a regular executable file");
   const description = command("file", "-b", path);
   const linux = target.includes("linux-");
-  const headers = linux ? command("readelf", "-l", path) : "";
-  const dynamic = linux ? command("readelf", "-d", path) : "";
-  const versions = target.endsWith("linux-gnu") ? command("readelf", "-V", path) : "";
+  const headers = linux ? readelf("-l", path) : "";
+  const dynamic = linux ? readelf("-d", path) : "";
+  const versions = target.endsWith("linux-gnu") ? readelf("-V", path) : "";
   validateFormat(target, description, headers, dynamic, versions);
   const reported = command(path, "--version");
   validateVersion(binary, version, reported);

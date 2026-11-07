@@ -9,8 +9,8 @@ const armMac = "aarch64-apple-darwin";
 const linuxFormat = "ELF 64-bit LSB executable, ARM aarch64, statically linked";
 const armLinuxGnu = "aarch64-unknown-linux-gnu";
 const gnuFormat = "ELF 64-bit LSB pie executable, ARM aarch64, dynamically linked";
-const gnuHeaders = "Requesting program interpreter: /lib/ld-linux-aarch64.so.1";
-const gnuDynamic = "NEEDED Shared library: [libc.so.6]";
+const gnuHeaders = "[Requesting program interpreter: /lib/ld-linux-aarch64.so.1]";
+const gnuDynamic = " 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]";
 const gnuVersions = "Version needs section '.gnu.version_r' contains 1 entry:\n  0x0010: Name: GLIBC_2.2.5 Flags: none\n  0x0020: Name: GLIBC_2.34 Flags: none\nVersion symbols section '.gnu.version'";
 
 test.each([
@@ -22,8 +22,10 @@ test.each([
   ["not executable", () => validateFormat(armMac, "Mach-O 64-bit object arm64"), "wrong executable format or architecture"],
   ["dynamic interpreter", () => validateFormat(armLinux, linuxFormat, "INTERP", ""), "Linux binary must be statically linked"],
   ["shared dependency", () => validateFormat(armLinux, linuxFormat, "", "NEEDED libc.so"), "Linux binary must be statically linked"],
-  ["GNU binary with wrong loader", () => validateFormat(armLinuxGnu, gnuFormat, "Requesting program interpreter: /lib64/ld-linux-x86-64.so.2", gnuDynamic, gnuVersions), "must use the target glibc dynamic loader"],
+  ["GNU binary with wrong loader", () => validateFormat(armLinuxGnu, gnuFormat, "[Requesting program interpreter: /lib64/ld-linux-x86-64.so.2]", gnuDynamic, gnuVersions), "must use the target glibc dynamic loader"],
   ["GNU binary without libc", () => validateFormat(armLinuxGnu, gnuFormat, gnuHeaders, "NEEDED libother.so", gnuVersions), "must link against glibc"],
+  ["GNU binary with libc only in RUNPATH", () => validateFormat(armLinuxGnu, gnuFormat, gnuHeaders, " 0x0000000000000001 (NEEDED) Shared library: [libother.so]\n 0x000000000000001d (RUNPATH) Library runpath: [libc.so.6]", gnuVersions), "must link against glibc"],
+  ["GNU binary with loader text outside interpreter entry", () => validateFormat(armLinuxGnu, gnuFormat, "[Requesting program interpreter: /lib/ld-linux-aarch64.so.1x]\nGNU loader ld-linux-aarch64.so.1", gnuDynamic, gnuVersions), "must use the target glibc dynamic loader"],
   ["GNU binary without symbol requirements", () => validateFormat(armLinuxGnu, gnuFormat, gnuHeaders, gnuDynamic, "Version symbols section"), "must declare its glibc symbol requirements"],
   ["GNU binary requiring newer glibc", () => validateFormat(armLinuxGnu, gnuFormat, gnuHeaders, gnuDynamic, gnuVersions.replace("2.34", "2.40")), "above the supported GLIBC_2.39 baseline"],
   ["GNU binary with an unknown ABI marker", () => validateFormat(armLinuxGnu, gnuFormat, gnuHeaders, gnuDynamic, gnuVersions.replace("2.34", "ABI_DT_RELR")), "invalid glibc requirement"],
@@ -45,7 +47,7 @@ test.each([
 
 test.each([
   [armLinuxGnu, gnuFormat, gnuHeaders, gnuDynamic, gnuVersions],
-  ["x86_64-unknown-linux-gnu", "ELF 64-bit LSB pie executable, x86-64, dynamically linked", "Requesting program interpreter: /lib64/ld-linux-x86-64.so.2", gnuDynamic, gnuVersions],
+  ["x86_64-unknown-linux-gnu", "ELF 64-bit LSB pie executable, x86-64, dynamically linked", "[Requesting program interpreter: /lib64/ld-linux-x86-64.so.2]", gnuDynamic, gnuVersions],
 ] as const)("raw verifier accepts GNU ELF within the supported glibc baseline for %s", (target, description, headers, dynamic, versions) => {
   expect(() => validateInputs(target, "app", "1.2.3")).not.toThrow();
   expect(() => validateFormat(target, description, headers, dynamic, versions)).not.toThrow();
