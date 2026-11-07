@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.6.1] - 2026-11-07
+
+### 📚 Documentation
+
+- *(merge)* Disarm native auto-merge on reservation ([#224](https://github.com/civitaspo/csm-ci-actions/pull/224))
+- *(merge)* Document accepted token permissions ([#226](https://github.com/civitaspo/csm-ci-actions/pull/226))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(deps)* Update civitaspo/csm-ci-actions action to v0.6.0 ([#217](https://github.com/civitaspo/csm-ci-actions/pull/217))
+
 ## [0.6.0] - 2026-10-31
 
 ### 🚀 Features
