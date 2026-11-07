@@ -214,6 +214,7 @@ jobs:
           private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
           owner: ${{ needs.intake.outputs.owner }}
           repositories: ${{ needs.intake.outputs.name }}
+          permission-contents: write
           permission-pull-requests: write
       - id: automerge-deployments-token
         if: steps.merge-prepare.outputs.acceptance-kind == 'accept'
