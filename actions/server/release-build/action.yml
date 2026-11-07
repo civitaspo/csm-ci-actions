@@ -65,7 +65,7 @@ runs:
     - if: inputs.build-type == 'goreleaser' || inputs.build-type == 'terraform-provider'
       uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a
       with:
-        version: v2.19.0
+        version: v2.20.0
         distribution: goreleaser
         workdir: ${{ inputs.client-path }}
         args: release --skip=publish,sign,announce --clean
