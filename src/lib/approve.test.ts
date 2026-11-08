@@ -99,6 +99,13 @@ function context(s: Setup = {}) {
 }
 
 describe("runApprove automatic", () => {
+  test("accepts a configured exact-repository integration branch and approves the checked head", async () => {
+    const configured = parseConfig(CONFIG_YAML.replace("{ name: owner/*, ops: [approve, merge, policy-check] }", "{ name: owner/repo, ops: [approve, merge, policy-check], integration_branches: [prototype/first-ticket] }"));
+    const base = { ref: "prototype/first-ticket", repo: { full_name: "owner/repo", default_branch: "main" } };
+    const { ctx } = context({ config: configured, pull: pull({ base }), pullAfter: pull({ base }) });
+    expect(await runApprove(ctx, { pull_number: 12 })).toMatchObject({ result: "approved", head: HEAD });
+  });
+
   test.each([
     ["approved", {}],
     ["declined", { commits: [commit(HEAD, { committer: mallory, author: mallory })] }],

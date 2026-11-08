@@ -10,6 +10,19 @@ The client forwards a newly created pull request comment whose body is exactly `
 
 The server accepts `/merge` only from an account in `trust.mergers`, or from a Bot in `trust.bot_mergers` when that Bot owns the pull request and every effective commit. Acceptance also requires an enabled merge operation, an unedited command comment no more than 60 minutes old, a head that predates the comment, and no receipt or active reservation for the pull request. The server loads configuration from its default branch and reads the command and pull request from GitHub. A Server Bot receipt prevents replay. If the receipt marker is deleted, repeating the same command can create at most one reservation because the server also searches for the command comment ID.
 
+The target must be the default branch or an integration branch explicitly listed on the exact repository entry in the server's `csm-ci.yaml`. The branch is accepted only for same-repository pull requests. Trust, policy, approval, and required-check validation still applies, and the reservation records the selected base branch for final revalidation.
+
+For example, enable the branch for one repository with:
+
+```yaml
+repositories:
+  - name: civitaspo/rex-projects
+    ops: [approve, merge, policy-check]
+    integration_branches: [prototype/first-ticket]
+```
+
+`integration_branches` does not accept repository globs. Configure it in the server's trusted default-branch config; pull request contents cannot opt themselves in.
+
 Before it creates a reservation, csm-ci disables any existing GitHub auto-merge request on the validated pull request. After that write, it re-reads the pull request state and auto-merge request. If the pull request is merged, it reports the external merge and creates no active reservation, even if GitHub still returns an `autoMergeRequest` for the merged pull request. If it remains open, csm-ci requires the auto-merge request to be absent and verifies that the repository and head still match before creating the reservation. If a request remains for an open pull request, acceptance fails closed with an actionable failure. csm-ci reaches this write only after authorization, command, repository, pull request, and replay checks pass. The disarm and reservation writes are not atomic: if an external merge races after the final read but before reservation creation, the reservation may be created and the next evaluation terminalizes it as an external merge. If reservation persistence fails after the disarm succeeded, the native request remains disabled; retrying the same command is safe while the command is valid and can create at most one reservation.
 
 ## Reservation state

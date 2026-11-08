@@ -146,10 +146,19 @@ const RepositoryEntry = z.strictObject({
       if (error) ctx.addIssue({ code: "custom", message: error });
     }).optional(),
   }).optional(),
+  integration_branches: z.array(z.string().min(1).refine(isSecurefixBranch, "must be a safe branch name")).refine((branches) => new Set(branches).size === branches.length, "duplicate integration branch").optional(),
   // Removed key: reject it explicitly so older configurations fail with an actionable message.
   sensitive_paths: z.strictObject({ paths: z.array(z.string().min(1)).optional(), exempt: z.array(Principal).optional() }).optional(),
   merge: z.strictObject({ allow_bot_requests: z.boolean().optional() }).optional(),
 }).superRefine((entry, ctx) => {
+  if (entry.integration_branches !== undefined) {
+    if (/[?*\[\]{}!()]/u.test(entry.name)) {
+      ctx.addIssue({ code: "custom", path: ["name"], message: "integration_branches require an exact repository name" });
+    }
+    if (!entry.ops.includes("approve") || !entry.ops.includes("merge")) {
+      ctx.addIssue({ code: "custom", path: ["ops"], message: "integration_branches require approve and merge operations" });
+    }
+  }
   if (entry.ops.includes("release") !== (entry.release !== undefined)) {
     ctx.addIssue({ code: "custom", path: ["release"], message: "release settings must be present exactly when release is enabled" });
   }

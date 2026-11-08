@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { acceptMerge, evaluateReservation, mergeReservation, type MergeContext } from "./merge.ts";
 import { github } from "./github.ts";
 import { marker } from "./notify.ts";
-import { config, fakeFetch } from "./testing.ts";
+import { CONFIG_YAML, config, fakeFetch } from "./testing.ts";
+import { parseConfig } from "./config.ts";
 
 const P = "/repos/owner/repo";
 const now = new Date("2026-10-24T11:30:01Z");
@@ -62,6 +63,18 @@ describe("acceptMerge", () => {
     expect(deploymentsFetch.calls).toContain("POST /repos/owner/server/deployments");
     expect(deploymentsFetch.calls).toContain("POST /repos/owner/server/deployments/77/statuses");
     expect(notifyFetch.calls).toContain("POST /repos/owner/repo/issues/12/comments");
+  });
+
+  test("accepts a configured exact-repository integration branch", async () => {
+    const { ctx, deploymentsFetch } = setup("/merge", { id: 10, login: "alice", type: "User" }, false, {
+      pull: { base: { ref: "prototype/first-ticket", repo: { id: 123, full_name: "owner/repo", default_branch: "main" } } },
+      payload: { base_ref: "prototype/first-ticket" },
+    });
+    const configured = parseConfig(CONFIG_YAML.replace("{ name: owner/*, ops: [approve, merge, policy-check] }", "{ name: owner/repo, ops: [approve, merge, policy-check], integration_branches: [prototype/first-ticket] }"));
+    ctx.config = configured;
+    ctx.reloadConfig = async () => configured;
+    expect(await acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).toMatchObject({ kind: "accepted", reservation: { deploymentId: 77, payload: { base_ref: "prototype/first-ticket" } } });
+    expect(deploymentsFetch.calls).toContain("POST /repos/owner/server/deployments");
   });
 
   test("accepts the reservation when the display commit token cannot read the branch", async () => {
