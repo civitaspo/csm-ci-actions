@@ -32682,6 +32682,8 @@ function decide(args) {
     return { kind: "terminal", state: "inactive", reason: "invalidated", description: "bot merge requests are disabled", comment: "complete" };
   if (args.pull.baseRef !== payload.base_ref)
     return { kind: "terminal", state: "inactive", reason: "invalidated", description: "base branch changed", comment: "complete" };
+  if (!args.baseBranchAllowed)
+    return { kind: "terminal", state: "inactive", reason: "invalidated", description: "integration branch is no longer configured", comment: "complete" };
   if (payload.mode === "bot" && !args.botCommitsValid)
     return { kind: "terminal", state: "failure", reason: "rejected", description: `a commit is not authored by ${payload.merger.login}`, comment: "complete" };
   if (args.pull.draft)
@@ -37759,13 +37761,14 @@ async function evaluateReservation(ctx, record) {
     return persistTerminal(ctx, latest, targetContext.repository, decision, current, true);
   }
   const mergerStillTrusted = record.payload.mode === "bot" ? ctx.config.trust.bot_mergers.some((item) => item.id === record.payload.merger.id) : ctx.config.trust.mergers.some((item) => item.id === record.payload.merger.id);
-  const botCheckRequired = record.payload.mode === "bot" && latest.state.kind === "active" && pull.state === "open" && ctx.now().getTime() < Date.parse(record.payload.expires_at) && mergerStillTrusted && entry?.ops.includes("merge") === true && entry.merge?.allow_bot_requests !== false && pull.baseRef === record.payload.base_ref;
+  const baseBranchAllowed = pull.baseRef === pull.defaultBranch || entry?.integration_branches?.includes(pull.baseRef) === true;
+  const botCheckRequired = record.payload.mode === "bot" && latest.state.kind === "active" && pull.state === "open" && ctx.now().getTime() < Date.parse(record.payload.expires_at) && mergerStillTrusted && entry?.ops.includes("merge") === true && baseBranchAllowed && entry.merge?.allow_bot_requests !== false && pull.baseRef === record.payload.base_ref;
   const botCommitsValid = !botCheckRequired || await verifyBotCommits(targetContext, pull, record.payload.merger);
   let ready = { kind: "waiting", reason: "not evaluated" };
-  const preflight = decide({ reservation: { state: latest.state, payload: latest.payload }, pull, now: ctx.now(), trustValid: mergerStillTrusted, mergeEnabled: entry?.ops.includes("merge") === true, allowBotRequests: entry?.merge?.allow_bot_requests !== false, botCommitsValid, readiness: ready });
+  const preflight = decide({ reservation: { state: latest.state, payload: latest.payload }, pull, now: ctx.now(), trustValid: mergerStillTrusted, mergeEnabled: entry?.ops.includes("merge") === true, baseBranchAllowed, allowBotRequests: entry?.merge?.allow_bot_requests !== false, botCommitsValid, readiness: ready });
   if (preflight.kind === "wait" && preflight.reason === "not evaluated")
     ready = await readiness(targetContext, pull);
-  const decision = decide({ reservation: { state: latest.state, payload: latest.payload }, pull, now: ctx.now(), trustValid: mergerStillTrusted, mergeEnabled: entry?.ops.includes("merge") === true, allowBotRequests: entry?.merge?.allow_bot_requests !== false, botCommitsValid, readiness: ready });
+  const decision = decide({ reservation: { state: latest.state, payload: latest.payload }, pull, now: ctx.now(), trustValid: mergerStillTrusted, mergeEnabled: entry?.ops.includes("merge") === true, baseBranchAllowed, allowBotRequests: entry?.merge?.allow_bot_requests !== false, botCommitsValid, readiness: ready });
   if (latest.state.kind === "active") {
     await postAutomergeComment(targetContext, latest, "accepted", `Merge reserved until ${latest.payload.expires_at}. It follows head changes and requires approval and checks for the current head. Cancel with /merge cancel. The ${AUTOMERGE_LABEL} label shows the reservation state.`, latest.payload.accepted_head);
   }

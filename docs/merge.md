@@ -21,7 +21,7 @@ repositories:
     integration_branches: [prototype/first-ticket]
 ```
 
-`integration_branches` does not accept repository globs. Configure it in the server's trusted default-branch config; pull request contents cannot opt themselves in.
+`integration_branches` does not accept repository globs. Configure it in the server's trusted default-branch config; pull request contents cannot opt themselves in. Removing a branch from that configuration invalidates active reservations targeting it. A reservation targeting the repository's current default branch remains valid when no integration branch is configured.
 
 Before it creates a reservation, csm-ci disables any existing GitHub auto-merge request on the validated pull request. After that write, it re-reads the pull request state and auto-merge request. If the pull request is merged, it reports the external merge and creates no active reservation, even if GitHub still returns an `autoMergeRequest` for the merged pull request. If it remains open, csm-ci requires the auto-merge request to be absent and verifies that the repository and head still match before creating the reservation. If a request remains for an open pull request, acceptance fails closed with an actionable failure. csm-ci reaches this write only after authorization, command, repository, pull request, and replay checks pass. The disarm and reservation writes are not atomic: if an external merge races after the final read but before reservation creation, the reservation may be created and the next evaluation terminalizes it as an external merge. If reservation persistence fails after the disarm succeeded, the native request remains disabled; retrying the same command is safe while the command is valid and can create at most one reservation.
 

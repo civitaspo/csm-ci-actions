@@ -342,6 +342,20 @@ describe("evaluateReservation", () => {
     expect(notifyFetch.calls).toContain(`POST ${P}/issues/12/comments`);
   });
 
+  test("invalidates an integration-branch reservation after its branch is removed from current config", async () => {
+    const baseRef = "prototype/first-ticket";
+    const { ctx, deploymentsFetch, payload } = setup("/merge", { id: 10, login: "alice", type: "User" }, true, {
+      pull: { base: { ref: baseRef, repo: { id: 123, full_name: "owner/repo", default_branch: "main" } } },
+      payload: { base_ref: baseRef },
+    });
+    ctx.reloadConfig = async () => parseConfig(CONFIG_YAML.replace("{ name: owner/*, ops: [approve, merge, policy-check] }", "{ name: owner/repo, ops: [approve, merge, policy-check] }"));
+    const record = { deploymentId: 77, nodeId: "D_node", createdAt: "2026-10-20T00:00:00Z", payload: payload as never, statuses: [], state: { kind: "active" as const } };
+    const result = await evaluateReservation(ctx, record);
+    expect(result.decision).toMatchObject({ kind: "terminal", state: "inactive", reason: "invalidated", description: "integration branch is no longer configured" });
+    expect(deploymentsFetch.calls).toContain("POST /repos/owner/server/deployments/77/statuses");
+    expect(deploymentsFetch.calls).not.toContain("GET /repos/owner/repo/commits/" + sha + "/check-runs");
+  });
+
   test("does not publish a queued status when the reservation is ready to merge", async () => {
     const waitingStatus = { id: 98, state: "queued", description: "waiting for approval of aaaaaaa", created_at: "2026-10-24T11:00:00Z", creator: { id: 3000, type: "Bot" } };
     const { ctx, deploymentsFetch, payload } = setup("/merge", { id: 10, login: "alice", type: "User" }, true, { statuses: [waitingStatus] });

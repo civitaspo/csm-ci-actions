@@ -18,6 +18,7 @@ describe("parseConfig", () => {
   test("accepts integration branches only on exact repositories with approve and merge enabled", () => {
     const parsed = parseConfig(CONFIG_YAML.replace("{ name: owner/*, ops: [approve, merge, policy-check] }", "{ name: owner/repo, ops: [approve, merge, policy-check], integration_branches: [prototype/first-ticket] }"));
     expect(repositoryEntry(parsed, "OWNER/REPO")?.integration_branches).toEqual(["prototype/first-ticket"]);
+    expect(repositoryEntry(parsed, "owner/other")?.integration_branches).toBeUndefined();
   });
 
   const rejects: [string, string, RegExp][] = [
