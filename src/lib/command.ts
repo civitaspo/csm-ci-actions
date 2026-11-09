@@ -56,9 +56,11 @@ export type PullFacts = {
   authorId: number;
 };
 
-export function checkPullState(p: PullFacts, allowDraft = false): void {
+export function checkPullState(p: PullFacts, options: { allowDraft?: boolean; integrationBranches?: readonly string[] } = {}): void {
   if (p.state !== "open") throw new Rejection(`#${p.number} is ${p.state}`);
-  if (p.draft && !allowDraft) throw new Rejection(`#${p.number} is a draft`);
+  if (p.draft && !options.allowDraft) throw new Rejection(`#${p.number} is a draft`);
   if (p.headRepository?.toLowerCase() !== p.baseRepository.toLowerCase()) throw new Rejection(`#${p.number} comes from a fork`);
-  if (p.baseRef !== p.defaultBranch) throw new Rejection(`#${p.number} targets ${p.baseRef}, not the default branch ${p.defaultBranch}`);
+  if (p.baseRef !== p.defaultBranch && !options.integrationBranches?.includes(p.baseRef)) {
+    throw new Rejection(`#${p.number} targets ${p.baseRef}, not the default branch ${p.defaultBranch} or a configured integration branch`);
+  }
 }

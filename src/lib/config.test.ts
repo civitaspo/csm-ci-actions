@@ -15,9 +15,19 @@ describe("parseConfig", () => {
     expect(parsed.repo_settings?.settings?.allow_squash_merge).toBe(true);
   });
 
+  test("accepts integration branches only on exact repositories with approve and merge enabled", () => {
+    const parsed = parseConfig(CONFIG_YAML.replace("{ name: owner/*, ops: [approve, merge, policy-check] }", "{ name: owner/repo, ops: [approve, merge, policy-check], integration_branches: [prototype/first-ticket] }"));
+    expect(repositoryEntry(parsed, "OWNER/REPO")?.integration_branches).toEqual(["prototype/first-ticket"]);
+    expect(repositoryEntry(parsed, "owner/other")?.integration_branches).toBeUndefined();
+  });
+
   const rejects: [string, string, RegExp][] = [
     ["unknown top-level key", `${CONFIG_YAML}\nextra: 1\n`, /extra/],
     ["unknown repo settings key", `${CONFIG_YAML}\nrepo_settings: { extra: true }\n`, /extra/],
+    ["integration branches reject repository globs", CONFIG_YAML.replace("{ name: owner/*, ops: [approve, merge, policy-check] }", "{ name: owner/*, ops: [approve, merge, policy-check], integration_branches: [prototype/first-ticket] }"), /exact repository name/],
+    ["integration branches require approve and merge", CONFIG_YAML.replace("{ name: owner/*, ops: [approve, merge, policy-check] }", "{ name: owner/repo, ops: [policy-check], integration_branches: [prototype/first-ticket] }"), /integration_branches require approve and merge/],
+    ["integration branches reject unsafe branch names", CONFIG_YAML.replace("{ name: owner/*, ops: [approve, merge, policy-check] }", "{ name: owner/repo, ops: [approve, merge], integration_branches: [../main] }"), /safe branch name/],
+    ["integration branches reject duplicates", CONFIG_YAML.replace("{ name: owner/*, ops: [approve, merge, policy-check] }", "{ name: owner/repo, ops: [approve, merge], integration_branches: [prototype/first-ticket, prototype/first-ticket] }"), /duplicate integration branch/],
     ["repo settings cannot enable merge methods outside squash", `${CONFIG_YAML}\nrepo_settings: { settings: { delete_branch_on_merge: true, allow_auto_merge: true, allow_squash_merge: true, allow_merge_commit: true, allow_rebase_merge: false } }\n`, /Invalid input/],
     ["repo settings cannot disable squash merge", `${CONFIG_YAML}\nrepo_settings: { settings: { allow_squash_merge: false } }\n`, /Invalid input/],
     ["repo settings cannot enable rebase merge", `${CONFIG_YAML}\nrepo_settings: { settings: { allow_rebase_merge: true } }\n`, /Invalid input/],

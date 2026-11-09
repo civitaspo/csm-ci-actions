@@ -16,7 +16,7 @@ The client workflow sends a comment request only when the commenter's associatio
 
 ## Automatic path
 
-1. The pull request is open, not a draft, from the same repository, and based on the default branch.
+1. The pull request is open, not a draft, from the same repository, and based on the default branch or an integration branch explicitly listed on that exact repository entry in the server's `csm-ci.yaml`.
 2. The server pins the head. It evaluates `signed-commits` and `trusted-committers`, which always apply, and every other policy in `csm-ci.yaml`.
 3. If any policy fails, the result is `declined` and nothing is approved.
 4. Otherwise the approver App approves with `commit_id` set to the pinned head. If it already approved that head, nothing changes.
@@ -52,7 +52,7 @@ A separate `<sub>` footer contains HTML links to the original request, the pinne
 | `/approve` edited, older than 60 minutes, or dated in the future | `validateComment` | no |
 | Comment already answered by the server bot | `runApprove` | no |
 | Commenter is not an approver (by id, type User) | `runApprove` | no |
-| Pull request closed, draft, from a fork, or not based on the default branch | `checkPullState` | yes for `/approve` |
+| Pull request closed, draft, from a fork, or not based on the default branch or a configured integration branch | `checkPullState` | yes for `/approve` |
 | A commit that is unsigned or not by a trusted committer, or another failing policy | `commandApprove` | yes |
 | A force-push or a head commit after the comment | `checkHeadPredatesComment` | yes |
 | Comment edited or deleted before approving | `commandApprove` | yes |

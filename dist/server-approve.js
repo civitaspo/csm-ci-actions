@@ -32769,9 +32769,18 @@ var RepositoryEntry = strictObject({
         ctx.addIssue({ code: "custom", message: error });
     }).optional()
   }).optional(),
+  integration_branches: array(string2().min(1).refine(isSecurefixBranch, "must be a safe branch name")).refine((branches) => new Set(branches).size === branches.length, "duplicate integration branch").optional(),
   sensitive_paths: strictObject({ paths: array(string2().min(1)).optional(), exempt: array(Principal).optional() }).optional(),
   merge: strictObject({ allow_bot_requests: boolean2().optional() }).optional()
 }).superRefine((entry, ctx) => {
+  if (entry.integration_branches !== undefined) {
+    if (/[?*\[\]{}!()]/u.test(entry.name)) {
+      ctx.addIssue({ code: "custom", path: ["name"], message: "integration_branches require an exact repository name" });
+    }
+    if (!entry.ops.includes("approve") || !entry.ops.includes("merge")) {
+      ctx.addIssue({ code: "custom", path: ["ops"], message: "integration_branches require approve and merge operations" });
+    }
+  }
   if (entry.ops.includes("release") !== (entry.release !== undefined)) {
     ctx.addIssue({ code: "custom", path: ["release"], message: "release settings must be present exactly when release is enabled" });
   }
@@ -32907,15 +32916,16 @@ function requirePrincipal(user, allowed, role) {
     throw new Rejection(`${user?.login ?? "a deleted user"} is not one of the ${role}`);
   return match;
 }
-function checkPullState(p, allowDraft = false) {
+function checkPullState(p, options = {}) {
   if (p.state !== "open")
     throw new Rejection(`#${p.number} is ${p.state}`);
-  if (p.draft && !allowDraft)
+  if (p.draft && !options.allowDraft)
     throw new Rejection(`#${p.number} is a draft`);
   if (p.headRepository?.toLowerCase() !== p.baseRepository.toLowerCase())
     throw new Rejection(`#${p.number} comes from a fork`);
-  if (p.baseRef !== p.defaultBranch)
-    throw new Rejection(`#${p.number} targets ${p.baseRef}, not the default branch ${p.defaultBranch}`);
+  if (p.baseRef !== p.defaultBranch && !options.integrationBranches?.includes(p.baseRef)) {
+    throw new Rejection(`#${p.number} targets ${p.baseRef}, not the default branch ${p.defaultBranch} or a configured integration branch`);
+  }
 }
 
 // node_modules/universal-user-agent/index.js
@@ -37411,6 +37421,10 @@ async function updatePolicyCheck(ctx) {
 }
 
 // src/lib/approve.ts
+function pullStateOptions(ctx) {
+  const integrationBranches = repositoryEntry(ctx.config, ctx.repository)?.integration_branches;
+  return integrationBranches === undefined ? {} : { integrationBranches };
+}
 async function fetchPull(gh, repository, pullNumber) {
   const { data: p } = await gh.rest.pulls.get({ ...splitRepository(repository), pull_number: pullNumber });
   return {
@@ -37477,7 +37491,7 @@ async function checkHeadPredatesComment(ctx, pull, comment) {
     throw new Rejection(`#${pull.number} was force-pushed after comment ${comment.id}`);
 }
 async function commandApprove(ctx, pull, comment) {
-  checkPullState(pull);
+  checkPullState(pull, pullStateOptions(ctx));
   const results = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull }, { commentId: comment.id, authorId: comment.user?.id ?? -1, head: pull.headSha });
   const problems = results.flatMap((r) => r.problems.map((p) => `${r.type}: ${p}`));
   if (problems.length > 0)
@@ -37496,15 +37510,16 @@ async function react(ctx, commentId) {
 async function runApprove(ctx, args) {
   ctx = { ...ctx, ...args.comment_id === undefined ? {} : { requestCommentId: args.comment_id } };
   const pull = await fetchPull(ctx.server, ctx.repository, args.pull_number);
+  const stateOptions = pullStateOptions(ctx);
   if (args.comment_id === undefined) {
-    checkPullState(pull);
+    checkPullState(pull, stateOptions);
     return autoApprove(ctx, pull);
   }
   const comment = await fetchComment(ctx.server, ctx.repository, args.comment_id);
   const command = validateComment(comment, ctx.repository, pull.number, ctx.now());
   if (command.name === "recheck") {
     await react(ctx, comment.id);
-    checkPullState(pull);
+    checkPullState(pull, stateOptions);
     return autoApprove(ctx, pull);
   }
   if (command.name !== "approve")

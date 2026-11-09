@@ -14784,9 +14784,18 @@ var RepositoryEntry = strictObject({
         ctx.addIssue({ code: "custom", message: error });
     }).optional()
   }).optional(),
+  integration_branches: array(string2().min(1).refine(isSecurefixBranch, "must be a safe branch name")).refine((branches) => new Set(branches).size === branches.length, "duplicate integration branch").optional(),
   sensitive_paths: strictObject({ paths: array(string2().min(1)).optional(), exempt: array(Principal).optional() }).optional(),
   merge: strictObject({ allow_bot_requests: boolean2().optional() }).optional()
 }).superRefine((entry, ctx) => {
+  if (entry.integration_branches !== undefined) {
+    if (/[?*\[\]{}!()]/u.test(entry.name)) {
+      ctx.addIssue({ code: "custom", path: ["name"], message: "integration_branches require an exact repository name" });
+    }
+    if (!entry.ops.includes("approve") || !entry.ops.includes("merge")) {
+      ctx.addIssue({ code: "custom", path: ["ops"], message: "integration_branches require approve and merge operations" });
+    }
+  }
   if (entry.ops.includes("release") !== (entry.release !== undefined)) {
     ctx.addIssue({ code: "custom", path: ["release"], message: "release settings must be present exactly when release is enabled" });
   }

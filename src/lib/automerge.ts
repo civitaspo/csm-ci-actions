@@ -77,6 +77,7 @@ function decide(args: {
   now: Date;
   trustValid: boolean;
   mergeEnabled: boolean;
+  baseBranchAllowed: boolean;
   allowBotRequests: boolean;
   botCommitsValid: boolean;
   readiness: Readiness;
@@ -94,6 +95,7 @@ function decide(args: {
   if (!args.mergeEnabled) return { kind: "terminal", state: "inactive", reason: "invalidated", description: "merge is disabled", comment: "complete" };
   if (payload.mode === "bot" && !args.allowBotRequests) return { kind: "terminal", state: "inactive", reason: "invalidated", description: "bot merge requests are disabled", comment: "complete" };
   if (args.pull.baseRef !== payload.base_ref) return { kind: "terminal", state: "inactive", reason: "invalidated", description: "base branch changed", comment: "complete" };
+  if (!args.baseBranchAllowed) return { kind: "terminal", state: "inactive", reason: "invalidated", description: "integration branch is no longer configured", comment: "complete" };
   if (payload.mode === "bot" && !args.botCommitsValid) return { kind: "terminal", state: "failure", reason: "rejected", description: `a commit is not authored by ${payload.merger.login}`, comment: "complete" };
   if (args.pull.draft) return { kind: "wait", reason: "draft" };
   if (args.readiness.kind === "waiting") return { kind: "wait", reason: args.readiness.reason };

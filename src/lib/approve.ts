@@ -1,5 +1,5 @@
 import { type CommentFacts, checkPullState, type PullFacts, requirePrincipal, validateComment } from "./command.ts";
-import type { Config } from "./config.ts";
+import { repositoryEntry, type Config } from "./config.ts";
 import { type GitHub, splitRepository } from "./github.ts";
 import { escapeHtml, hasServerMarker, marker, postResult, receiptFooter, type ServerRun } from "./notify.ts";
 import { evaluatePullPolicies, updatePolicyCheck } from "./policy-check.ts";
@@ -9,6 +9,11 @@ export { fetchComment } from "./github-comment.ts";
 
 export type ApproveContext = { server: GitHub; approver: GitHub; config: Config; repository: string; serverRun: ServerRun; now: () => Date; requestCommentId?: number };
 export type ApproveOutcome = { result: "approved" | "already-approved" | "declined" | "dismissed"; head: string; problems: string[] };
+
+function pullStateOptions(ctx: ApproveContext) {
+  const integrationBranches = repositoryEntry(ctx.config, ctx.repository)?.integration_branches;
+  return integrationBranches === undefined ? {} : { integrationBranches };
+}
 
 export async function fetchPull(gh: GitHub, repository: string, pullNumber: number): Promise<PullFacts> {
   const { data: p } = await gh.rest.pulls.get({ ...splitRepository(repository), pull_number: pullNumber });
@@ -84,7 +89,7 @@ async function checkHeadPredatesComment(ctx: ApproveContext, pull: PullFacts, co
 }
 
 async function commandApprove(ctx: ApproveContext, pull: PullFacts, comment: CommentFacts): Promise<ApproveOutcome> {
-  checkPullState(pull);
+  checkPullState(pull, pullStateOptions(ctx));
   const results = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull }, { commentId: comment.id, authorId: comment.user?.id ?? -1, head: pull.headSha });
   const problems = results.flatMap((r) => r.problems.map((p) => `${r.type}: ${p}`));
   if (problems.length > 0) throw new Rejection(`/approve cannot proceed because policy checks failed: ${problems.join("; ")}`);
@@ -104,15 +109,16 @@ async function react(ctx: ApproveContext, commentId: number): Promise<void> {
 export async function runApprove(ctx: ApproveContext, args: { pull_number: number; comment_id?: number }): Promise<ApproveOutcome> {
   ctx = { ...ctx, ...(args.comment_id === undefined ? {} : { requestCommentId: args.comment_id }) };
   const pull = await fetchPull(ctx.server, ctx.repository, args.pull_number);
+  const stateOptions = pullStateOptions(ctx);
   if (args.comment_id === undefined) {
-    checkPullState(pull);
+    checkPullState(pull, stateOptions);
     return autoApprove(ctx, pull);
   }
   const comment = await fetchComment(ctx.server, ctx.repository, args.comment_id);
   const command = validateComment(comment, ctx.repository, pull.number, ctx.now());
   if (command.name === "recheck") {
     await react(ctx, comment.id);
-    checkPullState(pull);
+    checkPullState(pull, stateOptions);
     return autoApprove(ctx, pull);
   }
   if (command.name !== "approve") throw new Rejection(`comment ${comment.id} is not exactly /approve`);

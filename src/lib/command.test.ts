@@ -110,14 +110,21 @@ describe("checkPullState", () => {
   test("accepts an open same-repository pull request to the default branch", () => {
     expect(() => checkPullState(ok)).not.toThrow();
   });
+  test("accepts an explicitly configured same-repository integration branch", () => {
+    expect(() => checkPullState({ ...ok, baseRef: "prototype/first-ticket" }, { integrationBranches: ["prototype/first-ticket"] })).not.toThrow();
+  });
   const rejects: [string, Partial<PullFacts>, RegExp][] = [
     ["closed", { state: "closed" }, /is closed/],
     ["draft", { draft: true }, /is a draft/],
     ["fork", { headRepository: "fork/repo" }, /from a fork/],
     ["deleted head repository", { headRepository: null }, /from a fork/],
-    ["other base", { baseRef: "release" }, /not the default branch/],
+    ["other base", { baseRef: "release" }, /not the default branch .* or a configured integration branch/],
+    ["unconfigured integration branch", { baseRef: "prototype/first-ticket" }, /not the default branch .* or a configured integration branch/],
   ];
   test.each(rejects)("rejects %s", (_, over, message) => {
     expect(() => checkPullState({ ...ok, ...over })).toThrow(message);
+  });
+  test("a configured branch never permits fork pull requests", () => {
+    expect(() => checkPullState({ ...ok, baseRef: "prototype/first-ticket", headRepository: "fork/repo" }, { integrationBranches: ["prototype/first-ticket"] })).toThrow(/from a fork/);
   });
 });
