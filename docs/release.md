@@ -78,6 +78,47 @@ jq -e 'any(.[].verificationResult.statement;
 
 After creating the protected annotated tag, verification tolerates short read-after-write visibility delays. A missing ref is read at most four times, waiting 250, 500 and 1,000 ms between reads. The same bounded verification applies to a 422 ref-creation race. Writes are not retried; unexpected API errors and tags with the wrong identity or target fail immediately.
 
+## Planned cargo-raw runtime metadata
+
+The following is the proposed contract tracked by [issue #230](https://github.com/civitaspo/csm-ci-actions/issues/230); it is not supported by the current action. Until an implementation is released, `cargo-raw` keeps the plain `--version` check and the asset set described above. The Linux GNU targets needed by the rex-projects consumer are a separate prerequisite in [PR #223](https://github.com/civitaspo/csm-ci-actions/pull/223); that work is not landed and does not implement this metadata contract. Opt-in metadata is initially limited to Apple and Linux GNU targets; the existing Linux musl path remains on its current non-metadata behavior.
+
+An opted-in `cargo-raw` configuration adds an optional argument vector. For example:
+
+```yaml
+release:
+  build_type: cargo-raw
+  binary: rex-projects
+  targets:
+    - aarch64-apple-darwin
+    - x86_64-apple-darwin
+    - aarch64-unknown-linux-gnu
+    - x86_64-unknown-linux-gnu
+  version_probe_args: [version, --json]
+```
+
+`version_probe_args` is a nonempty list of arguments passed directly to the just-built target executable, without a shell. The existing plain `--version` SemVer check remains in force for every target; the optional probe adds a second invocation and does not replace that check. When absent, the current behavior and asset set remain unchanged. When present, the native build job runs the configured probe for each target after building it. The probe has a 30-second wall-time limit and accepts at most 1 MiB of UTF-8 stdout. Timeout, output overflow, nonzero exit, invalid UTF-8, invalid JSON, or a JSON value other than an object fails the build. The parsed JSON object is retained as `version_json`; csm-ci treats its fields as opaque and does not define a product-specific CLI schema. The configured probe and client build both run in the existing unprivileged build job, which has no secrets or publishing credentials.
+
+For each opted-in binary, the build produces a flat `<binary>-<Rust-target>.artifact.json` sidecar. Its generic contract is:
+
+```json
+{
+  "version": "<planned release version>",
+  "target": "<normalized platform target>",
+  "rust_target": "<configured Rust target triple>",
+  "minimum_os": "<measured macOS deployment target>",
+  "source_revision": "<trusted 40-character merge commit SHA>",
+  "dirty": false,
+  "version_json": { "<probe output fields>": "<opaque to csm-ci>" },
+  "sha256": "<SHA256 of the exact binary bytes>"
+}
+```
+
+The manifest contains exactly the eight shown keys, with exactly one runtime-floor field: `minimum_os` for Apple targets or `minimum_libc` for Linux GNU targets. For the rex-projects target contract, `minimum_os` is the bare deployment target read from the executable load command. `minimum_libc` is the native runner's `getconf GNU_LIBC_VERSION` value formatted as `glibc X.Y`. This value is a conservative compatibility floor for the build environment, not a measurement of the binary's lowest required GLIBC symbol version, so it may be higher than the binary requires. The source revision and clean marker come from the validated release plan and source archive, not from client-generated metadata. The binary digest is computed by the builder over the exact published bytes. The publisher validates the manifest structure and binds it to the planned source revision and binary digest, but it does not independently measure either runtime floor from the published binary. The publisher attests the exact manifest and binary bytes. Consumers must verify the release attestation, check that the manifest digest matches the binary, and decide whether the declared runtime floor meets their own compatibility policy. Product-specific consumers validate the shape and semantics of `version_json` themselves.
+
+The opt-in asset set contains exactly the configured binaries, their `.artifact.json` and `.sha256` sidecars, and `SHA256SUMS`. For four targets, `SHA256SUMS` contains the twelve binary, manifest, and binary-checksum entries; it does not include itself. The publisher validates the manifest's exact keys and types, planned version, configured target and Rust triple, trusted source revision, clean marker, and binary digest; it rejects missing, extra, malformed, or inconsistent records. Every asset, including `SHA256SUMS`, receives a release attestation. Publication remains immutable and uses the existing draft-and-publish flow. This schema is intentionally generic; it does not make csm-ci responsible for any consumer's CLI protocol, database schema, or runtime policy.
+
+For the rex-projects consumer, normalized targets are `macos-aarch64`, `macos-x86_64`, `linux-aarch64`, and `linux-x86_64`, paired with the exact Rust triples in its [release asset contract](https://github.com/civitaspo/rex-projects/blob/main/docs/release-assets.md). The consumer requires the four-target set, validates its own `version_json` fields, checks that all assets identify the release merge commit and package version, applies its runtime compatibility policy to the declared floors, and recomputes binary digests. csm-ci does not hard-code this target set for other clients.
+
 ## Planned standard caller generation
 
 The [repo-settings generator](repo-settings.md#standard-client-workflows-planned) selects the publish caller only from `release`. Release preparation is independently selected by the canonical securefix route and does not grant publication permission. Generated callers use one validated published stable SHA per distribution run and the explicit minimal Client App Secret mapping. The implemented generator retains a separate deployment gate: an intended stable release must satisfy all emitted caller contracts. It never publishes a release to obtain a compatible caller pin.
