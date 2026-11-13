@@ -284,10 +284,10 @@ export async function withPendingRequiredCheck(ctx: Parameters<Scenario["run"]>[
     assert(pull && (pull.merged || pull.autoMergeRequest === null), `leaving owned ${ownedGate} active because native auto-merge may still be active`);
     await deleteGate();
   };
-  try {
+  await withCleanup(async () => {
     // The required status context has no status, so the rule itself holds native auto-merge.
     await run(release);
-  } finally {
+  }, [async () => {
     // Keep the required-check gate in place until native auto-merge is confirmed off.
     // Otherwise a failed test could release GitHub's native merge while cleaning up.
     const stateQuery = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){id autoMergeRequest{enabledAt}}}}";
@@ -319,7 +319,7 @@ export async function withPendingRequiredCheck(ctx: Parameters<Scenario["run"]>[
     if (!released) {
       await deleteGate();
     }
-  }
+  }]);
 }
 
 // Platform auto-merge requires the branch rules to enforce csm-ci/policy; the shared fixture ruleset may lack it.

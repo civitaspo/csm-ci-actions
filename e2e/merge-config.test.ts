@@ -64,6 +64,22 @@ function pendingGateContext(options: { nativeMerge: boolean; disarmStatus?: numb
 }
 
 describe("pending required-check gate scope and cleanup", () => {
+  test("preserves the scenario failure when native auto-merge cannot be disarmed", async () => {
+    const { ctx, requests } = pendingGateContext({ nativeMerge: true, disarmStatus: 403 });
+    const pr = { number: 33, head: "head", branch: "e2e-head", baseRef: "e2e-merge-gate-unique" };
+    let failure: unknown;
+    try {
+      await withPendingRequiredCheck(ctx, pr, async () => { throw new Error("simulated acceptance failure"); });
+    } catch (error) {
+      failure = error;
+    }
+    if (!(failure instanceof AggregateError)) throw new Error(`expected both scenario and cleanup failures, found ${String(failure)}`);
+    expect(failure.errors).toHaveLength(2);
+    expect(failure.errors[0]).toMatchObject({ message: "simulated acceptance failure" });
+    expect(failure.errors[1]).toMatchObject({ message: expect.stringContaining("leaving owned ruleset 712 (csm-ci-e2e-pending-33) on refs/heads/e2e-merge-gate-unique active because native auto-merge could not be confirmed off") });
+    expect(requests.some((request) => request.method === "DELETE" && request.path.endsWith("/rulesets/712"))).toBe(false);
+  });
+
   test("failed disarm retains a gate scoped to the isolated base, never the default branch", async () => {
     const { ctx, requests } = pendingGateContext({ nativeMerge: true, disarmStatus: 403 });
     const pr = { number: 33, head: "head", branch: "e2e-head", baseRef: "e2e-merge-gate-unique" };
