@@ -1,5 +1,5 @@
 import * as core from "@actions/core";
-import { type MergeArgs, type MergeContext, acceptMerge } from "../lib/merge.ts";
+import { type MergeArgs, type MergeContext, acceptMerge, prepareMergeAcceptance } from "../lib/merge.ts";
 import { github, loadCurrentServerConfig } from "../lib/github.ts";
 import { summarizeReservation } from "../lib/automerge-summary.ts";
 import { syncAutomergeDisplay } from "../lib/automerge-display.ts";
@@ -11,17 +11,20 @@ function env(name: string): string {
 }
 
 async function main(): Promise<void> {
-  if (core.getInput("mode", { required: true }) !== "accept") throw new Error("unknown merge action mode");
+  const mode = core.getInput("mode", { required: true });
+  if (mode !== "prepare" && mode !== "accept") throw new Error("unknown merge action mode");
   const serverRepository = env("GITHUB_REPOSITORY");
   const configReader = github(core.getInput("github-token", { required: true }));
   const configPath = core.getInput("config-path", { required: true });
   const config = await loadCurrentServerConfig(configReader, serverRepository, configPath);
   const displayToken = core.getInput("display-commit-token");
+  const notificationToken = core.getInput("notification-token") || core.getInput("server-token", { required: true });
   const ctx: MergeContext = {
     server: github(core.getInput("server-token", { required: true })),
     deployments: github(core.getInput("deployments-token", { required: true })),
+    ...(core.getInput("acceptance-write-token") ? { acceptanceWrite: github(core.getInput("acceptance-write-token")) } : {}),
     ...(displayToken ? { displayCommit: github(displayToken) } : {}),
-    notify: github(core.getInput("notification-token", { required: true })),
+    notify: github(notificationToken),
     config,
     reloadConfig: () => loadCurrentServerConfig(configReader, serverRepository, configPath),
     repository: core.getInput("repository", { required: true }).toLowerCase(),
@@ -31,7 +34,17 @@ async function main(): Promise<void> {
     now: () => new Date(),
   };
   const args = JSON.parse(core.getInput("args", { required: true })) as MergeArgs;
+  if (mode === "prepare") {
+    const prepared = await prepareMergeAcceptance(ctx, args);
+    core.setOutput("acceptance-kind", prepared.kind);
+    core.info(`merge request prepared as ${prepared.kind}`);
+    return;
+  }
   const result = await acceptMerge(ctx, args);
+  if (result.kind === "external-merge") {
+    core.info("pull request was merged outside csm-ci before the merge reservation was accepted");
+    return;
+  }
   if (result.reservation) core.setOutput("reservation-id", String(result.reservation.deploymentId));
   if (result.reservation) {
     const state = result.kind === "accepted" ? `queued: waiting for approval of ${result.reservation.payload.accepted_head.slice(0, 7)}` : result.kind === "cancelled" ? "inactive: cancelled" : result.reservation.state.kind === "active" ? `active: ${result.reservation.state.waitingReason ?? "waiting"}` : `${result.reservation.state.state}: ${result.reservation.state.reason}`;

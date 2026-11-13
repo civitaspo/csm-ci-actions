@@ -205,6 +205,23 @@ describe("persistent catalog labels", () => {
 });
 
 describe("metadata failures keep cleanup", () => {
+  test("openPr targets the explicitly selected isolated base branch", async () => {
+    const baseRef = "e2e-merge-gate-unique";
+    const api = fakeFetch([
+      { method: "GET", path: `${repo}/branches/${baseRef}`, body: { commit: { sha: "1".repeat(40) } } },
+      { method: "POST", path: `${repo}/git/refs`, body: {} },
+      { method: "POST", path: "/graphql", body: { data: { createCommitOnBranch: { commit: { oid: "2".repeat(40) } } } } },
+      { method: "POST", path: `${repo}/pulls`, body: { number: 17, html_url: "https://example.test/pr/17" } },
+      { method: "POST", path: `${repo}/issues/17/labels`, body: [] },
+    ]);
+    const ctx: Ctx = { gh: github("owner", api), urls: [], untrusted: undefined, ...testMetadata };
+    expect(await openPr(ctx, { intent: testIntent, kind: "signed", baseRef })).toMatchObject({ number: 17, baseRef });
+    const creation = JSON.parse(api.requests.find((request) => request.path === `${repo}/pulls`)!.body!);
+    expect(creation.base).toBe(baseRef);
+    expect(api.calls).toContain(`GET ${repo}/branches/${baseRef}`);
+    expect(api.calls).not.toContain(`GET ${repo}/branches/main`);
+  });
+
   test.each([false, true])("direct creation labels fail; cleanup still runs (cleanup failure %s)", async (cleanupFails) => {
     const api = fakeFetch([
       { method: "GET", path: `${repo}/branches/main`, body: { commit: { sha: "1".repeat(40) } } },

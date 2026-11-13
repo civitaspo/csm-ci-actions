@@ -1,82 +1,42 @@
 # csm-ci merge
 
-Check merge readiness, squash-merge a ready pull request, or post a failure receipt for a previously accepted wait. The workflow uses multiple calls with different `mode` values. Keep them in the stage order and token-minting boundaries in [server.yml](../../../.github/workflows/server.yml).
+Validate a `/merge` or `/merge cancel` comment and create, replay, or cancel its durable reservation. The server workflow calls the action twice for a new merge request: a read-only `prepare` call, then a revalidating `accept` call after it conditionally mints the narrowly scoped write tokens.
 
-See [merge behavior](../../../docs/merge.md) for the trust, policy, approval, required-check, retry, and receipt rules. This action is a low-level trusted workflow component, not a standalone event handler.
+See [merge behavior](../../../docs/merge.md) for authorization, auto-merge disarming, reservation, and receipt rules. This action is a trusted workflow component, not a standalone event handler.
 
 ## Inputs
 
 | Input | Required | Default | Value |
 |---|---:|---|---|
-| `mode` | Yes | None | `wait`, `merge`, or `failure-receipt`. |
+| `mode` | Yes | None | `prepare` validates without writes; `accept` repeats validation and performs the request. |
 | `github-token` | No | `${{ github.token }}` | Server repository token with `contents:read` for `csm-ci.yaml`. |
 | `config-path` | No | `csm-ci.yaml` | Config path in the server repository. |
 | `server-token` | Yes | None | Target-scoped Server App token with contents, pull requests, checks, and issues read access. |
-| `notification-token` | Yes | None | Target-scoped Server App token with `issues:write` and `pull_requests:write` for reactions and receipts. |
-| `write-token` | No | None | Client-scoped token with `contents:write` and `pull_requests:write`; required in `merge` mode. |
+| `deployments-token` | Yes | None | Server repository token with `deployments:read` for `prepare` or `deployments:write` for a prepared acceptance or authorized cancellation. |
+| `notification-token` | No | None | Target-scoped Server App token with `issues:write` and `pull_requests:write`; required only for an accept path that writes a receipt. |
+| `acceptance-write-token` | No | None | Client-repository-scoped Server App token with `contents:write` and `pull_requests:write`; minted only after `prepare` returns `accept` and used only to disarm native auto-merge. GitHub does not scope this token to one pull request. |
+| `display-commit-token` | No | None | Server-scoped `contents:write` token for the optional reservation display commit. |
+| `display-deployments-token` | No | None | Client-scoped `deployments:write` token for the optional display projection. |
 | `repository` | Yes | None | Client repository as `owner/repo`. |
-| `args` | Yes | None | JSON intake request numbers, such as `{"pull_number":123,"comment_id":456}`. Both are required. |
-| `head` | No | None | Pinned head SHA returned by `wait`; required in `merge` and `failure-receipt` modes. |
-| `failure-message` | No | None | Required in `failure-receipt` mode. Original wait failure text from `error`. |
+| `args` | Yes | None | JSON intake request numbers, such as `{"pull_number":123,"comment_id":456}`. |
 
 ## Outputs
 
 | Output | Value |
 |---|---|
-| `ready` | `true` when the request is ready to merge. |
-| `accepted` | `true` when the Server App accepted the command and reacted with a rocket. |
-| `error` | Wait failure message for use in the fresh-token failure receipt stage. |
-| `head` | Pull request head SHA pinned at acceptance, including when readiness later fails. |
-| `result` | `merged` when the pull request was merged. |
-| `merge-commit` | Squash merge commit SHA. |
+| `acceptance-kind` | Read-only preparation result: `accept`, `cancel`, `replay`, `conflict`, `external-merge`, or `external-merge-replay`. |
+| `reservation-id` | Deployment ID when a reservation is returned. |
 
-The `wait` mode sets `accepted` and `head` when the command is accepted, then `ready` on success or `error` on failure. The `merge` mode sets `result` and `merge-commit`. The `failure-receipt` mode has no outputs. Unset flags are empty strings, not the string `false`.
+The preparation result controls token minting only. The `accept` call repeats the full command, identity, repository, pull request, replay, and head checks before any write. It does not trust the preparation output as authorization. A valid cancellation is authorized against the current reservation during read-only preparation and revalidated before a write. An invalid cancellation and a previously recorded external-merge replay receive no client-repository write token. An active-reservation conflict, valid cancellation, or existing reservation replay may receive the client-scoped notification token (`issues:write` and `pull_requests:write`) needed for its receipt. Only a fresh `accept` receives the separate client-scoped acceptance token (`contents:write` and `pull_requests:write`) used to disable native auto-merge. The optional client-scoped deployments token is separately minted only for `accept`, `cancel`, or `replay` to synchronize the display projection; a conflict does not receive it.
 
-## Use in the server workflow
+## Workflow order
 
-The server calls `wait`, then conditionally calls `merge` with the pinned `head`. If an accepted wait fails after its notification token expires, it calls `failure-receipt` with the saved error, pinned head, and a fresh notification token. Use the matching jobs and `if` conditions in [server.yml](../../../.github/workflows/server.yml); this partial shape does not provide the required trust boundary by itself:
+The server workflow is the source of truth for token scopes and conditions. Its merge path has this order:
 
-```yaml
-- id: merge-ready
-  continue-on-error: true
-  uses: civitaspo/csm-ci-actions/actions/server/merge@<reviewed-commit-sha>
-  with:
-    mode: wait
-    server-token: ${{ steps.merge-read-token.outputs.token }}
-    notification-token: ${{ steps.merge-notify-token.outputs.token }}
-    repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
-    args: ${{ needs.intake.outputs.args }}
-- id: merge
-  if: steps.merge-ready.outputs.ready == 'true'
-  uses: civitaspo/csm-ci-actions/actions/server/merge@<reviewed-commit-sha>
-  with:
-    mode: merge
-    server-token: ${{ steps.merge-final-read-token.outputs.token }}
-    notification-token: ${{ steps.merge-final-notify-token.outputs.token }}
-    write-token: ${{ steps.merge-token.outputs.token }}
-    repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
-    args: ${{ needs.intake.outputs.args }}
-    head: ${{ steps.merge-ready.outputs.head }}
-```
+1. Mint read-only client and server deployment tokens.
+2. Run `prepare` with those tokens. It validates the exact comment and merger, reads existing reservations, and authorizes a cancellation before returning `cancel`.
+3. Only when `acceptance-kind` is `accept`, mint a client token with only `contents:write` and `pull_requests:write`. When the result is `accept`, `cancel`, or `replay`, mint a separate client-repository token with only `deployments:write` for the display projection. When the result is `accept` or an authorized `cancel`, mint a server-repository token with only `deployments:write`.
+4. Mint notification and optional display tokens only for preparation outcomes that need them.
+5. Run `accept` for valid preparation results. The action repeats validation and applies the requested reservation operation; new acceptances disarm native auto-merge before creating a reservation.
 
-Between these calls, the workflow mints `merge-final-read-token`, `merge-final-notify-token`, and `merge-token` only when readiness succeeds. Its failure path mints `merge-failure-notify-token` and posts the saved error:
-
-```yaml
-- if: steps.merge-ready.outcome == 'failure' && steps.merge-ready.outputs.accepted == 'true'
-  continue-on-error: true
-  uses: civitaspo/csm-ci-actions/actions/server/merge@<reviewed-commit-sha>
-  with:
-    mode: failure-receipt
-    server-token: ${{ steps.merge-read-token.outputs.token }}
-    notification-token: ${{ steps.merge-failure-notify-token.outputs.token }}
-    repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
-    args: ${{ needs.intake.outputs.args }}
-    failure-message: ${{ steps.merge-ready.outputs.error }}
-    head: ${{ steps.merge-ready.outputs.head }}
-```
-
-Keep the workflow's explicit failure step after this receipt so a failed wait still fails the job. The examples assume intake selected the `merge` operation.
-
-The example omits `github-token` and `config-path` because their defaults apply. The actual workflow mints target-scoped tokens only at the required stages and serializes requests per pull request.
-
-Replace `<reviewed-commit-sha>` with the full SHA of the csm-ci-actions revision you reviewed.
+Keep the conditions and token permissions in [server.yml](../../../.github/workflows/server.yml) synchronized with this contract. Invalid requests fail during `prepare` and mint neither client write token. A cancellation-shaped command may receive the separate notification token, but only an authorized cancellation receives the server Deployment token; `cancel` revalidates ownership and reservation state before any write and never receives the client-scoped acceptance token. If the pull request changes between the two calls, `accept` revalidates the current pull request and checks it again after disabling auto-merge. A newer head may be accepted when it passes the fresh checks, even when the prepare stage observed an older head.
