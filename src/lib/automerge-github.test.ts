@@ -66,12 +66,13 @@ function harness(options: { malformedDeploymentOneStatus?: boolean } = {}) {
     if (path === "/repos/owner/server/deployments" && method === "POST") {
       const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
       restWrites.push({ path, body });
-      deployments.unshift(deployment(10, "2026-10-29T00:00:00.000Z", { payload: body.payload }));
+      const createdAt = new Date().toISOString();
+      deployments.unshift(deployment(10, createdAt, { payload: body.payload }));
       if (loseDeploymentResponse) {
         loseDeploymentResponse = false;
         return answer({ message: "upstream timeout" }, 503);
       }
-      return answer({ id: 10, node_id: "DEP_10", task: AUTOMERGE_TASK, created_at: "2026-10-29T00:00:00.000Z", creator: { id: serverBotId, type: "Bot" } }, 201);
+      return answer({ id: 10, node_id: "DEP_10", task: AUTOMERGE_TASK, created_at: createdAt, creator: { id: serverBotId, type: "Bot" } }, 201);
     }
     if (path === "/repos/owner/server/deployments/10/statuses" && method === "POST") {
       const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
