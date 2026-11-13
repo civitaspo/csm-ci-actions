@@ -227,8 +227,8 @@ export async function drainWorkflowRuns(gh: GitHub, since: Date, timing: DrainTi
   }
 }
 
-// A completed run's jobs and logs do not change. Concurrent scenarios poll the same server runs,
-// so they share these instead of downloading them again on every poll.
+// Concurrent scenarios can poll the same server runs. Share settled job lists and complete logs
+// across those polls, while allowing incomplete API responses to be fetched again.
 type Jobs = Map<string, { id: number; conclusion: string | null }>;
 const completedCaches = new WeakMap<GitHub, { jobs: Map<number, Jobs>; logs: Map<number, string> }>();
 function completedCache(ctx: Ctx) {
@@ -241,16 +241,28 @@ async function completedJobs(ctx: Ctx, runId: number): Promise<Jobs> {
   const cached = completedCache(ctx).jobs.get(runId);
   if (cached) return cached;
   const byName = await jobs(ctx, SERVER, runId);
-  // Right after a run completes, its job list can still be empty or unfinished.
-  if (byName.size > 0 && [...byName.values()].every((job) => job.conclusion !== null)) completedCache(ctx).jobs.set(runId, byName);
+  // The API may expose a nonempty subset before the whole job list is visible. Cache only after
+  // both jobs used to correlate requests are present and concluded.
+  const intake = byName.get("intake");
+  const cleanup = byName.get("cleanup");
+  if (intake && intake.conclusion !== null && cleanup && cleanup.conclusion !== null) {
+    completedCache(ctx).jobs.set(runId, byName);
+  }
   return byName;
 }
 
-async function completedJobLog(ctx: Ctx, jobId: number): Promise<string> {
+function isCompleteJobLog(log: string): boolean {
+  const lastLine = log.split(/\r?\n/u).filter((line) => line.length > 0).at(-1);
+  return lastLine?.trimEnd().endsWith("Cleaning up orphan processes") ?? false;
+}
+
+async function completedJobLog(ctx: Ctx, jobId: number, matches: (log: string) => boolean): Promise<string> {
   const cached = completedCache(ctx).logs.get(jobId);
   if (cached !== undefined) return cached;
   const log = await jobLog(ctx, SERVER, jobId);
-  if (log.length > 0) completedCache(ctx).logs.set(jobId, log);
+  // Positive matches are safe to retain immediately. Negative results are reusable only when
+  // the downloaded log has the observed runner-finalization marker.
+  if (log.length > 0 && (matches(log) || isCompleteJobLog(log))) completedCache(ctx).logs.set(jobId, log);
   return log;
 }
 
@@ -262,11 +274,14 @@ export async function serverRuns(ctx: Ctx, match: RequestMatch, since: Date): Pr
     const byName = await completedJobs(ctx, run.id);
     const intake = byName.get("intake");
     if (!intake) continue;
-    if (match.label) {
+    const label = match.label;
+    if (label) {
       const cleanup = byName.get("cleanup");
-      if (cleanup && matchesCleanupLabel(await completedJobLog(ctx, cleanup.id), match.label)) found.push(run);
-    } else if (intake.conclusion !== "skipped" && matchesAcceptedRequest(await completedJobLog(ctx, intake.id), match)) {
-      found.push(run);
+      if (cleanup && matchesCleanupLabel(await completedJobLog(ctx, cleanup.id, (log) => matchesCleanupLabel(log, label)), label)) {
+        found.push(run);
+      }
+    } else if (intake.conclusion !== "skipped") {
+      if (matchesAcceptedRequest(await completedJobLog(ctx, intake.id, (log) => matchesAcceptedRequest(log, match)), match)) found.push(run);
     }
   }
   return found;
