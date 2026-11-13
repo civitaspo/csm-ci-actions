@@ -2,7 +2,7 @@ name: csm-ci merge
 description: Accept or cancel a pull request merge reservation.
 inputs:
   mode:
-    description: accept validates the command and creates or cancels its reservation.
+    description: prepare validates a command without writes; accept revalidates and creates or cancels its reservation.
     required: true
   github-token:
     description: Token with contents:read on the server repository to read csm-ci.yaml.
@@ -15,14 +15,17 @@ inputs:
     required: true
   notification-token:
     description: Server App token with issues:write for reactions and command receipts.
-    required: true
+    required: false
   deployments-token:
-    description: Server App token with deployments:write on the server repository.
+    description: Server App token with deployments:read for prepare or deployments:write for a prepared acceptance or authorized cancellation on the server repository.
     required: true
+  acceptance-write-token:
+    description: Client-repository-scoped Server App token with contents:write and pull_requests:write, minted only for fresh valid acceptance and used only to disable an existing native auto-merge request.
+    required: false
   display-commit-token:
     description: Optional server-scoped Contents write token for display commits.
   display-deployments-token:
-    description: Optional client-scoped Deployments write token for display projection.
+    description: Optional client-scoped Deployments write token for display projection after acceptance, authorized cancellation, or reservation replay.
   repository:
     description: owner/repo of the client repository.
     required: true
@@ -30,6 +33,8 @@ inputs:
     description: JSON request numbers from intake, pull_number and comment_id.
     required: true
 outputs:
+  acceptance-kind:
+    description: "Read-only preparation result: accept, cancel, replay, conflict, external-merge, or external-merge-replay."
   reservation-id:
     description: Deployment ID for the accepted reservation.
 runs:

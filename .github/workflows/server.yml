@@ -187,8 +187,37 @@ jobs:
           permission-pull-requests: read
           permission-checks: read
           permission-issues: read
-      - id: automerge-deployments-token
+      - id: merge-read-deployments-token
         if: needs.intake.outputs.kind == 'merge'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-deployments: read
+      - id: merge-prepare
+        if: needs.intake.outputs.kind == 'merge'
+        uses: ./.csm-ci-actions/actions/server/merge
+        with:
+          mode: prepare
+          config-path: ${{ inputs.config-path }}
+          server-token: ${{ steps.merge-read-token.outputs.token }}
+          deployments-token: ${{ steps.merge-read-deployments-token.outputs.token }}
+          repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
+          args: ${{ needs.intake.outputs.args }}
+      - id: merge-acceptance-write-token
+        if: steps.merge-prepare.outputs.acceptance-kind == 'accept'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ needs.intake.outputs.owner }}
+          repositories: ${{ needs.intake.outputs.name }}
+          permission-contents: write
+          permission-pull-requests: write
+      - id: automerge-deployments-token
+        if: contains(fromJSON('["accept","cancel"]'), steps.merge-prepare.outputs.acceptance-kind)
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
@@ -197,7 +226,7 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-deployments: write
       - id: automerge-display-token
-        if: needs.intake.outputs.kind == 'merge'
+        if: steps.merge-prepare.outputs.acceptance-kind == 'accept'
         continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
@@ -207,7 +236,7 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
       - id: merge-notify-token
-        if: needs.intake.outputs.kind == 'merge'
+        if: steps.merge-prepare.outputs.acceptance-kind == 'accept' || steps.merge-prepare.outputs.acceptance-kind == 'cancel' || steps.merge-prepare.outputs.acceptance-kind == 'replay' || steps.merge-prepare.outputs.acceptance-kind == 'conflict' || steps.merge-prepare.outputs.acceptance-kind == 'external-merge'
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
@@ -217,7 +246,7 @@ jobs:
           permission-issues: write
           permission-pull-requests: write
       - id: merge-display-deployments-token
-        if: needs.intake.outputs.kind == 'merge'
+        if: contains(fromJSON('["accept","cancel","replay"]'), steps.merge-prepare.outputs.acceptance-kind)
         continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
@@ -227,14 +256,15 @@ jobs:
           repositories: ${{ needs.intake.outputs.name }}
           permission-deployments: write
       - id: merge-accept
-        if: needs.intake.outputs.kind == 'merge'
+        if: steps.merge-prepare.outputs.acceptance-kind == 'accept' || steps.merge-prepare.outputs.acceptance-kind == 'cancel' || steps.merge-prepare.outputs.acceptance-kind == 'replay' || steps.merge-prepare.outputs.acceptance-kind == 'conflict' || steps.merge-prepare.outputs.acceptance-kind == 'external-merge' || steps.merge-prepare.outputs.acceptance-kind == 'external-merge-replay'
         uses: ./.csm-ci-actions/actions/server/merge
         with:
           mode: accept
           config-path: ${{ inputs.config-path }}
           server-token: ${{ steps.merge-read-token.outputs.token }}
           notification-token: ${{ steps.merge-notify-token.outputs.token }}
-          deployments-token: ${{ steps.automerge-deployments-token.outputs.token }}
+          deployments-token: ${{ steps.automerge-deployments-token.outputs.token || steps.merge-read-deployments-token.outputs.token }}
+          acceptance-write-token: ${{ steps.merge-acceptance-write-token.outputs.token }}
           display-commit-token: ${{ steps.automerge-display-token.outputs.token }}
           display-deployments-token: ${{ steps.merge-display-deployments-token.outputs.token }}
           repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}

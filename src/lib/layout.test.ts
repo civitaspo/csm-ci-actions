@@ -85,10 +85,10 @@ describe("merge token boundary", () => {
   const workflow = z.object({ jobs: z.object({ op: z.object({ steps: z.array(stepSchema) }) }) }).parse(readYaml(".github/workflows/server.yml"));
   const steps = workflow.jobs.op.steps;
 
-  test("acceptance can write deployments on the server repository without client write permissions", () => {
+  test("valid acceptance or cancellation can write reservation deployments on the server repository", () => {
     const token = steps.find((step) => step.id === "automerge-deployments-token");
     expect(token?.uses).toMatch(/^actions\/create-github-app-token@/u);
-    expect(token?.if).toBe("needs.intake.outputs.kind == 'merge'");
+    expect(token?.if).toBe("contains(fromJSON('[\"accept\",\"cancel\"]'), steps.merge-prepare.outputs.acceptance-kind)");
     expect(token?.with).toEqual({
       "client-id": "${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}",
       "private-key": "${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}",
@@ -97,16 +97,63 @@ describe("merge token boundary", () => {
       "permission-deployments": "write",
     });
     const merge = steps.find((step) => step.with?.mode === "accept");
-    expect(merge?.with?.["deployments-token"]).toBe("${{ steps.automerge-deployments-token.outputs.token }}");
+    expect(merge?.with?.["deployments-token"]).toBe("${{ steps.automerge-deployments-token.outputs.token || steps.merge-read-deployments-token.outputs.token }}");
     expect(merge?.with?.["server-token"]).toBe("${{ steps.merge-read-token.outputs.token }}");
     expect(merge?.with?.["notification-token"]).toBe("${{ steps.merge-notify-token.outputs.token }}");
   });
 
-  test.each(["merge-read-token", "merge-notify-token", "automerge-deployments-token"])("keeps client merge permissions off %s", (id) => {
+  test("acceptance uses a separate repository-scoped token only for disarming native auto-merge", () => {
+    const token = steps.find((step) => step.id === "merge-acceptance-write-token");
+    expect(token?.uses).toMatch(/^actions\/create-github-app-token@/u);
+    expect(token?.if).toBe("steps.merge-prepare.outputs.acceptance-kind == 'accept'");
+    expect(token?.with).toEqual({
+      "client-id": "${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}",
+      "private-key": "${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}",
+      owner: "${{ needs.intake.outputs.owner }}",
+      repositories: "${{ needs.intake.outputs.name }}",
+      "permission-contents": "write",
+      "permission-pull-requests": "write",
+    });
+    const merge = steps.find((step) => step.with?.mode === "accept");
+    expect(merge?.with?.["acceptance-write-token"]).toBe("${{ steps.merge-acceptance-write-token.outputs.token }}");
+    expect(token?.with).not.toHaveProperty("permission-issues");
+    expect(token?.with).not.toHaveProperty("permission-checks");
+  });
+
+  test("synchronizes client display deployments only for acceptance, cancellation, or reservation replay", () => {
+    const token = steps.find((step) => step.id === "merge-display-deployments-token");
+    expect(token?.if).toBe("contains(fromJSON('[\"accept\",\"cancel\",\"replay\"]'), steps.merge-prepare.outputs.acceptance-kind)");
+    expect(token?.with).toMatchObject({
+      owner: "${{ needs.intake.outputs.owner }}",
+      repositories: "${{ needs.intake.outputs.name }}",
+      "permission-deployments": "write",
+    });
+    expect(token?.with).not.toHaveProperty("permission-contents");
+    expect(token?.with).not.toHaveProperty("permission-pull-requests");
+  });
+
+  test("prepares with read-only deployments access before conditionally minting acceptance write tokens", () => {
+    const prepare = steps.find((step) => step.id === "merge-prepare");
+    const readDeployments = steps.find((step) => step.id === "merge-read-deployments-token");
+    const acceptWrite = steps.find((step) => step.id === "merge-acceptance-write-token");
+    const deploymentsWrite = steps.find((step) => step.id === "automerge-deployments-token");
+    expect(prepare?.uses).toBe("./.csm-ci-actions/actions/server/merge");
+    expect(prepare?.with?.mode).toBe("prepare");
+    expect(prepare?.with?.["deployments-token"]).toBe("${{ steps.merge-read-deployments-token.outputs.token }}");
+    expect(readDeployments?.with?.["permission-deployments"]).toBe("read");
+    expect(readDeployments?.with?.["permission-pull-requests"]).toBeUndefined();
+    expect(steps.indexOf(prepare!)).toBeLessThan(steps.indexOf(acceptWrite!));
+    expect(steps.indexOf(prepare!)).toBeLessThan(steps.indexOf(deploymentsWrite!));
+    expect(acceptWrite?.if).toBe("steps.merge-prepare.outputs.acceptance-kind == 'accept'");
+    expect(deploymentsWrite?.if).toBe("contains(fromJSON('[\"accept\",\"cancel\"]'), steps.merge-prepare.outputs.acceptance-kind)");
+  });
+
+  test.each(["merge-read-token", "merge-notify-token", "automerge-deployments-token"])("keeps unrelated client write permissions off %s", (id) => {
     const token = steps.find((step) => step.id === id);
     expect(token).toBeDefined();
     expect(token?.with).not.toHaveProperty("permission-workflows");
     expect(token?.with?.["permission-contents"]).not.toBe("write");
+    if (id !== "merge-notify-token") expect(token?.with?.["permission-pull-requests"]).not.toBe("write");
   });
 });
 

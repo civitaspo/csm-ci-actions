@@ -320,16 +320,16 @@ export async function smokeRequest(ctx: Ctx, kind: string, args: string): Promis
 export const APPROVER_LOGIN = "testing-csm-ci-approver[bot]";
 export const SERVER_BOT_ID = 347400474;
 
-export type Pr = { number: number; head: string; branch: string };
+export type Pr = { number: number; head: string; branch: string; baseRef: string };
 export type RequestMatch = { kind: string; repository: string; args: Record<string, number>; label?: string };
 export type ReleaseBuildType = Release["build_type"];
 
 // signed: createCommitOnBranch, which GitHub signs as web-flow for the token's user.
 // Otherwise the REST contents API, whose commits GitHub leaves unsigned.
-export async function openPr(ctx: Ctx, options: { intent: PrIntent; kind: "signed" | "unsigned"; as?: GitHub; author?: { name: string; email: string } | undefined; prAs?: GitHub; filePath?: string | undefined; draft?: boolean; fileContent?: string }): Promise<Pr> {
-  const { intent, kind, as = ctx.gh, author, prAs = ctx.gh, filePath, draft = false, fileContent } = options;
+export async function openPr(ctx: Ctx, options: { intent: PrIntent; kind: "signed" | "unsigned"; as?: GitHub; author?: { name: string; email: string } | undefined; prAs?: GitHub; filePath?: string | undefined; draft?: boolean; fileContent?: string; baseRef?: string }): Promise<Pr> {
+  const { intent, kind, as = ctx.gh, author, prAs = ctx.gh, filePath, draft = false, fileContent, baseRef = "main" } = options;
   const repo = splitRepository(CLIENT);
-  const base = (await ctx.gh.rest.repos.getBranch({ ...repo, branch: "main" })).data.commit.sha;
+  const base = (await ctx.gh.rest.repos.getBranch({ ...repo, branch: baseRef })).data.commit.sha;
   const branch = `e2e-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   await ctx.gh.rest.git.createRef({ ...repo, ref: `refs/heads/${branch}`, sha: base });
   const path = filePath ?? `e2e/${branch}.txt`;
@@ -358,8 +358,8 @@ export async function openPr(ctx: Ctx, options: { intent: PrIntent; kind: "signe
     });
     head = data.commit.sha ?? "";
   }
-  const { data: pr } = await prAs.rest.pulls.create({ ...repo, base: "main", head: branch, title: prTitle(ctx.run, intent, branch), body: prBody(ctx.run, intent), ...(draft ? { draft: true } : {}) });
-  const owned = { number: pr.number, head, branch };
+  const { data: pr } = await prAs.rest.pulls.create({ ...repo, base: baseRef, head: branch, title: prTitle(ctx.run, intent, branch), body: prBody(ctx.run, intent), ...(draft ? { draft: true } : {}) });
+  const owned = { number: pr.number, head, branch, baseRef };
   ctx.urls.push(pr.html_url);
   try { await labelPr(ctx.gh, CLIENT, pr.number, ctx.run, intent); }
   catch (error) { return withCleanup(async () => { throw error; }, [() => closePr(ctx, owned)]); }
@@ -464,7 +464,7 @@ export async function openReleasePr(ctx: Ctx, options: { intent: PrIntent; versi
     const { data: pr } = await ctx.gh.rest.pulls.create({ ...repo, base: "main", head: branch, title, body: prBody(ctx.run, intent) });
     ctx.urls.push(pr.html_url);
     await labelPr(ctx.gh, CLIENT, pr.number, ctx.run, intent);
-    return { number: pr.number, head: ownedHead, branch, openedAt: since };
+    return { number: pr.number, head: ownedHead, branch, baseRef: "main", openedAt: since };
   } catch (error) {
     return withCleanup(async () => { throw error; }, [
       async () => {
