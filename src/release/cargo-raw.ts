@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { accessSync, chmodSync, constants, copyFileSync, lstatSync, mkdirSync, realpathSync, statSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { ensure } from "./ensure.ts";
 
 export const RAW_TARGETS: Record<string, readonly [string, string]> = {
@@ -28,9 +28,9 @@ function compareVersions(left: readonly [number, number, number], right: readonl
 }
 
 export function validateGlibcRequirements(target: string, headers: string, dynamic: string, versions: string): void {
-  const loader = target.startsWith("aarch64-") ? "ld-linux-aarch64.so.1" : "ld-linux-x86-64.so.2";
+  const loader = target.startsWith("aarch64-") ? "/lib/ld-linux-aarch64.so.1" : "/lib64/ld-linux-x86-64.so.2";
   const interpreter = /^\s*\[Requesting program interpreter:\s*([^\]]+)\]\s*$/mu.exec(headers)?.[1]?.trim();
-  ensure(interpreter !== undefined && basename(interpreter) === loader,
+  ensure(interpreter === loader,
     "cargo-raw GNU Linux binary must use the target glibc dynamic loader");
   const hasLibcDependency = dynamic.split("\n").some((line) =>
     /^\s*0x[0-9a-f]+\s+\(NEEDED\)\s+Shared library:\s+\[libc\.so\.6\]\s*$/iu.test(line));
@@ -39,7 +39,7 @@ export function validateGlibcRequirements(target: string, headers: string, dynam
   const needed = /Version needs section[\s\S]*?(?=Version (?:definition|symbols?) section|$)/u.exec(versions)?.[0] ?? "";
   const requirements = [...needed.matchAll(/Name: GLIBC_([A-Za-z0-9_.-]+)/gu)].map((match) => match[1]!);
   ensure(requirements.length > 0, "cargo-raw GNU Linux binary must declare its glibc symbol requirements");
-  const parsed = requirements.map(glibcVersionNumber);
+  const parsed = requirements.map((requirement) => requirement === "ABI_DT_RELR" ? [2, 36, 0] as const : glibcVersionNumber(requirement));
   ensure(parsed.every((version) => version !== undefined), "cargo-raw GNU Linux binary has an invalid glibc requirement");
   const maximum = parsed.reduce<readonly [number, number, number]>((current, version) =>
     compareVersions(version!, current) > 0 ? version! : current, [0, 0, 0]);
