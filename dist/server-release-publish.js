@@ -36606,7 +36606,12 @@ var ReleaseSchema = discriminatedUnion("build_type", [
   strictObject({
     build_type: literal("cargo-raw"),
     binary: string2().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}(?![\s\S])/u, "binary must be a safe Cargo binary name of at most 64 characters"),
-    targets: array(_enum(CARGO_RAW_TARGETS)).min(1).refine((targets) => new Set(targets).size === targets.length, "duplicate cargo-raw target")
+    targets: array(_enum(CARGO_RAW_TARGETS)).min(1).refine((targets) => new Set(targets).size === targets.length, "duplicate cargo-raw target"),
+    version_probe_args: array(string2()).min(1).optional()
+  }).superRefine((release, ctx) => {
+    if (release.version_probe_args && release.targets.some((target) => target.endsWith("linux-musl"))) {
+      ctx.addIssue({ code: "custom", path: ["version_probe_args"], message: "version_probe_args is unsupported for cargo-raw Linux musl targets" });
+    }
   })
 ]);
 var OPS = ["approve", "merge", "policy-check", "securefix", "release"];
@@ -37336,6 +37341,49 @@ async function terraformAssets(input) {
   }
 }
 
+// src/release/cargo-raw.ts
+var ArtifactManifestSchema = union([
+  strictObject({
+    version: string2(),
+    target: string2(),
+    rust_target: string2(),
+    minimum_os: string2().regex(/^[0-9]+(?:\.[0-9]+){1,2}$/u),
+    source_revision: string2().regex(/^[a-f0-9]{40}$/u),
+    dirty: literal(false),
+    version_json: record(string2(), unknown()),
+    sha256: string2().regex(/^[a-f0-9]{64}$/u)
+  }),
+  strictObject({
+    version: string2(),
+    target: string2(),
+    rust_target: string2(),
+    minimum_libc: string2().regex(/^glibc [0-9]+\.[0-9]+$/u),
+    source_revision: string2().regex(/^[a-f0-9]{40}$/u),
+    dirty: literal(false),
+    version_json: record(string2(), unknown()),
+    sha256: string2().regex(/^[a-f0-9]{64}$/u)
+  })
+]).superRefine((manifest, ctx) => {
+  const target = manifest.rust_target;
+  const supported = target.endsWith("apple-darwin") || target.endsWith("linux-gnu");
+  if (!supported || normalizedTarget(target) !== manifest.target) {
+    ctx.addIssue({ code: "custom", path: ["target"], message: "artifact target does not match its Rust target" });
+  }
+  if ("minimum_os" in manifest !== target.endsWith("apple-darwin")) {
+    ctx.addIssue({ code: "custom", path: ["minimum_os"], message: "artifact runtime floor does not match its Rust target" });
+  }
+});
+var SEMVER = String.raw`(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?`;
+var MAX_PROBE_BYTES = 1024 * 1024;
+function normalizedTarget(target) {
+  const [arch, platform] = target.split("-");
+  const normalizedArch = arch === "aarch64" ? "aarch64" : arch === "x86_64" ? "x86_64" : undefined;
+  const normalizedPlatform = platform === "apple" ? "macos" : platform === "unknown" ? "linux" : undefined;
+  if (!normalizedArch || !normalizedPlatform)
+    return;
+  return `${normalizedPlatform}-${normalizedArch}`;
+}
+
 // src/release/assets.ts
 async function prepareAssets(directory, release) {
   await mkdir2(directory, { recursive: true });
@@ -37368,16 +37416,47 @@ async function prepareAssets(directory, release) {
   }
   if (release?.build_type === "cargo-raw") {
     const binaries = release.targets.map((target) => `${release.binary}-${target}`);
-    const expected = new Set(binaries.flatMap((name) => [name, `${name}.sha256`]));
+    const optedIn = release.version_probe_args !== undefined;
+    if (optedIn && (!release.version || !release.source_revision)) {
+      throw new Rejection("cargo-raw metadata publication requires the planned version and source revision");
+    }
+    const expected = new Set(binaries.flatMap((name) => optedIn ? [name, `${name}.artifact.json`, `${name}.sha256`] : [name, `${name}.sha256`]));
     for (const asset of assets) {
       if (!expected.has(asset.name))
         throw new Rejection(`unexpected cargo-raw asset ${JSON.stringify(asset.name)}`);
     }
     const sidecars = [];
-    for (const name of binaries) {
+    for (const target of release.targets) {
+      const name = `${release.binary}-${target}`;
       const binary = assets.find((asset) => asset.name === name);
       if (!binary)
         throw new Rejection(`missing cargo-raw binary ${JSON.stringify(name)}`);
+      if (optedIn) {
+        const manifestName = `${name}.artifact.json`;
+        const manifest = assets.find((asset) => asset.name === manifestName);
+        if (!manifest)
+          throw new Rejection(`missing cargo-raw artifact manifest ${JSON.stringify(manifestName)}`);
+        const bytes = await readFile(join2(directory, manifestName));
+        let text;
+        try {
+          text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+        } catch {
+          throw new Rejection(`cargo-raw artifact manifest ${JSON.stringify(manifestName)} is not valid UTF-8`);
+        }
+        let parsed;
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          throw new Rejection(`cargo-raw artifact manifest ${JSON.stringify(manifestName)} is not valid JSON`);
+        }
+        const result = ArtifactManifestSchema.safeParse(parsed);
+        if (!result.success)
+          throw new Rejection(`cargo-raw artifact manifest ${JSON.stringify(manifestName)} is invalid`);
+        const value = result.data;
+        if (value.version !== release.version || value.rust_target !== target || value.source_revision !== release.source_revision || value.dirty !== false || value.sha256 !== binary.sha256) {
+          throw new Rejection(`cargo-raw artifact manifest ${JSON.stringify(manifestName)} does not match the release plan or binary`);
+        }
+      }
       const sidecar = `${name}.sha256`;
       const content = `${binary.sha256}  ${name}
 `;
@@ -37517,7 +37596,7 @@ async function publishRelease(gh, input) {
       throw new Rejection("Terraform publication requires the verified public key and source timestamp");
     local = await prepareAssets(input.directory, { ...plan.release, version: plan.version, ...input.terraform });
   } else {
-    local = await prepareAssets(input.directory, plan.release);
+    local = await prepareAssets(input.directory, plan.release.build_type === "cargo-raw" ? { ...plan.release, version: plan.version, source_revision: plan.mergeSha } : plan.release);
   }
   assertSameAssets(expected, local);
   const repo = splitRepository(plan.repository);

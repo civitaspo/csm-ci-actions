@@ -14698,7 +14698,12 @@ var ReleaseSchema = discriminatedUnion("build_type", [
   strictObject({
     build_type: literal("cargo-raw"),
     binary: string2().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}(?![\s\S])/u, "binary must be a safe Cargo binary name of at most 64 characters"),
-    targets: array(_enum(CARGO_RAW_TARGETS)).min(1).refine((targets) => new Set(targets).size === targets.length, "duplicate cargo-raw target")
+    targets: array(_enum(CARGO_RAW_TARGETS)).min(1).refine((targets) => new Set(targets).size === targets.length, "duplicate cargo-raw target"),
+    version_probe_args: array(string2()).min(1).optional()
+  }).superRefine((release, ctx) => {
+    if (release.version_probe_args && release.targets.some((target) => target.endsWith("linux-musl"))) {
+      ctx.addIssue({ code: "custom", path: ["version_probe_args"], message: "version_probe_args is unsupported for cargo-raw Linux musl targets" });
+    }
   })
 ]);
 var OPS = ["approve", "merge", "policy-check", "securefix", "release"];
@@ -14979,8 +14984,9 @@ function padToRecord(tar) {
 }
 
 // src/release/cargo-raw.ts
-import { execFileSync } from "node:child_process";
-import { accessSync, chmodSync, constants as constants2, copyFileSync, lstatSync as lstatSync2, mkdirSync as mkdirSync2, realpathSync, statSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { accessSync, chmodSync, constants as constants2, copyFileSync, lstatSync as lstatSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, realpathSync, statSync, writeFileSync as writeFileSync2 } from "node:fs";
 import { join as join2, resolve } from "node:path";
 var RAW_TARGETS = {
   "aarch64-apple-darwin": ["Mach-O 64-bit", "arm64"],
@@ -14990,9 +14996,41 @@ var RAW_TARGETS = {
   "aarch64-unknown-linux-musl": ["ELF 64-bit LSB", "ARM aarch64"],
   "x86_64-unknown-linux-musl": ["ELF 64-bit LSB", "x86-64"]
 };
+var ArtifactManifestSchema = union([
+  strictObject({
+    version: string2(),
+    target: string2(),
+    rust_target: string2(),
+    minimum_os: string2().regex(/^[0-9]+(?:\.[0-9]+){1,2}$/u),
+    source_revision: string2().regex(/^[a-f0-9]{40}$/u),
+    dirty: literal(false),
+    version_json: record(string2(), unknown()),
+    sha256: string2().regex(/^[a-f0-9]{64}$/u)
+  }),
+  strictObject({
+    version: string2(),
+    target: string2(),
+    rust_target: string2(),
+    minimum_libc: string2().regex(/^glibc [0-9]+\.[0-9]+$/u),
+    source_revision: string2().regex(/^[a-f0-9]{40}$/u),
+    dirty: literal(false),
+    version_json: record(string2(), unknown()),
+    sha256: string2().regex(/^[a-f0-9]{64}$/u)
+  })
+]).superRefine((manifest, ctx) => {
+  const target = manifest.rust_target;
+  const supported = target.endsWith("apple-darwin") || target.endsWith("linux-gnu");
+  if (!supported || normalizedTarget(target) !== manifest.target) {
+    ctx.addIssue({ code: "custom", path: ["target"], message: "artifact target does not match its Rust target" });
+  }
+  if ("minimum_os" in manifest !== target.endsWith("apple-darwin")) {
+    ctx.addIssue({ code: "custom", path: ["minimum_os"], message: "artifact runtime floor does not match its Rust target" });
+  }
+});
 var SEMVER = String.raw`(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?`;
 var escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 var MAX_GLIBC = [2, 39, 0];
+var MAX_PROBE_BYTES = 1024 * 1024;
 function glibcVersionNumber(version) {
   const match = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:\.(0|[1-9][0-9]*))?$/u.exec(version);
   if (!match)
@@ -15033,18 +15071,79 @@ function validateVersion(binary, version, reported) {
   const metadata = version.includes("+") ? "" : String.raw`(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?`;
   ensure(new RegExp(`^${escape(`${binary} ${version}`)}${metadata}$`, "u").test(reported), "cargo-raw binary reports an unexpected version");
 }
+function runVersionProbe(binary, args, timeout = 30000) {
+  const result = spawnSync(binary, args, { encoding: "buffer", killSignal: "SIGKILL", maxBuffer: MAX_PROBE_BYTES, timeout, stdio: ["ignore", "pipe", "ignore"] });
+  const errorCode = result.error && "code" in result.error && typeof result.error.code === "string" ? result.error.code : undefined;
+  ensure(!result.error, errorCode === "ETIMEDOUT" ? "cargo-raw version probe exceeded its 30-second timeout" : errorCode === "ENOBUFS" ? "cargo-raw version probe stdout exceeded 1 MiB" : "cargo-raw version probe could not run");
+  ensure(result.status === 0, "cargo-raw version probe exited unsuccessfully");
+  const stdout = result.stdout;
+  ensure(stdout.length <= MAX_PROBE_BYTES, "cargo-raw version probe stdout exceeded 1 MiB");
+  let text;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(stdout);
+  } catch {
+    throw new Error("cargo-raw version probe stdout is not valid UTF-8");
+  }
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    throw new Error("cargo-raw version probe stdout is not valid JSON");
+  }
+  ensure(isObject2(value), "cargo-raw version probe JSON must be an object");
+  return value;
+}
+function isObject2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function normalizedTarget(target) {
+  const [arch, platform] = target.split("-");
+  const normalizedArch = arch === "aarch64" ? "aarch64" : arch === "x86_64" ? "x86_64" : undefined;
+  const normalizedPlatform = platform === "apple" ? "macos" : platform === "unknown" ? "linux" : undefined;
+  if (!normalizedArch || !normalizedPlatform)
+    return;
+  return `${normalizedPlatform}-${normalizedArch}`;
+}
+function minimumOs(loadCommands) {
+  const value = /cmd LC_BUILD_VERSION(?:(?!\n\s*Load command)[\s\S]){0,160}?\bminos\s+([0-9]+(?:\.[0-9]+){1,2})\b/u.exec(loadCommands)?.[1] ?? /cmd LC_VERSION_MIN_MACOSX(?:(?!\n\s*Load command)[\s\S]){0,160}?\bversion\s+([0-9]+(?:\.[0-9]+){1,2})\b/u.exec(loadCommands)?.[1];
+  ensure(value !== undefined, "cargo-raw Apple binary has no macOS deployment target load command");
+  return value;
+}
+function runtimeFloor(target, binaryPath) {
+  if (target.endsWith("apple-darwin"))
+    return { minimum_os: minimumOs(command("otool", "-l", binaryPath)) };
+  const value = command("getconf", "GNU_LIBC_VERSION");
+  ensure(/^glibc [0-9]+\.[0-9]+$/u.test(value), "cargo-raw GNU runner returned an invalid GNU_LIBC_VERSION");
+  return { minimum_libc: value };
+}
 var command = (...args) => execFileSync(args[0], args.slice(1), { encoding: "utf8" }).trim();
 var readelf = (...args) => execFileSync("readelf", args, {
   encoding: "utf8",
   env: { ...process.env, LC_ALL: "C" }
 }).trim();
-function verifyRaw(args) {
+function verifyRaw(args, env = process.env) {
   if (args.length === 4 && args[0] === "--validate") {
     validateInputs(args[1], args[2], args[3]);
     return;
   }
-  ensure(args.length === 5, "usage: release-build raw BINARY_PATH TARGET BINARY VERSION OUTPUT_DIRECTORY");
-  const [source, target, binary, version, destination] = args;
+  ensure(args.length === 5 || args.length === 6, "usage: release-build raw BINARY_PATH TARGET BINARY VERSION OUTPUT_DIRECTORY [VERSION_PROBE_ARGS_JSON]");
+  const source = args[0];
+  const target = args[1];
+  const binary = args[2];
+  const version = args[3];
+  const destination = args[4];
+  let probeArgs;
+  if (args[5] !== undefined && args[5] !== "") {
+    let parsed;
+    try {
+      parsed = JSON.parse(args[5]);
+    } catch {
+      throw new Error("cargo-raw version_probe_args must be valid JSON");
+    }
+    ensure(Array.isArray(parsed) && parsed.length > 0 && parsed.every((arg) => typeof arg === "string"), "cargo-raw version_probe_args must be a nonempty string array");
+    ensure(!target.endsWith("linux-musl"), "version_probe_args is unsupported for cargo-raw Linux musl targets");
+    probeArgs = parsed;
+  }
   validateInputs(target, binary, version);
   const path = realpathSync(resolve(source));
   let executable = false;
@@ -15061,21 +15160,39 @@ function verifyRaw(args) {
   validateFormat(target, description, headers, dynamic, versions);
   const reported = command(path, "--version");
   validateVersion(binary, version, reported);
+  const versionJson = probeArgs ? runVersionProbe(path, probeArgs) : undefined;
   mkdirSync2(destination, { recursive: true });
   const output = join2(destination, `${binary}-${target}`);
   copyFileSync(path, output);
   chmodSync(output, 493);
+  if (versionJson) {
+    const normalized = normalizedTarget(target);
+    ensure(normalized !== undefined, "unsupported cargo-raw artifact target");
+    ensure(/^[a-f0-9]{40}$/u.test(env.CSM_CI_SOURCE_REVISION ?? "") && env.CSM_CI_SOURCE_CLEAN === "true", "cargo-raw metadata requires a trusted clean source revision");
+    const manifest = {
+      version,
+      target: normalized,
+      rust_target: target,
+      ...runtimeFloor(target, output),
+      source_revision: env.CSM_CI_SOURCE_REVISION,
+      dirty: false,
+      version_json: versionJson,
+      sha256: createHash("sha256").update(readFileSync2(output)).digest("hex")
+    };
+    writeFileSync2(join2(destination, `${binary}-${target}.artifact.json`), `${JSON.stringify(manifest, null, 2)}
+`, { flag: "wx" });
+  }
   return `verified ${target}: ${description}; ${reported}`;
 }
 
 // src/release/terraform-collect.ts
-import { constants as constants3, copyFileSync as copyFileSync2, lstatSync as lstatSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync2, realpathSync as realpathSync2 } from "node:fs";
+import { constants as constants3, copyFileSync as copyFileSync2, lstatSync as lstatSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync3, realpathSync as realpathSync2 } from "node:fs";
 import { basename as basename2, join as join3, sep } from "node:path";
 var regular = (path) => lstatSync3(path).isFile();
 function collect(client, destination) {
   const manifest = join3(client, "dist/artifacts.json");
   ensure(regular(manifest), "GoReleaser did not produce a regular artifacts.json manifest");
-  const artifacts = JSON.parse(readFileSync2(manifest, "utf8"));
+  const artifacts = JSON.parse(readFileSync3(manifest, "utf8"));
   ensure(Array.isArray(artifacts), "GoReleaser artifacts manifest is not a list");
   const files = [];
   for (const artifact of artifacts) {

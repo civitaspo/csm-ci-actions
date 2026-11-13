@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync, readdirSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { parse } from "yaml";
 import { z } from "zod";
 
@@ -68,6 +70,53 @@ describe("release build boundary", () => {
     for (const step of buildSteps.slice(1)) expect(step.if).toMatch(/^inputs\.build-type == '(none|js-action|goreleaser|cargo|cargo-raw|terraform-provider)'(?: \|\| inputs\.build-type == 'terraform-provider')?$/u);
     expect(buildSteps.find((step) => step.uses?.startsWith("oven-sh/setup-bun@"))?.with?.["no-cache"]).toBe(true);
     expect(buildSteps.find((step) => step.uses?.startsWith("actions/setup-go@"))?.with?.cache).toBe(false);
+  });
+
+  test("the cargo-raw action omits the optional probe argv when unset", () => {
+    const action = actionSchema.parse(readYaml("actions/server/release-build/action.yml"));
+    const step = action.runs.steps?.find((candidate) => candidate.if === "inputs.build-type == 'cargo-raw'");
+    if (!step?.run) throw new Error("cargo-raw action step is missing");
+    const root = mkdtempSync(join(tmpdir(), "csm-ci-raw-action-argv-"));
+    try {
+      const bin = join(root, "bin");
+      const client = join(root, "client");
+      mkdirSync(bin);
+      mkdirSync(client);
+      const capture = join(root, "argv");
+      for (const name of ["git", "rustup", "cargo"]) {
+        const path = join(bin, name);
+        writeFileSync(path, "#!/bin/sh\nexit 0\n");
+        chmodSync(path, 0o755);
+      }
+      const node = join(bin, "node");
+      writeFileSync(node, "#!/bin/sh\nif [ \"$2\" = raw ] && [ \"$3\" != --validate ]; then printf '%s\\0' \"$@\" > \"$CAPTURE\"; fi\n");
+      chmodSync(node, 0o755);
+      for (const probeArgs of ["", '["version","--json"]']) {
+        const result = spawnSync("bash", ["-e", "-c", step.run], {
+          cwd: root,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `${bin}:${process.env.PATH}`,
+            GITHUB_ACTION_PATH: join(root, "action"),
+            CLIENT_PATH: client,
+            TARGET: "x86_64-apple-darwin",
+            BINARY: "app",
+            VERSION: "1.2.3",
+            SOURCE_REVISION: "a".repeat(40),
+            VERSION_PROBE_ARGS: probeArgs,
+            CAPTURE: capture,
+          },
+        });
+        expect(result.status, result.stderr).toBe(0);
+        const args = readFileSync(capture, "utf8").split("\0").slice(0, -1);
+        expect(args).toEqual([
+          `${join(root, "action")}/../../../dist/release-build.js`, "raw", `${client}/target/x86_64-apple-darwin/release/app`,
+          "x86_64-apple-darwin", "app", "1.2.3", "assets",
+          ...(probeArgs ? [probeArgs] : []),
+        ]);
+      }
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   test("the build job has no permissions, secrets or environment", () => {

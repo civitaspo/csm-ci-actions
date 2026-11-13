@@ -1,8 +1,9 @@
-import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
-import { validateFormat, validateInputs, validateVersion, verifyRaw } from "./cargo-raw.ts";
+import { ArtifactManifestSchema, minimumOs, runVersionProbe, validateFormat, validateInputs, validateVersion, verifyRaw } from "./cargo-raw.ts";
 
 const armLinux = "aarch64-unknown-linux-musl";
 const armMac = "aarch64-apple-darwin";
@@ -88,4 +89,134 @@ test("raw verifier rejects argument count, a nonexecutable file and a linked exe
       expect(() => verifyRaw(args), JSON.stringify(args)).toThrow(error);
     }
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test.each([
+  ["invalid JSON", "not-json", "must be valid JSON", armLinuxGnu],
+  ["empty argument list", "[]", "nonempty string array", armLinuxGnu],
+  ["non-string argument", '["version",3]', "nonempty string array", armLinuxGnu],
+  ["musl target", '["version","--json"]', "unsupported for cargo-raw Linux musl targets", "x86_64-unknown-linux-musl"],
+] as const)("verifyRaw rejects %s version probe arguments", (_, encoded, message, target) => {
+  expect(() => verifyRaw(["", target, "app", "1.2.3", "", encoded])).toThrow(message);
+});
+
+test("version probe invokes the executable with direct argv and retains an opaque object", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cargo-raw-probe-"));
+  try {
+    const executable = join(root, "probe");
+    await writeFile(executable, '#!/bin/sh\nprintf \'{"args":["%s","%s"]}\' "$1" "$2"\n', { mode: 0o755 });
+    expect(runVersionProbe(executable, ["argument with spaces", "$(not-a-shell)"])).toEqual({ args: ["argument with spaces", "$(not-a-shell)"] });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+const probeRejections: Array<[string, string, string]> = [
+  ["nonzero exit", "#!/bin/sh\nexit 7\n", "exited unsuccessfully"],
+  ["invalid UTF-8", "#!/bin/sh\nprintf '\\377'\n", "not valid UTF-8"],
+  ["invalid JSON", "#!/bin/sh\nprintf 'nope'\n", "not valid JSON"],
+  ...["null", "[]", "1", "\"value\""].map((value): [string, string, string] => ["non-object JSON " + value, `#!/bin/sh\nprintf '%s' '${value}'\n`, "must be an object"]),
+];
+test.each(probeRejections)("version probe rejects %s", async (_, script, error) => {
+  const root = await mkdtemp(join(tmpdir(), "cargo-raw-probe-reject-"));
+  try {
+    const executable = join(root, "probe");
+    await writeFile(executable, script, { mode: 0o755 });
+    expect(() => runVersionProbe(executable, [])).toThrow(error);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("version probe rejects a timeout", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cargo-raw-probe-timeout-"));
+  try {
+    const executable = join(root, "probe");
+    await writeFile(executable, "#!/bin/bash\ntrap '' TERM\nend=$((SECONDS + 1))\nwhile (( SECONDS < end )); do :; done\n", { mode: 0o755 });
+    const started = performance.now();
+    expect(() => runVersionProbe(executable, [], 20)).toThrow("30-second timeout");
+    expect(performance.now() - started).toBeLessThan(500);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test.each([1_048_576, 1_048_577])("version probe handles stdout length %i", async (length) => {
+  const root = await mkdtemp(join(tmpdir(), "cargo-raw-probe-size-"));
+  try {
+    const executable = join(root, "probe");
+    const padding = length - 8;
+    await writeFile(executable, `#!/bin/sh\nprintf '{"x":"'\nhead -c ${padding} /dev/zero | tr '\\000' x\nprintf '"}'\n`, { mode: 0o755 });
+    if (length === 1_048_576) expect(runVersionProbe(executable, [])).toEqual({ x: "x".repeat(padding) });
+    else expect(() => runVersionProbe(executable, [])).toThrow("stdout exceeded 1 MiB");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test.each([
+  ["LC_BUILD_VERSION", "Load command 2\n      cmd LC_BUILD_VERSION\n  cmdsize 32\n platform 1\n    minos 13.0\n      sdk 17.0\n"],
+  ["LC_VERSION_MIN_MACOSX", "Load command 2\n      cmd LC_VERSION_MIN_MACOSX\n  cmdsize 16\n  version 10.15.0\n      sdk 11.3\n"],
+])("reads bare deployment target from %s", (_, output) => {
+  expect(minimumOs(output)).toBe(output.includes("LC_BUILD_VERSION") ? "13.0" : "10.15.0");
+});
+
+test("requires a measured Apple deployment target", () => {
+  expect(() => minimumOs("no minimum-version load command")).toThrow("no macOS deployment target load command");
+});
+
+test.each([
+  [armMac, "Mach-O 64-bit executable arm64", "macos-aarch64", "minimum_os"],
+  ["x86_64-unknown-linux-gnu", "ELF 64-bit LSB pie executable, x86-64, dynamically linked", "linux-x86_64", "minimum_libc"],
+] as const)("verifyRaw emits opted-in manifest with measured %s floor", async (target, description, normalized, floorKey) => {
+  const root = await mkdtemp(join(tmpdir(), "cargo-raw-manifest-"));
+  const tools = join(root, "bin");
+  const output = join(root, "assets");
+  const executable = join(root, "app");
+  const previousPath = process.env.PATH;
+  try {
+    await mkdir(tools, { recursive: true });
+    await writeFile(executable, "#!/bin/sh\nif [ \"$1\" = --version ]; then printf 'app 1.2.3\\n'; else printf '{\"opaque\":true}'; fi\n", { mode: 0o755 });
+    await writeFile(join(tools, "file"), `#!/bin/sh\nprintf '%s\\n' '${description}'\n`, { mode: 0o755 });
+    if (target.endsWith("apple-darwin")) {
+      await writeFile(join(tools, "otool"), "#!/bin/sh\nprintf '%s\\n' 'Load command 2' 'cmd LC_BUILD_VERSION' 'cmdsize 32' 'platform 1' 'minos 13.0' 'sdk 17.0'\n", { mode: 0o755 });
+    } else {
+      await writeFile(join(tools, "readelf"), "#!/bin/sh\ncase \"$1\" in -l) printf '%s\\n' '[Requesting program interpreter: /lib64/ld-linux-x86-64.so.2]' ;; -d) printf '%s\\n' ' 0x0000000000000001 (NEEDED) Shared library: [libc.so.6]' ;; -V) printf '%s\\n' \"Version needs section contains Name: GLIBC_2.34 Flags: none\" 'Version symbols section' ;; esac\n", { mode: 0o755 });
+      await writeFile(join(tools, "getconf"), "#!/bin/sh\nprintf '%s\\n' 'glibc 2.39'\n", { mode: 0o755 });
+    }
+    process.env.PATH = `${tools}:${previousPath ?? ""}`;
+    const revision = "a".repeat(40);
+    verifyRaw([executable, target, "app", "1.2.3", output, JSON.stringify(["version", "--json"])], {
+      CSM_CI_SOURCE_REVISION: revision,
+      CSM_CI_SOURCE_CLEAN: "true",
+    });
+    const binary = await readFile(join(output, `app-${target}`));
+    const manifest = ArtifactManifestSchema.parse(JSON.parse(await readFile(join(output, `app-${target}.artifact.json`), "utf8")));
+    expect(Object.keys(manifest).sort()).toEqual(["dirty", "minimum_libc", "minimum_os", "rust_target", "sha256", "source_revision", "target", "version", "version_json"].filter((key) => key !== (floorKey === "minimum_os" ? "minimum_libc" : "minimum_os")).sort());
+    expect(manifest).toMatchObject({
+      version: "1.2.3", target: normalized, rust_target: target, [floorKey]: floorKey === "minimum_os" ? "13.0" : "glibc 2.39",
+      source_revision: revision, dirty: false, version_json: { opaque: true },
+      sha256: createHash("sha256").update(binary).digest("hex"),
+    });
+    expect((await readdir(output)).sort()).toEqual([`app-${target}`, `app-${target}.artifact.json`].sort());
+  } finally {
+    process.env.PATH = previousPath;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("verifyRaw keeps the legacy asset set and still requires the SemVer --version result", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cargo-raw-plain-"));
+  const tools = join(root, "bin");
+  const output = join(root, "assets");
+  const executable = join(root, "app");
+  const previousPath = process.env.PATH;
+  try {
+    await mkdir(tools, { recursive: true });
+    await writeFile(executable, "#!/bin/sh\nprintf 'app 1.2.3\\n'\n", { mode: 0o755 });
+    await writeFile(join(tools, "file"), "#!/bin/sh\nprintf '%s\\n' 'Mach-O 64-bit executable arm64'\n", { mode: 0o755 });
+    process.env.PATH = `${tools}:${previousPath ?? ""}`;
+    verifyRaw([executable, armMac, "app", "1.2.3", output]);
+    expect(await readdir(output)).toEqual([`app-${armMac}`]);
+    const badOutput = join(root, "bad-assets");
+    await writeFile(executable, "#!/bin/sh\nprintf 'app 2.0.0\\n'\n", { mode: 0o755 });
+    expect(() => verifyRaw([executable, armMac, "app", "1.2.3", badOutput, JSON.stringify(["version", "--json"])], {
+      CSM_CI_SOURCE_REVISION: "a".repeat(40), CSM_CI_SOURCE_CLEAN: "true",
+    })).toThrow("reports an unexpected version");
+  } finally {
+    process.env.PATH = previousPath;
+    await rm(root, { recursive: true, force: true });
+  }
 });

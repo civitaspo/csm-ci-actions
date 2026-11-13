@@ -4,9 +4,12 @@ import { join } from "node:path";
 import { Rejection } from "../lib/request.ts";
 import type { Release } from "../lib/config.ts";
 import { terraformAssets, type TerraformVerification } from "./terraform.ts";
+import { ArtifactManifestSchema } from "./cargo-raw.ts";
 
 export type AssetDigest = { name: string; sha256: string; path: string };
-export type AssetRelease = Exclude<Release, { build_type: "terraform-provider" }>
+type CargoRawAssetRelease = Extract<Release, { build_type: "cargo-raw" }> & { version?: string; source_revision?: string };
+export type AssetRelease = Exclude<Release, { build_type: "terraform-provider" | "cargo-raw" }>
+  | CargoRawAssetRelease
   | (Extract<Release, { build_type: "terraform-provider" }> & TerraformVerification);
 
 export async function prepareAssets(directory: string, release?: AssetRelease): Promise<AssetDigest[]> {
@@ -32,14 +35,40 @@ export async function prepareAssets(directory: string, release?: AssetRelease): 
   }
   if (release?.build_type === "cargo-raw") {
     const binaries = release.targets.map((target) => `${release.binary}-${target}`);
-    const expected = new Set(binaries.flatMap((name) => [name, `${name}.sha256`]));
+    const optedIn = release.version_probe_args !== undefined;
+    if (optedIn && (!release.version || !release.source_revision)) {
+      throw new Rejection("cargo-raw metadata publication requires the planned version and source revision");
+    }
+    const expected = new Set(binaries.flatMap((name) => optedIn
+      ? [name, `${name}.artifact.json`, `${name}.sha256`]
+      : [name, `${name}.sha256`]));
     for (const asset of assets) {
       if (!expected.has(asset.name)) throw new Rejection(`unexpected cargo-raw asset ${JSON.stringify(asset.name)}`);
     }
     const sidecars: Array<{ name: string; content: string }> = [];
-    for (const name of binaries) {
+    for (const target of release.targets) {
+      const name = `${release.binary}-${target}`;
       const binary = assets.find((asset) => asset.name === name);
       if (!binary) throw new Rejection(`missing cargo-raw binary ${JSON.stringify(name)}`);
+      if (optedIn) {
+        const manifestName = `${name}.artifact.json`;
+        const manifest = assets.find((asset) => asset.name === manifestName);
+        if (!manifest) throw new Rejection(`missing cargo-raw artifact manifest ${JSON.stringify(manifestName)}`);
+        const bytes = await readFile(join(directory, manifestName));
+        let text: string;
+        try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+        catch { throw new Rejection(`cargo-raw artifact manifest ${JSON.stringify(manifestName)} is not valid UTF-8`); }
+        let parsed: unknown;
+        try { parsed = JSON.parse(text); }
+        catch { throw new Rejection(`cargo-raw artifact manifest ${JSON.stringify(manifestName)} is not valid JSON`); }
+        const result = ArtifactManifestSchema.safeParse(parsed);
+        if (!result.success) throw new Rejection(`cargo-raw artifact manifest ${JSON.stringify(manifestName)} is invalid`);
+        const value = result.data;
+        if (value.version !== release.version || value.rust_target !== target ||
+            value.source_revision !== release.source_revision || value.dirty !== false || value.sha256 !== binary.sha256) {
+          throw new Rejection(`cargo-raw artifact manifest ${JSON.stringify(manifestName)} does not match the release plan or binary`);
+        }
+      }
       const sidecar = `${name}.sha256`;
       const content = `${binary.sha256}  ${name}\n`;
       if (assets.some((asset) => asset.name === sidecar)) {

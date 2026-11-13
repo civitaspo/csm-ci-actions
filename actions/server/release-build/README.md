@@ -14,6 +14,8 @@ See [release publishing](../../../docs/release.md) for build behavior, Cargo tar
 | `version` | No | Planned semantic version; required for `cargo` and `cargo-raw`. |
 | `target` | No | Allowed Cargo target triple; required for `cargo` and `cargo-raw`. |
 | `binary` | No | Safe Cargo binary name; required for `cargo-raw`. |
+| `source-revision` | No | Trusted merge SHA; required for `cargo-raw` and passed to the builder by the workflow. |
+| `version-probe-args` | No | JSON array of direct executable arguments for opt-in `cargo-raw` metadata. |
 
 ## Outputs
 
@@ -34,6 +36,8 @@ This is the action step from the build job, after source preparation. Before it 
     version: ${{ needs.release-plan.outputs.version }}
     target: ${{ matrix.target }}
     binary: ${{ fromJSON(needs.release-plan.outputs.plan).release.binary || '' }}
+    source-revision: ${{ needs.release-plan.outputs.merge-sha }}
+    version-probe-args: ${{ fromJSON(needs.release-plan.outputs.plan).release.version_probe_args && toJSON(fromJSON(needs.release-plan.outputs.plan).release.version_probe_args) || '' }}
 ```
 
 The example belongs inside the isolated job from [server.yml](../../../.github/workflows/server.yml). Do not grant that job repository permissions or secrets. The action rejects unsupported build types and only packages outputs according to the selected build type.

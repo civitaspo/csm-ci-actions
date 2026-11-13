@@ -322,7 +322,7 @@ export const SERVER_BOT_ID = 347400474;
 
 export type Pr = { number: number; head: string; branch: string; baseRef: string };
 export type RequestMatch = { kind: string; repository: string; args: Record<string, number>; label?: string };
-export type ReleaseBuildType = Release["build_type"];
+export type ReleaseBuildType = Release["build_type"] | "cargo-raw-metadata";
 
 // signed: createCommitOnBranch, which GitHub signs as web-flow for the token's user.
 // Otherwise the REST contents API, whose commits GitHub leaves unsigned.
@@ -406,6 +406,7 @@ export function configureRelease(type: ReleaseBuildType): (text: string) => stri
     assert(repository?.release, `release config for ${CLIENT} is missing`);
     const release = type === "cargo" ? `release: { build_type: cargo, targets: [${CARGO_TARGETS.join(", ")}] }`
       : type === "cargo-raw" ? `release: { build_type: cargo-raw, binary: testing-csm-ci-client, targets: [${CARGO_RAW_TARGETS.join(", ")}] }`
+      : type === "cargo-raw-metadata" ? `release: { build_type: cargo-raw, binary: testing-csm-ci-client, targets: [${CARGO_RAW_TARGETS.filter((target) => !target.endsWith("linux-musl")).join(", ")}], version_probe_args: [version, --json] }`
       : type === "terraform-provider" ? "release: { build_type: terraform-provider, provider_name: csm-ci-test }"
       : `release: { build_type: ${type} }`;
     const pattern = /release: \{ build_type: [^}]+\}/;

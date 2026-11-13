@@ -121,6 +121,10 @@ function expectedNames(type: ReleaseBuildType, ver: string): string[] {
     ...CARGO_RAW_TARGETS.flatMap((target) => [`testing-csm-ci-client-${target}`, `testing-csm-ci-client-${target}.sha256`]),
     "SHA256SUMS",
   ].sort();
+  if (type === "cargo-raw-metadata") return [
+    ...CARGO_RAW_TARGETS.filter((target) => !target.endsWith("linux-musl")).flatMap((target) => [`testing-csm-ci-client-${target}`, `testing-csm-ci-client-${target}.artifact.json`, `testing-csm-ci-client-${target}.sha256`]),
+    "SHA256SUMS",
+  ].sort();
   if (type === "cargo") return [
     ...["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"].map((target) => `testing-csm-ci-client-${ver}-${target}.tar.gz`),
     "SHA256SUMS",
@@ -190,7 +194,7 @@ export const release: Scenario[] = [
       catch (e) { if (!hasStatus(e, 404)) throw e; }
     }),
   },
-  ...(["none", "js-action", "goreleaser", "cargo", "cargo-raw"] as const).map((type): Scenario => ({
+  ...(["none", "js-action", "goreleaser", "cargo", "cargo-raw", "cargo-raw-metadata"] as const).map((type): Scenario => ({
     id: `release.publish-${type}`,
     cases: {
       fixture: {
