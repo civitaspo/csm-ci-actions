@@ -115,7 +115,7 @@ describe("parseConfig", () => {
       /binary must be a safe Cargo binary name/,
     ] satisfies [string, string, RegExp]),
     ["cargo-raw with empty targets", releaseConfig("{ build_type: cargo-raw, binary: app, targets: [] }"), /Too small/],
-    ["cargo-raw with unsupported target", releaseConfig("{ build_type: cargo-raw, binary: app, targets: [x86_64-unknown-linux-gnu] }"), /Invalid option/],
+    ["cargo-raw with unsupported target", releaseConfig("{ build_type: cargo-raw, binary: app, targets: [x86_64-pc-windows-msvc] }"), /Invalid option/],
     ["cargo-raw with duplicate targets", releaseConfig("{ build_type: cargo-raw, binary: app, targets: [x86_64-unknown-linux-musl, x86_64-unknown-linux-musl] }"), /duplicate cargo-raw target/],
     ["cargo-raw with unknown fields", releaseConfig("{ build_type: cargo-raw, binary: app, targets: [x86_64-unknown-linux-musl], extra: true }"), /Unrecognized key/],
     ["non-cargo build with target triples", releaseConfig("{ build_type: none, targets: [x86_64-unknown-linux-gnu] }"), /Unrecognized key/],
@@ -160,8 +160,8 @@ describe("repositoryEntry", () => {
       targets: ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin"],
     });
   });
-  test("keeps raw binary and all four supported targets", () => {
-    const release = { build_type: "cargo-raw", binary: "herdr-linear-agent", targets: ["aarch64-apple-darwin", "x86_64-apple-darwin", "aarch64-unknown-linux-musl", "x86_64-unknown-linux-musl"] } satisfies Release;
+  test("keeps raw binary and all six supported targets", () => {
+    const release = { build_type: "cargo-raw", binary: "herdr-linear-agent", targets: ["aarch64-apple-darwin", "x86_64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-musl", "x86_64-unknown-linux-musl"] } satisfies Release;
     const parsed = parseConfig(releaseConfig(JSON.stringify(release)));
     expect(repositoryEntry(parsed, "owner/repo")?.release).toEqual(release);
   });
