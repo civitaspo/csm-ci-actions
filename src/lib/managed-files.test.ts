@@ -53,6 +53,7 @@ function githubFixture(options: {
   incompleteHistory?: boolean;
   duplicateHistoryPage?: boolean;
   missingMergeBase?: boolean;
+  mergeBaseSha?: string;
   comparisonCalls?: { count: number };
   pulls?: Array<{ number: number; title: string; body: string | null; base: { ref: string }; head: { sha: string } }>;
   history?: Array<{ sha: string; parent: string; filename: string; previousFilename?: string }>;
@@ -97,7 +98,7 @@ function githubFixture(options: {
           if (page !== undefined && page > 2) throw new Error(`unexpected comparison page ${page}`);
           return { data: {
             ahead_by: options.incompleteHistory ? history.length + 1 : history.length,
-            ...(options.missingMergeBase ? {} : { merge_base_commit: { sha: history.length === 0 ? targetSha : defaultSha } }),
+            ...(options.missingMergeBase ? {} : { merge_base_commit: { sha: options.mergeBaseSha ?? (history.length === 0 ? targetSha : defaultSha) } }),
             commits: page === 2 && options.duplicateHistoryPage ? history.map(({ sha }) => ({ sha })) : page ? [] : history.map(({ sha }) => ({ sha })),
           } };
         },
@@ -125,6 +126,19 @@ describe("inspectManagedFiles", () => {
     expect(result.status).toBe("ready");
     expect(result.branchNeedsWrite).toBe(true);
     expect(result.requiresWorkflowsWrite).toBe(true);
+  });
+
+  test("rebuilds a matching managed branch based on an older default commit", async () => {
+    const oldDefaultSha = "9".repeat(40);
+    const result = await inspectManagedFiles(githubFixture({
+      history: [{ sha: targetSha, parent: oldDefaultSha, filename: "managed.yml" }],
+      mergeBaseSha: oldDefaultSha,
+      targetContent: "wanted\n",
+    }), input);
+    expect(result.status).toBe("ready");
+    expect(result.branchNeedsWrite).toBe(true);
+    expect(result.requiresWorkflowsWrite).toBe(true);
+    expect(result.pullRequest).toBe(73);
   });
 
   test("rejects a branch change outside the configured managed paths", async () => {
@@ -280,6 +294,57 @@ describe("inspectManagedFiles", () => {
     try {
       const result = await applyManagedFiles(read, { ...input, writeToken: "test-token", writeClient });
       expect(result).toEqual({ status: "applied", commit: appliedSha, pullRequest: 74 });
+      const temporaryBranch = reset.mock.calls[0]?.[0].targetBranch ?? "";
+      expect(temporaryBranch).toMatch(/^csm-ci\/tmp\/managed-[a-f0-9]{16}$/u);
+      expect(reset.mock.calls.map(([call]) => call)).toEqual([
+        { remote: "https://github.com/owner/repo.git", sourceBranch: "main", targetBranch: temporaryBranch, sourceSha: defaultSha, expectedTargetSha: null, token: "test-token" },
+        { remote: "https://github.com/owner/repo.git", sourceBranch: temporaryBranch, targetBranch: "csm-ci/repo-settings", sourceSha: appliedSha, expectedTargetSha: targetSha, token: "test-token" },
+      ]);
+      expect(commitBranches).toEqual([{ branch: temporaryBranch, expectedHeadOid: defaultSha }]);
+      expect(deleted).toEqual([{ owner: "owner", repo: "repo", ref: `heads/${temporaryBranch}` }]);
+    } finally {
+      reset.mockRestore();
+    }
+  });
+
+  test("rebuilds a matching stale-base PR from a temporary branch before updating its head", async () => {
+    const oldDefaultSha = "9".repeat(40);
+    const read = githubFixture({
+      history: [{ sha: targetSha, parent: oldDefaultSha, filename: "managed.yml" }],
+      mergeBaseSha: oldDefaultSha,
+      targetContent: "wanted\n",
+    });
+    const appliedSha = "c".repeat(40);
+    const commitBranches: unknown[] = [];
+    const deleted: unknown[] = [];
+    let branchSha = targetSha;
+    const pull = {
+      number: 73,
+      title: "chore(repo-settings): sync managed files",
+      body: "Update files managed by csm-ci.\n\n<!-- csm-ci:repo-settings:managed-files -->",
+      base: { ref: "main" },
+      head: { sha: appliedSha },
+    };
+    const writeClient = {
+      rest: {
+        git: {
+          getRef: async ({ ref }: { ref: string }) => ({ data: { object: { sha: ref === "heads/main" ? defaultSha : branchSha } } }),
+          deleteRef: async (args: unknown) => { deleted.push(args); return { data: {} }; },
+        },
+        pulls: { list: async () => ({ data: [pull] }) },
+      },
+      paginate: async () => [pull],
+      graphql: async (_query: string, variables: { input: { branch: { branchName: string }; expectedHeadOid: string } }) => {
+        commitBranches.push({ branch: variables.input.branch.branchName, expectedHeadOid: variables.input.expectedHeadOid });
+        return { createCommitOnBranch: { commit: { oid: appliedSha } } };
+      },
+    } as unknown as GitHub;
+    const reset = spyOn(gitRef, "resetBranchWithLease").mockImplementation(async ({ targetBranch, sourceSha }) => {
+      if (targetBranch === "csm-ci/repo-settings") branchSha = sourceSha;
+    });
+    try {
+      const result = await applyManagedFiles(read, { ...input, writeToken: "test-token", writeClient });
+      expect(result).toEqual({ status: "applied", commit: appliedSha, pullRequest: 73 });
       const temporaryBranch = reset.mock.calls[0]?.[0].targetBranch ?? "";
       expect(temporaryBranch).toMatch(/^csm-ci\/tmp\/managed-[a-f0-9]{16}$/u);
       expect(reset.mock.calls.map(([call]) => call)).toEqual([

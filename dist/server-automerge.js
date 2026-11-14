@@ -37526,7 +37526,7 @@ Standard client workflows: ${generated.release.version} (${generated.release.sha
       pullRequest: null
     };
   const targetSha = await branchHead(gh, owner, repo);
-  let targetHistoryLength;
+  let targetHistoryStartsAtDefault = false;
   if (targetSha) {
     const history = await loadServerOwnedHistory(gh, {
       owner,
@@ -37536,7 +37536,7 @@ Standard client workflows: ${generated.release.version} (${generated.release.sha
       serverBotId: input.serverBotId,
       messages: DEFAULT_BRANCH_MESSAGES
     });
-    targetHistoryLength = history.length;
+    targetHistoryStartsAtDefault = history[0]?.parentSha === defaultSha;
     const allowed = new Set([...files.map(({ path }) => path), ...deletions]);
     for (const commit of history) {
       for (const change of commit.files) {
@@ -37551,8 +37551,8 @@ Standard client workflows: ${generated.release.version} (${generated.release.sha
   const inspectedFiles = [...files, ...deletions.map((path) => ({ path, content: "" }))];
   const targetValues = targetSha ? await readFiles(gh, owner, repo, targetSha, inspectedFiles) : new Map;
   const targetMatches = targetSha !== null && files.every(({ path, content }) => targetValues.get(path)?.content === content) && deletions.every((path) => targetValues.get(path)?.content === null);
-  const targetIsAncestorOfDefault = targetSha !== null && targetSha !== defaultSha && targetHistoryLength === 0;
-  const branchNeedsWrite = !targetMatches || targetIsAncestorOfDefault;
+  const targetUsesCurrentDefault = targetSha === defaultSha || targetHistoryStartsAtDefault;
+  const branchNeedsWrite = !targetMatches || targetSha !== null && !targetUsesCurrentDefault;
   const pullRequest = await findPullRequest(gh, input.repository, input.defaultBranch, targetSha);
   const requiresPullRequestUpdate = !pullRequest || pullRequest.title !== MANAGED_FILES_TITLE || pullRequest.body !== pullBody;
   const status = branchNeedsWrite || requiresPullRequestUpdate ? "ready" : "already-applied";

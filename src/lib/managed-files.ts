@@ -122,7 +122,7 @@ export async function inspectManagedFiles(gh: GitHub, input: ManagedFilesInput):
     pullRequest: null,
   };
   const targetSha = await branchHead(gh, owner, repo);
-  let targetHistoryLength: number | undefined;
+  let targetHistoryStartsAtDefault = false;
   if (targetSha) {
     const history = await loadServerOwnedHistory(gh, {
       owner,
@@ -132,7 +132,7 @@ export async function inspectManagedFiles(gh: GitHub, input: ManagedFilesInput):
       serverBotId: input.serverBotId,
       messages: DEFAULT_BRANCH_MESSAGES,
     });
-    targetHistoryLength = history.length;
+    targetHistoryStartsAtDefault = history[0]?.parentSha === defaultSha;
     const allowed = new Set([...files.map(({ path }) => path), ...deletions]);
     for (const commit of history) {
       for (const change of commit.files) {
@@ -146,8 +146,11 @@ export async function inspectManagedFiles(gh: GitHub, input: ManagedFilesInput):
   const inspectedFiles = [...files, ...deletions.map((path) => ({ path, content: "" }))];
   const targetValues = targetSha ? await readFiles(gh, owner, repo, targetSha, inspectedFiles) : new Map<string, FileValue>();
   const targetMatches = targetSha !== null && files.every(({ path, content }) => targetValues.get(path)?.content === content) && deletions.every((path) => targetValues.get(path)?.content === null);
-  const targetIsAncestorOfDefault = targetSha !== null && targetSha !== defaultSha && targetHistoryLength === 0;
-  const branchNeedsWrite = !targetMatches || targetIsAncestorOfDefault;
+  // A branch can still match the desired files while being based on an older
+  // default-branch commit. Rebuild it so the eventual PR starts at today's
+  // default branch and its final managed-pull attestation can validate it.
+  const targetUsesCurrentDefault = targetSha === defaultSha || targetHistoryStartsAtDefault;
+  const branchNeedsWrite = !targetMatches || (targetSha !== null && !targetUsesCurrentDefault);
   const pullRequest = await findPullRequest(gh, input.repository, input.defaultBranch, targetSha);
   const requiresPullRequestUpdate = !pullRequest || pullRequest.title !== MANAGED_FILES_TITLE || pullRequest.body !== pullBody;
   const status = branchNeedsWrite || requiresPullRequestUpdate ? "ready" : "already-applied";
