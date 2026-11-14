@@ -15382,7 +15382,7 @@ function verifyRaw(args) {
     ensure(process.env.CSM_CI_SOURCE_REVISION === sourceRevision && process.env.CSM_CI_SOURCE_CLEAN === "true", "cargo-raw metadata requires the validated clean release source marker");
     const versionJson = parseVersionJson(runVersionProbe(path, probeArgs));
     const targetMetadata = metadataTarget(target);
-    const floor = targetMetadata.floor === "minimum_os" ? { minimum_os: parseMinimumOs(command("otool", "-l", path)) } : { minimum_libc: measureMinimumLibc() };
+    const floor = targetMetadata.floor === "minimum_os" ? { minimum_os: parseMinimumOs(command("otool", "-l", "-v", path)) } : { minimum_libc: measureMinimumLibc() };
     const manifest = RawArtifactManifestSchema.parse({
       version,
       target: targetMetadata.target,
@@ -15398,10 +15398,10 @@ function verifyRaw(args) {
   }
   return `verified ${target}: ${description}; ${reported}`;
 }
-function runVersionProbe(path, args) {
+function runVersionProbe(path, args, timeoutMs = PROBE_TIMEOUT_MS) {
   let output;
   try {
-    output = execFileSync(path, args, { encoding: "buffer", timeout: PROBE_TIMEOUT_MS, maxBuffer: MAX_PROBE_OUTPUT + 1 });
+    output = execFileSync(path, args, { encoding: "buffer", timeout: timeoutMs, killSignal: "SIGKILL", maxBuffer: MAX_PROBE_OUTPUT + 1 });
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
       throw new Error("cargo-raw version probe output exceeds 1 MiB");

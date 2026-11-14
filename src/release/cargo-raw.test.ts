@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
@@ -103,12 +103,14 @@ test("raw verifier runs the configured native JSON probe and writes a manifest b
     await mkdir(tools);
     await writeFile(join(root, "app"), "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'app 1.2.3'; exit 0; fi\nif [ \"$1\" = \"version\" ] && [ \"$2\" = \"--json\" ]; then echo '{\"version\":\"1.2.3\",\"channel\":\"stable\"}'; exit 0; fi\nexit 9\n", { mode: 0o755 });
     await writeFile(join(tools, "file"), "#!/bin/sh\nprintf '%s\\n' 'Mach-O 64-bit executable arm64'\n", { mode: 0o755 });
-    await writeFile(join(tools, "otool"), "#!/bin/sh\ncat <<'EOF'\nLoad command 0\n      cmd LC_BUILD_VERSION\n  cmdsize 24\n platform MACOS\n    minos 13.1\n      sdk 15.0\nEOF\n", { mode: 0o755 });
+    const otoolArgs = join(root, "otool-args");
+    await writeFile(join(tools, "otool"), `#!/bin/sh\nprintf '%s\\n' "$@" > "${otoolArgs}"\ncase " $* " in *" -v "*) platform=MACOS ;; *) platform=1 ;; esac\nprintf '%s\\n' 'Load command 0' '      cmd LC_BUILD_VERSION' " platform $platform" '    minos 13.1' '      sdk 15.0'\n`, { mode: 0o755 });
     process.env.PATH = `${tools}:${originalPath ?? ""}`;
     process.env.CSM_CI_SOURCE_REVISION = revision;
     process.env.CSM_CI_SOURCE_CLEAN = "true";
     const assets = join(root, "assets");
     verifyRaw([join(root, "app"), armMac, "app", "1.2.3", assets, revision, JSON.stringify(["version", "--json"])]);
+    expect(await readFile(otoolArgs, "utf8")).toBe(`-l\n-v\n${await realpath(join(root, "app"))}\n`);
     const binary = await readFile(join(assets, "app-aarch64-apple-darwin"));
     const manifest = JSON.parse(await readFile(join(assets, "app-aarch64-apple-darwin.artifact.json"), "utf8"));
     expect(manifest).toEqual({
@@ -236,5 +238,20 @@ test("raw version probe rejects failed commands and output beyond its bounded ca
     await writeFile(oversized, "#!/bin/sh\nhead -c 1048577 /dev/zero\n", { mode: 0o755 });
     expect(() => runVersionProbe(failed, ["version", "--json"])).toThrow("probe failed");
     expect(() => runVersionProbe(oversized, ["version", "--json"])).toThrow("exceeds 1 MiB");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("raw version probe kills a direct child that ignores SIGTERM when its timeout expires", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cargo-raw-probe-timeout-"));
+  try {
+    const pidFile = join(root, "pid");
+    const stubborn = join(root, "stubborn");
+    await writeFile(stubborn, `#!/bin/sh\ntrap '' TERM\nprintf '%s\\n' "$$" > "${pidFile}"\nwhile :; do :; done\n`, { mode: 0o755 });
+    const startedAt = Date.now();
+    expect(() => runVersionProbe(stubborn, [], 500)).toThrow("probe failed");
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    const childPid = Number(await readFile(pidFile, "utf8"));
+    expect(Number.isInteger(childPid) && childPid > 0).toBe(true);
+    expect(() => process.kill(childPid, 0)).toThrow();
   } finally { await rm(root, { recursive: true, force: true }); }
 });

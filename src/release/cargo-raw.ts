@@ -213,7 +213,7 @@ export function verifyRaw(args: string[]): string | undefined {
     const versionJson = parseVersionJson(runVersionProbe(path, probeArgs));
     const targetMetadata = metadataTarget(target);
     const floor = targetMetadata.floor === "minimum_os"
-      ? { minimum_os: parseMinimumOs(command("otool", "-l", path)) }
+      ? { minimum_os: parseMinimumOs(command("otool", "-l", "-v", path)) }
       : { minimum_libc: measureMinimumLibc() };
     const manifest = RawArtifactManifestSchema.parse({
       version,
@@ -230,10 +230,10 @@ export function verifyRaw(args: string[]): string | undefined {
   return `verified ${target}: ${description}; ${reported}`;
 }
 
-export function runVersionProbe(path: string, args: string[]): Buffer {
+export function runVersionProbe(path: string, args: string[], timeoutMs = PROBE_TIMEOUT_MS): Buffer {
   let output: Buffer;
   try {
-    output = execFileSync(path, args, { encoding: "buffer", timeout: PROBE_TIMEOUT_MS, maxBuffer: MAX_PROBE_OUTPUT + 1 });
+    output = execFileSync(path, args, { encoding: "buffer", timeout: timeoutMs, killSignal: "SIGKILL", maxBuffer: MAX_PROBE_OUTPUT + 1 });
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
       throw new Error("cargo-raw version probe output exceeds 1 MiB");
