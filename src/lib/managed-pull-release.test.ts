@@ -143,6 +143,26 @@ test("re-reads reservation state and rejects a replacement before final validati
   expect(deployments.fetch.calls.filter((call) => call === "POST /graphql")).toHaveLength(2);
 });
 
+test("rejects when the active reservation becomes terminal before final validation", async () => {
+  const source = releaseClient();
+  const deployments = deploymentClient([payload()], 200, []);
+  const input = { ...sourceBase, source: source.client, deployments: deployments.client };
+  const initial = await resolveManagedPullRelease(input, facts);
+  await expect(revalidateManagedPullRelease(input, facts, initial)).rejects.toThrow(
+    "managed pull workflow release is not the current stable release and has no active reservation pin",
+  );
+  expect(deployments.fetch.calls.filter((call) => call === "POST /graphql")).toHaveLength(2);
+});
+
+test("rejects when the active reservation expires before final validation", async () => {
+  const source = releaseClient();
+  const deployments = deploymentClient([payload()], 200, [payload({ expires_at: "2026-11-14T14:00:00.000Z" })]);
+  const input = { ...sourceBase, source: source.client, deployments: deployments.client };
+  const initial = await resolveManagedPullRelease(input, facts);
+  await expect(revalidateManagedPullRelease(input, facts, initial)).rejects.toThrow("active managed reservation has expired");
+  expect(deployments.fetch.calls.filter((call) => call === "POST /graphql")).toHaveLength(2);
+});
+
 test.each([
   ["reservation cancelled before final validation", { release: oldRelease }],
   ["reservation deployment changed", { release: oldRelease, reservation: { deploymentId: 2, idempotencyKey: "1".repeat(64) } }],
