@@ -1,7 +1,7 @@
 import { repositoryEntry } from "./config.ts";
 import { generateWorkflows, selectedCallers } from "./generated-workflows.ts";
 import { type GitHub, loadConfig, splitRepository } from "./github.ts";
-import { inspectManagedFiles } from "./managed-files.ts";
+import { inspectManagedFiles, type ManagedFilesInspection } from "./managed-files.ts";
 import { attestManagedPull, type ManagedPullAttestation } from "./managed-pull.ts";
 import { Rejection } from "./request.ts";
 import { loadAdditionalManagedFiles } from "./additional-managed-files.ts";
@@ -87,9 +87,7 @@ export async function deriveManagedPullAttestation(input: DeriveManagedPullAttes
     generated,
     files: additional,
   });
-  if (inspection.status !== "ready" || inspection.pullRequest !== input.pullNumber || inspection.targetSha !== pull.head.sha) {
-    throw new Rejection("managed pull does not match the current trusted managed-file proposal");
-  }
+  assertManagedPullProposalMatches(inspection, input.pullNumber, pull.head.sha);
 
   await assertManagedPullContextCurrent({ source: input.source, serverRepository, defaultBranch: server.default_branch, configSha: input.configSha, callers, release });
   await revalidateManagedPullRelease(input, {
@@ -118,6 +116,13 @@ export async function deriveManagedPullAttestation(input: DeriveManagedPullAttes
     releaseVersion: release.version,
     inspection,
   });
+}
+
+export function assertManagedPullProposalMatches(inspection: ManagedFilesInspection, pullNumber: number, headSha: string): void {
+  if ((inspection.status !== "ready" && inspection.status !== "already-applied") ||
+    inspection.pullRequest !== pullNumber || inspection.targetSha !== headSha) {
+    throw new Rejection("managed pull does not match the current trusted managed-file proposal");
+  }
 }
 
 export type ManagedPullReleaseFacts = {

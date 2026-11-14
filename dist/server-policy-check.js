@@ -38291,9 +38291,7 @@ async function deriveManagedPullAttestation(input) {
     generated,
     files: additional
   });
-  if (inspection.status !== "ready" || inspection.pullRequest !== input.pullNumber || inspection.targetSha !== pull.head.sha) {
-    throw new Rejection("managed pull does not match the current trusted managed-file proposal");
-  }
+  assertManagedPullProposalMatches(inspection, input.pullNumber, pull.head.sha);
   await assertManagedPullContextCurrent({ source: input.source, serverRepository, defaultBranch: server.default_branch, configSha: input.configSha, callers, release });
   await revalidateManagedPullRelease(input, {
     repository,
@@ -38320,6 +38318,11 @@ async function deriveManagedPullAttestation(input) {
     releaseVersion: release.version,
     inspection
   });
+}
+function assertManagedPullProposalMatches(inspection, pullNumber, headSha) {
+  if (inspection.status !== "ready" && inspection.status !== "already-applied" || inspection.pullRequest !== pullNumber || inspection.targetSha !== headSha) {
+    throw new Rejection("managed pull does not match the current trusted managed-file proposal");
+  }
 }
 function assertManagedPullReleaseContextCurrent(previous, current) {
   if (JSON.stringify(current) !== JSON.stringify(previous))

@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { github } from "./github.ts";
 import { CONFIG_YAML, fakeFetch } from "./testing.ts";
-import { assertManagedPullContextCurrent, deriveManagedPullAttestation, parseManagedWorkflowReleaseHint } from "./managed-pull-context.ts";
+import { assertManagedPullContextCurrent, assertManagedPullProposalMatches, deriveManagedPullAttestation, parseManagedWorkflowReleaseHint } from "./managed-pull-context.ts";
+import type { ManagedFilesInspection } from "./managed-files.ts";
 import { verifyWorkflowReleaseRevision } from "./workflow-release.ts";
 
 const SHA = "a".repeat(40);
@@ -30,6 +31,39 @@ function clients(options: { headRef: string; autoComplete?: boolean; config?: st
 }
 
 const base = { serverRepository: "owner/server", configSha: SHA, configPath: "csm-ci.yaml", repository: "owner/repo", pullNumber: 12 };
+
+function proposalInspection(overrides: Partial<ManagedFilesInspection> = {}): ManagedFilesInspection {
+  return {
+    status: "ready",
+    requiresWorkflowsWrite: false,
+    requiresPullRequestUpdate: false,
+    branchNeedsWrite: false,
+    repository: "owner/repo",
+    defaultBranch: "main",
+    defaultSha: "c".repeat(40),
+    targetSha: "b".repeat(40),
+    files: [],
+    changedPaths: [],
+    pullRequest: 12,
+    ...overrides,
+  };
+}
+
+test("accepts a synchronized managed proposal only for its exact pull request and head", () => {
+  for (const status of ["ready", "already-applied"] as const) {
+    expect(() => assertManagedPullProposalMatches(proposalInspection({ status }), 12, "b".repeat(40))).not.toThrow();
+  }
+});
+
+test.each([
+  ["different pull request", { pullRequest: 13 }, 12, "b".repeat(40)],
+  ["different head", { targetSha: "e".repeat(40) }, 12, "b".repeat(40)],
+  ["missing matching pull request", { pullRequest: null }, 12, "b".repeat(40)],
+  ["missing matching head", { targetSha: null }, 12, "b".repeat(40)],
+] as const)("rejects an already-applied proposal with %s", (_case, overrides, pullNumber, headSha) => {
+  expect(() => assertManagedPullProposalMatches(proposalInspection({ status: "already-applied", ...overrides }), pullNumber, headSha))
+    .toThrow("managed pull does not match the current trusted managed-file proposal");
+});
 
 test("ordinary pull requests are not treated as managed-file candidates", async () => {
   const f = clients({ headRef: "feature/change" });
