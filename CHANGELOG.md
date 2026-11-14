@@ -2,6 +2,31 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.8.0] - 2026-11-14
+
+### 🚀 Features
+
+- *(release)* Support GNU cargo-raw binaries ([#223](https://github.com/civitaspo/csm-ci-actions/pull/223))
+- *(release)* Publish cargo-raw runtime manifests ([#237](https://github.com/civitaspo/csm-ci-actions/pull/237))
+
+### 🐛 Bug Fixes
+
+- *(merge)* Disarm native auto-merge on reservation ([#225](https://github.com/civitaspo/csm-ci-actions/pull/225))
+- *(e2e)* Retry incomplete server correlation responses ([#236](https://github.com/civitaspo/csm-ci-actions/pull/236))
+
+### 📚 Documentation
+
+- *(release)* Define cargo-raw runtime metadata contract ([#231](https://github.com/civitaspo/csm-ci-actions/pull/231))
+
+### 🧪 Testing
+
+- *(merge)* Keep new reservation fixtures inside the recovery window ([#232](https://github.com/civitaspo/csm-ci-actions/pull/232))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(deps)* Update dependency @types/node to v26.6.6 ([#194](https://github.com/civitaspo/csm-ci-actions/pull/194))
+- *(deps)* Update jdx/mise-action action to v5.2.8 ([#218](https://github.com/civitaspo/csm-ci-actions/pull/218))
+
 ## [0.7.0] - 2026-11-09
 
 ### 🚀 Features
