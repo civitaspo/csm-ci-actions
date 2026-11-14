@@ -1,8 +1,10 @@
-import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
-import { validateFormat, validateInputs, validateVersion, verifyRaw } from "./cargo-raw.ts";
+import { parseMinimumOs, parseVersionJson, runVersionProbe, validateArtifactManifest, validateFormat, validateInputs, validateVersion, verifyRaw, type RawArtifactManifest } from "./cargo-raw.ts";
 
 const armLinux = "aarch64-unknown-linux-musl";
 const armMac = "aarch64-apple-darwin";
@@ -87,5 +89,152 @@ test("raw verifier rejects argument count, a nonexecutable file and a linked exe
     ] satisfies Array<[string[], string]>) {
       expect(() => verifyRaw(args), JSON.stringify(args)).toThrow(error);
     }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("raw verifier runs the configured native JSON probe and writes a manifest bound to the copied binary", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cargo-raw-manifest-"));
+  const originalPath = process.env.PATH;
+  const originalRevision = process.env.CSM_CI_SOURCE_REVISION;
+  const originalClean = process.env.CSM_CI_SOURCE_CLEAN;
+  const revision = "a".repeat(40);
+  try {
+    const tools = join(root, "tools");
+    await mkdir(tools);
+    await writeFile(join(root, "app"), "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'app 1.2.3'; exit 0; fi\nif [ \"$1\" = \"version\" ] && [ \"$2\" = \"--json\" ]; then echo '{\"version\":\"1.2.3\",\"channel\":\"stable\"}'; exit 0; fi\nexit 9\n", { mode: 0o755 });
+    await writeFile(join(tools, "file"), "#!/bin/sh\nprintf '%s\\n' 'Mach-O 64-bit executable arm64'\n", { mode: 0o755 });
+    await writeFile(join(tools, "otool"), "#!/bin/sh\ncat <<'EOF'\nLoad command 0\n      cmd LC_BUILD_VERSION\n  cmdsize 24\n platform MACOS\n    minos 13.1\n      sdk 15.0\nEOF\n", { mode: 0o755 });
+    process.env.PATH = `${tools}:${originalPath ?? ""}`;
+    process.env.CSM_CI_SOURCE_REVISION = revision;
+    process.env.CSM_CI_SOURCE_CLEAN = "true";
+    const assets = join(root, "assets");
+    verifyRaw([join(root, "app"), armMac, "app", "1.2.3", assets, revision, JSON.stringify(["version", "--json"])]);
+    const binary = await readFile(join(assets, "app-aarch64-apple-darwin"));
+    const manifest = JSON.parse(await readFile(join(assets, "app-aarch64-apple-darwin.artifact.json"), "utf8"));
+    expect(manifest).toEqual({
+      version: "1.2.3",
+      target: "macos-aarch64",
+      rust_target: armMac,
+      minimum_os: "13.1",
+      source_revision: revision,
+      dirty: false,
+      version_json: { version: "1.2.3", channel: "stable" },
+      sha256: createHash("sha256").update(binary).digest("hex"),
+    });
+    expect(Object.keys(manifest).sort()).toEqual(["dirty", "minimum_os", "rust_target", "sha256", "source_revision", "target", "version", "version_json"].sort());
+    process.env.CSM_CI_SOURCE_CLEAN = "false";
+    expect(() => verifyRaw([
+      join(root, "app"), armMac, "app", "1.2.3", join(root, "rejected-assets"), revision, JSON.stringify(["version", "--json"]),
+    ])).toThrow("validated clean release source marker");
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH; else process.env.PATH = originalPath;
+    if (originalRevision === undefined) delete process.env.CSM_CI_SOURCE_REVISION; else process.env.CSM_CI_SOURCE_REVISION = originalRevision;
+    if (originalClean === undefined) delete process.env.CSM_CI_SOURCE_CLEAN; else process.env.CSM_CI_SOURCE_CLEAN = originalClean;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("raw verifier records the measured GNU libc floor for a native GNU target", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cargo-raw-gnu-manifest-"));
+  const originalPath = process.env.PATH;
+  const originalRevision = process.env.CSM_CI_SOURCE_REVISION;
+  const originalClean = process.env.CSM_CI_SOURCE_CLEAN;
+  const revision = "d".repeat(40);
+  try {
+    const tools = join(root, "tools");
+    await mkdir(tools);
+    await writeFile(join(root, "app"), "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'app 1.2.3'; exit 0; fi\necho '{\"version\":\"1.2.3\"}'\n", { mode: 0o755 });
+    await writeFile(join(tools, "file"), "#!/bin/sh\nprintf '%s\\n' 'ELF 64-bit LSB pie executable, x86-64, dynamically linked'\n", { mode: 0o755 });
+    await writeFile(join(tools, "readelf"), "#!/bin/sh\ncase \"$1\" in\n-l) echo '[Requesting program interpreter: /lib64/ld-linux-x86-64.so.2]' ;;\n-d) echo ' 0x0000000000000001 (NEEDED) Shared library: [libc.so.6]' ;;\n-V) printf '%s\\n' \"Version needs section '.gnu.version_r' contains 1 entry:\" '  0x0010: Name: GLIBC_2.2.5 Flags: none' 'Version symbols section .gnu.version' ;;\nesac\n", { mode: 0o755 });
+    await writeFile(join(tools, "getconf"), "#!/bin/sh\necho 'glibc 2.39'\n", { mode: 0o755 });
+    process.env.PATH = `${tools}:${originalPath ?? ""}`;
+    process.env.CSM_CI_SOURCE_REVISION = revision;
+    process.env.CSM_CI_SOURCE_CLEAN = "true";
+    const assets = join(root, "assets");
+    verifyRaw([join(root, "app"), "x86_64-unknown-linux-gnu", "app", "1.2.3", assets, revision, JSON.stringify(["version", "--json"])]);
+    const manifest = JSON.parse(await readFile(join(assets, "app-x86_64-unknown-linux-gnu.artifact.json"), "utf8"));
+    expect(manifest).toMatchObject({ target: "linux-x86_64", rust_target: "x86_64-unknown-linux-gnu", minimum_libc: "glibc 2.39", source_revision: revision, dirty: false });
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH; else process.env.PATH = originalPath;
+    if (originalRevision === undefined) delete process.env.CSM_CI_SOURCE_REVISION; else process.env.CSM_CI_SOURCE_REVISION = originalRevision;
+    if (originalClean === undefined) delete process.env.CSM_CI_SOURCE_CLEAN; else process.env.CSM_CI_SOURCE_CLEAN = originalClean;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("release-build CLI parses metadata probe arguments and produces its manifest", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cargo-raw-cli-manifest-"));
+  try {
+    const tools = join(root, "tools");
+    await mkdir(tools);
+    await writeFile(join(root, "app"), "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'app 1.2.3'; exit 0; fi\nif [ \"$1\" = \"version\" ] && [ \"$2\" = \"--json\" ]; then echo '{\"version\":\"1.2.3\"}'; exit 0; fi\nexit 9\n", { mode: 0o755 });
+    await writeFile(join(tools, "file"), "#!/bin/sh\nprintf '%s\\n' 'Mach-O 64-bit executable arm64'\n", { mode: 0o755 });
+    await writeFile(join(tools, "otool"), "#!/bin/sh\nprintf '%s\\n' 'Load command 0' '      cmd LC_BUILD_VERSION' ' platform MACOS' ' minos 13.2'\n", { mode: 0o755 });
+    const revision = "e".repeat(40);
+    const assets = join(root, "assets");
+    const cli = new URL("../release-build/main.ts", import.meta.url).pathname;
+    const result = spawnSync(process.execPath, [cli, "raw", join(root, "app"), armMac, "app", "1.2.3", assets, revision, JSON.stringify(["version", "--json"])], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${tools}:${process.env.PATH ?? ""}`, CSM_CI_SOURCE_REVISION: revision, CSM_CI_SOURCE_CLEAN: "true" },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain(`verified ${armMac}`);
+    const manifest = JSON.parse(await readFile(join(assets, `app-${armMac}.artifact.json`), "utf8"));
+    expect(manifest).toMatchObject({
+      target: "macos-aarch64",
+      rust_target: armMac,
+      minimum_os: "13.2",
+      source_revision: revision,
+      dirty: false,
+      version_json: { version: "1.2.3" },
+    });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("release-build CLI keeps the legacy cargo-raw asset path when metadata is omitted", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cargo-raw-cli-legacy-"));
+  try {
+    const tools = join(root, "tools");
+    await mkdir(tools);
+    await writeFile(join(root, "app"), "#!/bin/sh\necho 'app 1.2.3'\n", { mode: 0o755 });
+    await writeFile(join(tools, "file"), "#!/bin/sh\nprintf '%s\\n' 'Mach-O 64-bit executable arm64'\n", { mode: 0o755 });
+    const assets = join(root, "assets");
+    const cli = new URL("../release-build/main.ts", import.meta.url).pathname;
+    const result = spawnSync(process.execPath, [cli, "raw", join(root, "app"), armMac, "app", "1.2.3", assets], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${tools}:${process.env.PATH ?? ""}` },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(await readdir(assets)).toEqual([`app-${armMac}`]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("raw metadata parsers reject malformed platform floors, JSON, and manifest bindings", () => {
+  expect(parseMinimumOs("Load command 0\n cmd LC_BUILD_VERSION\n platform MACOS\n minos 14.2\n")).toBe("14.2");
+  expect(parseMinimumOs("Load command 0\n cmd LC_VERSION_MIN_MACOSX\n version 10.15\n")).toBe("10.15");
+  expect(() => parseMinimumOs("Load command 0\n cmd LC_BUILD_VERSION\n platform IOS\n minos 14.0\n")).toThrow("could not read the macOS deployment target");
+  expect(parseVersionJson(Buffer.from('{"ok":true}'))).toEqual({ ok: true });
+  for (const output of [Buffer.from("[1]"), Buffer.from("not json"), Buffer.from([0xff])]) {
+    expect(() => parseVersionJson(output)).toThrow();
+  }
+  expect(() => parseVersionJson(Buffer.alloc(1024 * 1024 + 1, 0x61))).toThrow("exceeds 1 MiB");
+  const manifest = {
+    version: "1.2.3", target: "macos-aarch64", rust_target: armMac, minimum_os: "13.0",
+    source_revision: "a".repeat(40), dirty: false, version_json: { version: "1.2.3" }, sha256: "b".repeat(64),
+  } satisfies RawArtifactManifest;
+  expect(validateArtifactManifest(manifest, { target: armMac, version: "1.2.3", sourceRevision: "a".repeat(40), binarySha256: "b".repeat(64) })).toEqual(manifest);
+  expect(() => validateArtifactManifest({ ...manifest, extra: true }, { target: armMac, version: "1.2.3", sourceRevision: "a".repeat(40), binarySha256: "b".repeat(64) })).toThrow("invalid shape");
+  expect(() => validateArtifactManifest(manifest, { target: armMac, version: "1.2.3", sourceRevision: "c".repeat(40), binarySha256: "b".repeat(64) })).toThrow("source does not match");
+});
+
+test("raw version probe rejects failed commands and output beyond its bounded capture", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cargo-raw-probe-"));
+  try {
+    const failed = join(root, "failed");
+    const oversized = join(root, "oversized");
+    await writeFile(failed, "#!/bin/sh\nexit 7\n", { mode: 0o755 });
+    await writeFile(oversized, "#!/bin/sh\nhead -c 1048577 /dev/zero\n", { mode: 0o755 });
+    expect(() => runVersionProbe(failed, ["version", "--json"])).toThrow("probe failed");
+    expect(() => runVersionProbe(oversized, ["version", "--json"])).toThrow("exceeds 1 MiB");
   } finally { await rm(root, { recursive: true, force: true }); }
 });

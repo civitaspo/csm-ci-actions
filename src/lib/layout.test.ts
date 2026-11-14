@@ -9,6 +9,7 @@ const stepSchema = z.object({
   uses: z.string().optional(),
   if: z.string().optional(),
   run: z.string().optional(),
+  env: z.record(z.string(), z.unknown()).optional(),
   with: z.record(z.string(), z.unknown()).optional(),
 });
 const actionSchema = z.object({
@@ -77,6 +78,15 @@ describe("release build boundary", () => {
     expect(job).not.toHaveProperty("environment");
     expect(job).not.toHaveProperty("secrets");
     expect(JSON.stringify(job)).not.toMatch(/secrets\.|id-token|actions\/cache/u);
+  });
+
+  test("cargo-raw probe argv flows from the validated plan through the native build action", () => {
+    const workflow = z.object({ jobs: z.object({ "release-build": z.object({ steps: z.array(stepSchema) }) }) }).parse(readYaml(".github/workflows/server.yml"));
+    const actionCall = workflow.jobs["release-build"].steps.find((step) => step.uses === "./.csm-ci-actions/actions/server/release-build");
+    expect(actionCall?.with?.["version-probe-args"]).toBe("${{ toJSON(fromJSON(needs.release-plan.outputs.plan).release.version_probe_args || fromJSON('[]')) }}");
+    const rawStep = buildSteps.find((step) => step.if === "inputs.build-type == 'cargo-raw'");
+    expect(rawStep?.env?.VERSION_PROBE_ARGS).toBe("${{ inputs.version-probe-args }}");
+    expect(rawStep?.run).toContain('"$SOURCE_REVISION" "$VERSION_PROBE_ARGS"');
   });
 });
 

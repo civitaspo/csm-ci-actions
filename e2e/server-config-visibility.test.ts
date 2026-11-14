@@ -3,7 +3,8 @@ import { expect, spyOn, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { fakeFetch } from "../src/lib/testing.ts";
 import { github } from "../src/lib/github.ts";
-import { configureRelease, SERVER, withServerConfig, withoutReleaseOperation } from "./harness.ts";
+import { parseConfig } from "../src/lib/config.ts";
+import { CLIENT, configureRelease, SERVER, withServerConfig, withoutReleaseOperation } from "./harness.ts";
 
 const original = readFileSync(new URL("./fixtures/testing-csm-ci-server/csm-ci.yaml", import.meta.url), "utf8");
 const disabled = withoutReleaseOperation(original);
@@ -53,6 +54,17 @@ test("consecutive server config scenarios use immutable contents despite a stale
   await withServerConfig(ctx, configureRelease("goreleaser"), async () => "goreleaser");
   expect(writes).toEqual([disabled, original, configureRelease("goreleaser")(original), original]);
   expect(contentRefs).not.toContain("main");
+});
+
+test("cargo-raw metadata scenario configures the four native metadata targets and explicit probe argv", () => {
+  const configured = configureRelease("cargo-raw", { rawMetadata: true })(original);
+  const release = parseConfig(configured).repositories.find((entry) => entry.name === CLIENT.toLowerCase())?.release;
+  expect(release).toEqual({
+    build_type: "cargo-raw",
+    binary: "testing-csm-ci-client",
+    targets: ["aarch64-apple-darwin", "x86_64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"],
+    version_probe_args: ["version", "--json"],
+  });
 });
 
 test("server config waits for changed and restored content to become visible", async () => {
