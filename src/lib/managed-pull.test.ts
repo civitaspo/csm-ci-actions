@@ -16,7 +16,7 @@ const body = "wanted\n";
 const CONFIG = `${CONFIG_YAML}\nrepo_settings: { auto_merge_managed_files: true }\n`;
 const GENERATED = generateWorkflows(parseConfig(CONFIG), "owner/repo", "main", { version: "v1.2.3", sha: "1".repeat(40) });
 
-function fixture(options: { extra?: boolean; movedAtEnd?: boolean; signature?: boolean; headContent?: string; nonLinear?: boolean; foreignHead?: boolean; executable?: boolean; repositoryId?: number; repositoryName?: string; pullNumber?: number; pullNodeId?: string; pullState?: string; merged?: boolean; draft?: boolean; baseRepoId?: number; headRepoId?: number; baseRepoName?: string; headRepoName?: string; baseRef?: string; headRef?: string; defaultBranch?: string; pullSha?: string; defaultSha?: string; pullCount?: number; listPullNumber?: number; mergeBaseSha?: string; historyPath?: string; emptyHistory?: boolean; renamed?: boolean } = {}): GitHub {
+function fixture(options: { extra?: boolean; movedAtEnd?: boolean; signature?: boolean; headContent?: string; nonLinear?: boolean; foreignHead?: boolean; executable?: boolean; repositoryId?: number; repositoryName?: string; pullNumber?: number; pullNodeId?: string; pullState?: string; merged?: boolean; draft?: boolean; baseRepoId?: number; headRepoId?: number; baseRepoName?: string; headRepoName?: string; baseRef?: string; headRef?: string; defaultBranch?: string; pullSha?: string; defaultSha?: string; pullCount?: number; listPullNumber?: number; mergeBaseSha?: string; historyPath?: string; emptyHistory?: boolean; renamed?: boolean; objectCalls?: { commits: number; trees: number; blobs: number } } = {}): GitHub {
   let stateReads = 0;
   const repositoryId = options.repositoryId ?? 42;
   const repositoryName = options.repositoryName ?? "owner/repo";
@@ -38,16 +38,25 @@ function fixture(options: { extra?: boolean; movedAtEnd?: boolean; signature?: b
           }
           return { data: { object: { sha: options.pullSha ?? head } } };
         },
-        getTree: async () => ({ data: { truncated: false, tree: [{ path: "managed.yml", type: "blob", mode: options.executable ? "100755" : "100644", sha: blob }] } }),
-        getBlob: async () => ({ data: { encoding: "base64", content: Buffer.from(options.headContent ?? body).toString("base64") } }),
+        getTree: async () => {
+          if (options.objectCalls) options.objectCalls.trees++;
+          return { data: { truncated: false, tree: [{ path: "managed.yml", type: "blob", mode: options.executable ? "100755" : "100644", sha: blob }] } };
+        },
+        getBlob: async () => {
+          if (options.objectCalls) options.objectCalls.blobs++;
+          return { data: { encoding: "base64", content: Buffer.from(options.headContent ?? body).toString("base64") } };
+        },
       },
       repos: {
         compareCommitsWithBasehead: async () => ({ data: { ahead_by: 1, merge_base_commit: { sha: options.mergeBaseSha ?? base }, commits: [{ sha: head }] } }),
-        getCommit: async ({ ref }: { ref: string }) => ({ data: ref === head ? {
-          parents: options.nonLinear ? [{ sha: "e".repeat(40) }, { sha: options.mergeBaseSha ?? base }] : [{ sha: options.mergeBaseSha ?? base }],
-          files: options.emptyHistory ? [] : [{ filename: options.historyPath ?? "managed.yml", ...(options.renamed ? { previous_filename: "managed.yml" } : {}) }], author: { id: 900 }, committer: { login: "web-flow" },
-          commit: { verification: { verified: true }, tree: { sha: tree } },
-        } : { parents: [], commit: { tree: { sha: tree } } } }),
+        getCommit: async ({ ref }: { ref: string }) => {
+          if (options.objectCalls) options.objectCalls.commits++;
+          return { data: ref === head ? {
+            parents: options.nonLinear ? [{ sha: "e".repeat(40) }, { sha: options.mergeBaseSha ?? base }] : [{ sha: options.mergeBaseSha ?? base }],
+            files: options.emptyHistory ? [] : [{ filename: options.historyPath ?? "managed.yml", ...(options.renamed ? { previous_filename: "managed.yml" } : {}) }], author: { id: 900 }, committer: { login: "web-flow" },
+            commit: { verification: { verified: true }, tree: { sha: tree } },
+          } : { parents: [], commit: { tree: { sha: tree } } } };
+        },
       },
     },
     paginate: async (method: unknown) => method === list ? (await list()).data : (await listFiles()).data,
@@ -71,6 +80,14 @@ describe("attestManagedPull", () => {
     const result = await attestManagedPull(fixture(), expected());
     expect(result).toMatchObject({ repositoryId: 42, pullNumber: 7, pullNodeId: "PR_node", baseSha: base, headSha: head, configSha: "f".repeat(40), releaseSha: "1".repeat(40) });
     expect(result.manifestDigest).toMatch(/^[0-9a-f]{64}$/u);
+  });
+
+  test("reads the managed file tree entry once at the pinned head", async () => {
+    const objectCalls = { commits: 0, trees: 0, blobs: 0 };
+
+    await attestManagedPull(fixture({ objectCalls }), expected());
+
+    expect(objectCalls).toEqual({ commits: 3, trees: 1, blobs: 1 });
   });
 
   test.each([

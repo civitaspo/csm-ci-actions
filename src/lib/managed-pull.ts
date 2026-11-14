@@ -205,8 +205,7 @@ export async function attestManagedPull(gh: GitHub, expectation: ManagedPullExpe
   if (actualPaths.length !== expectedPaths.length || actualPaths.some((path, index) => path !== expectedPaths[index]) || changed.some((file) => file.status === "renamed" || file.previous_filename)) reject("managed pull diff does not exactly match the managed manifest");
   for (const entry of desired) {
     const current = await readFileAtRef(gh, owner, repo, entry.path, expectation.headSha);
-    const treeEntry = await findTreeEntry(gh, owner, repo, entry.path, expectation.headSha);
-    if (entry.content === null ? current.content !== null || treeEntry !== null : current.content !== entry.content || treeEntry?.mode !== "100644") reject(`managed pull content or mode differs from the managed manifest at ${JSON.stringify(entry.path)}`);
+    if (entry.content === null ? current.content !== null || current.entry !== null : current.content !== entry.content || current.entry?.mode !== "100644") reject(`managed pull content or mode differs from the managed manifest at ${JSON.stringify(entry.path)}`);
   }
   const final = await readPullState(gh, expectation, repository);
   if (JSON.stringify(initial) !== JSON.stringify(final)) reject("managed pull state changed during validation");

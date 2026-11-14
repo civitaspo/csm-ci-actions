@@ -37595,10 +37595,10 @@ async function readFiles(gh, owner, repo, ref, files) {
 async function readFileAtRef(gh, owner, repo, path, ref) {
   const entry = await findTreeEntry(gh, owner, repo, path, ref);
   if (!entry)
-    return { content: null };
+    return { content: null, entry: null };
   const bytes = await readBlob(gh, owner, repo, path, entry.sha);
   try {
-    return { content: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes) };
+    return { content: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes), entry };
   } catch {
     throw new Rejection(`managed file ${JSON.stringify(path)} is not UTF-8`);
   }
@@ -38622,8 +38622,7 @@ async function attestManagedPull(gh, expectation) {
     reject("managed pull diff does not exactly match the managed manifest");
   for (const entry of desired) {
     const current = await readFileAtRef(gh, owner, repo, entry.path, expectation.headSha);
-    const treeEntry = await findTreeEntry(gh, owner, repo, entry.path, expectation.headSha);
-    if (entry.content === null ? current.content !== null || treeEntry !== null : current.content !== entry.content || treeEntry?.mode !== "100644")
+    if (entry.content === null ? current.content !== null || current.entry !== null : current.content !== entry.content || current.entry?.mode !== "100644")
       reject(`managed pull content or mode differs from the managed manifest at ${JSON.stringify(entry.path)}`);
   }
   const final = await readPullState(gh, expectation, repository);

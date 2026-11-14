@@ -43,7 +43,7 @@ export type ManagedFilesResult = { status: "applied" | "already-applied"; commit
 type ManagedPullRequest = { number: number; title: string; body: string | null; base: { ref: string }; head: { sha: string } };
 
 type GitTreeEntry = { path?: string; type?: string; mode?: string; sha?: string };
-type FileValue = { content: string | null };
+type FileValue = { content: string | null; entry: GitTreeEntry | null };
 
 export function validateManagedFiles(files: Readonly<Record<string, string>>): ManagedFile[] {
   const entries = Object.entries(files).map(([path, content]) => ({ path, content }));
@@ -217,9 +217,9 @@ async function readFiles(gh: GitHub, owner: string, repo: string, ref: string, f
 
 export async function readFileAtRef(gh: GitHub, owner: string, repo: string, path: string, ref: string): Promise<FileValue> {
   const entry = await findTreeEntry(gh, owner, repo, path, ref);
-  if (!entry) return { content: null };
+  if (!entry) return { content: null, entry: null };
   const bytes = await readBlob(gh, owner, repo, path, entry.sha!);
-  try { return { content: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes) }; }
+  try { return { content: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes), entry }; }
   catch { throw new Rejection(`managed file ${JSON.stringify(path)} is not UTF-8`); }
 }
 
