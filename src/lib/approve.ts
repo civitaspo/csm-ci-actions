@@ -8,15 +8,15 @@ import { fetchComment } from "./github-comment.ts";
 import { deriveManagedPullAttestation, type ManagedPullSourceContext } from "./managed-pull-context.ts";
 export { fetchComment } from "./github-comment.ts";
 
-export type ApproveContext = { server: GitHub; approver: GitHub; config: Config; repository: string; serverRun: ServerRun; now: () => Date; requestCommentId?: number; managedSource?: ManagedPullSourceContext };
-export type ManagedApprovalPreflightContext = Pick<ApproveContext, "server" | "config" | "repository" | "managedSource">;
+export type ApproveContext = { server: GitHub; approver: GitHub; config: Config; repository: string; serverRun: ServerRun; now: () => Date; requestCommentId?: number; managedSource?: ManagedPullSourceContext; deriveManagedPull?: typeof deriveManagedPullAttestation };
+export type ManagedApprovalPreflightContext = Pick<ApproveContext, "server" | "config" | "repository" | "managedSource" | "deriveManagedPull">;
 export type ApproveOutcome = { result: "approved" | "already-approved" | "declined" | "dismissed"; head: string; problems: string[] };
 
 /** Read-only gate for minting the Approver App token for a managed pull request. */
 export async function preflightManagedApproval(ctx: ManagedApprovalPreflightContext, pull: PullFacts): Promise<{ head: string }> {
   if (!ctx.managedSource) throw new Rejection("managed approval preflight is missing trusted server provenance");
   checkPullState(pull);
-  const attestation = await deriveManagedPullAttestation({ ...ctx.managedSource, target: ctx.server, repository: ctx.repository, pullNumber: pull.number });
+  const attestation = await (ctx.deriveManagedPull ?? deriveManagedPullAttestation)({ ...ctx.managedSource, target: ctx.server, repository: ctx.repository, pullNumber: pull.number });
   if (!attestation) throw new Rejection("managed approval preflight did not identify an enabled managed pull request");
   const results = await evaluatePullPolicies({ ...ctx, pull });
   const problems = results.flatMap((result) => result.problems.map((problem) => `${result.type}: ${problem}`));
@@ -69,12 +69,12 @@ async function approveHead(ctx: ApproveContext, pull: PullFacts, body: string, f
 }
 
 async function policyProblems(ctx: ApproveContext, pull: PullFacts): Promise<string[]> {
-  const results = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, ...(ctx.managedSource ? { managedSource: ctx.managedSource } : {}) });
+  const results = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, ...(ctx.managedSource ? { managedSource: ctx.managedSource } : {}), ...(ctx.deriveManagedPull ? { deriveManagedPull: ctx.deriveManagedPull } : {}) });
   return results.flatMap((r) => r.problems.map((p) => `${r.type}: ${p}`));
 }
 
 async function refreshPolicy(ctx: ApproveContext, pull: PullFacts): Promise<void> {
-  await updatePolicyCheck({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, ...(ctx.managedSource ? { managedSource: ctx.managedSource } : {}), serverRun: ctx.serverRun, requestKind: "approve", ...(ctx.requestCommentId === undefined ? {} : { requestCommentId: ctx.requestCommentId }) });
+  await updatePolicyCheck({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, ...(ctx.managedSource ? { managedSource: ctx.managedSource } : {}), ...(ctx.deriveManagedPull ? { deriveManagedPull: ctx.deriveManagedPull } : {}), serverRun: ctx.serverRun, requestKind: "approve", ...(ctx.requestCommentId === undefined ? {} : { requestCommentId: ctx.requestCommentId }) });
 }
 
 export async function autoApprove(ctx: ApproveContext, pull: PullFacts): Promise<ApproveOutcome> {
@@ -104,7 +104,7 @@ async function checkHeadPredatesComment(ctx: ApproveContext, pull: PullFacts, co
 
 async function commandApprove(ctx: ApproveContext, pull: PullFacts, comment: CommentFacts): Promise<ApproveOutcome> {
   checkPullState(pull, pullStateOptions(ctx));
-  const results = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, ...(ctx.managedSource ? { managedSource: ctx.managedSource } : {}) }, { commentId: comment.id, authorId: comment.user?.id ?? -1, head: pull.headSha });
+  const results = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, ...(ctx.managedSource ? { managedSource: ctx.managedSource } : {}), ...(ctx.deriveManagedPull ? { deriveManagedPull: ctx.deriveManagedPull } : {}) }, { commentId: comment.id, authorId: comment.user?.id ?? -1, head: pull.headSha });
   const problems = results.flatMap((r) => r.problems.map((p) => `${r.type}: ${p}`));
   if (problems.length > 0) throw new Rejection(`/approve cannot proceed because policy checks failed: ${problems.join("; ")}`);
   await checkHeadPredatesComment(ctx, pull, comment);

@@ -10,7 +10,7 @@ import type { ManagedPullAttestation } from "./managed-pull.ts";
 import { Rejection } from "./request.ts";
 
 const ALWAYS: Policy[] = [{ type: "signed-commits" }, { type: "trusted-committers" }];
-export type PolicyCheckContext = { server: GitHub; config: Config; repository: string; pull: PullFacts; managedSource?: ManagedPullSourceContext };
+export type PolicyCheckContext = { server: GitHub; config: Config; repository: string; pull: PullFacts; managedSource?: ManagedPullSourceContext; deriveManagedPull?: typeof deriveManagedPullAttestation };
 type PublicationContext = PolicyCheckContext & { serverRun: ServerRun; requestKind?: "approve" | "policy-check"; requestCommentId?: number };
 
 export function effectivePolicies(config: Config, repository: string): Policy[] {
@@ -32,7 +32,7 @@ export async function evaluatePullPolicies(ctx: PolicyCheckContext, commandAppro
   let managedFailure: string | undefined;
   if (ctx.managedSource) {
     try {
-      managedAttestation = await deriveManagedPullAttestation({ ...ctx.managedSource, target: ctx.server, repository: ctx.repository, pullNumber: ctx.pull.number });
+      managedAttestation = await (ctx.deriveManagedPull ?? deriveManagedPullAttestation)({ ...ctx.managedSource, target: ctx.server, repository: ctx.repository, pullNumber: ctx.pull.number });
     } catch (error) {
       if (!(error instanceof Rejection)) throw error;
       managedFailure = error.message;

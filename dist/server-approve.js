@@ -38491,7 +38491,7 @@ async function evaluatePullPolicies(ctx, commandApproval) {
   let managedFailure;
   if (ctx.managedSource) {
     try {
-      managedAttestation = await deriveManagedPullAttestation({ ...ctx.managedSource, target: ctx.server, repository: ctx.repository, pullNumber: ctx.pull.number });
+      managedAttestation = await (ctx.deriveManagedPull ?? deriveManagedPullAttestation)({ ...ctx.managedSource, target: ctx.server, repository: ctx.repository, pullNumber: ctx.pull.number });
     } catch (error) {
       if (!(error instanceof Rejection))
         throw error;
@@ -38606,11 +38606,11 @@ async function approveHead(ctx, pull, body, forceMarker = false) {
   return { result: "approved", head, problems: [] };
 }
 async function policyProblems(ctx, pull) {
-  const results = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, ...ctx.managedSource ? { managedSource: ctx.managedSource } : {} });
+  const results = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, ...ctx.managedSource ? { managedSource: ctx.managedSource } : {}, ...ctx.deriveManagedPull ? { deriveManagedPull: ctx.deriveManagedPull } : {} });
   return results.flatMap((r) => r.problems.map((p) => `${r.type}: ${p}`));
 }
 async function refreshPolicy(ctx, pull) {
-  await updatePolicyCheck({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, ...ctx.managedSource ? { managedSource: ctx.managedSource } : {}, serverRun: ctx.serverRun, requestKind: "approve", ...ctx.requestCommentId === undefined ? {} : { requestCommentId: ctx.requestCommentId } });
+  await updatePolicyCheck({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, ...ctx.managedSource ? { managedSource: ctx.managedSource } : {}, ...ctx.deriveManagedPull ? { deriveManagedPull: ctx.deriveManagedPull } : {}, serverRun: ctx.serverRun, requestKind: "approve", ...ctx.requestCommentId === undefined ? {} : { requestCommentId: ctx.requestCommentId } });
 }
 async function autoApprove(ctx, pull) {
   const problems = await policyProblems(ctx, pull);
@@ -38636,7 +38636,7 @@ async function checkHeadPredatesComment(ctx, pull, comment) {
 }
 async function commandApprove(ctx, pull, comment) {
   checkPullState(pull, pullStateOptions(ctx));
-  const results = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, ...ctx.managedSource ? { managedSource: ctx.managedSource } : {} }, { commentId: comment.id, authorId: comment.user?.id ?? -1, head: pull.headSha });
+  const results = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, ...ctx.managedSource ? { managedSource: ctx.managedSource } : {}, ...ctx.deriveManagedPull ? { deriveManagedPull: ctx.deriveManagedPull } : {} }, { commentId: comment.id, authorId: comment.user?.id ?? -1, head: pull.headSha });
   const problems = results.flatMap((r) => r.problems.map((p) => `${r.type}: ${p}`));
   if (problems.length > 0)
     throw new Rejection(`/approve cannot proceed because policy checks failed: ${problems.join("; ")}`);

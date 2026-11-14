@@ -38424,7 +38424,7 @@ async function evaluatePullPolicies(ctx, commandApproval) {
   let managedFailure;
   if (ctx.managedSource) {
     try {
-      managedAttestation = await deriveManagedPullAttestation({ ...ctx.managedSource, target: ctx.server, repository: ctx.repository, pullNumber: ctx.pull.number });
+      managedAttestation = await (ctx.deriveManagedPull ?? deriveManagedPullAttestation)({ ...ctx.managedSource, target: ctx.server, repository: ctx.repository, pullNumber: ctx.pull.number });
     } catch (error) {
       if (!(error instanceof Rejection))
         throw error;

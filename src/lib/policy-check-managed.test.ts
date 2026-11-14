@@ -1,4 +1,4 @@
-import { expect, mock, test } from "bun:test";
+import { expect, test } from "bun:test";
 import type { PullFacts } from "./command.ts";
 import { config, fakeFetch } from "./testing.ts";
 import { github } from "./github.ts";
@@ -9,11 +9,10 @@ const head = "a".repeat(40);
 const pull: PullFacts = { number: 12, state: "open", draft: false, headSha: head, headRepository: repository, baseRepository: repository, baseRef: "main", defaultBranch: "main", authorId: 10 };
 const attestation = {
   repositoryId: 42, repository, pullNumber: 12, pullNodeId: "PR_node", baseRef: "main", baseSha: "b".repeat(40), headSha: head,
-  configSha: "c".repeat(40), releaseSha: "d".repeat(40), manifestDigest: "e".repeat(64),
+  configSha: "c".repeat(40), releaseSha: "d".repeat(40), releaseVersion: "v1.2.3", manifestDigest: "e".repeat(64),
 };
 let derive: () => Promise<typeof attestation | undefined> = async () => attestation;
 
-mock.module("./managed-pull-context.ts", () => ({ deriveManagedPullAttestation: () => derive() }));
 const { evaluatePullPolicies } = await import("./policy-check.ts");
 const { preflightManagedApproval, runApprove } = await import("./approve.ts");
 
@@ -34,7 +33,7 @@ function context(withManagedSource: boolean) {
   const gh = github("test", serverFetch);
   return {
     server: gh, serverFetch, config: cfg, repository, pull,
-    ...(withManagedSource ? { managedSource: { source: gh, serverRepository: "owner/server", configSha: "c".repeat(40), configPath: "csm-ci.yaml" } } : {}),
+    ...(withManagedSource ? { managedSource: { source: gh, serverRepository: "owner/server", configSha: "c".repeat(40), configPath: "csm-ci.yaml" }, deriveManagedPull: () => derive() } : {}),
   };
 }
 
