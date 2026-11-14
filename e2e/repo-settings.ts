@@ -8,8 +8,9 @@ import { annotatePr, assertManagedMetadata, labelPr, ownedAnnotationNumber } fro
 import { z } from "zod";
 import { type GitHub, splitRepository } from "../src/lib/github.ts";
 import { inspectRepoSettingsPreflight } from "../src/lib/repo-settings.ts";
-import { assert, CLIENT, dispatch, hasStatus, jobLog, SERVER, SERVER_BOT_ID, type Ctx, type Scenario, until, withServerConfig } from "./harness.ts";
+import { assert, CLIENT, dispatch, drainWorkflowRuns, hasStatus, jobLog, SERVER, SERVER_BOT_ID, type Ctx, type Scenario, until, withServerConfig } from "./harness.ts";
 import { withCleanup } from "./cleanup.ts";
+import { onceAsync } from "./drain.ts";
 import { parseCreatedRulesets, rulesetCleanupPlan } from "./repo-settings-ownership.ts";
 import { parseAutomergePayload } from "./merge.ts";
 
@@ -586,6 +587,7 @@ export const repoSettings: Scenario[] = [
         }
       };
       const startedAt = new Date(Date.now() - 2_000);
+      const drainManagedWorkflows = onceAsync(() => drainWorkflowRuns(ctx.gh, startedAt, { timeoutMs: 30 * 60_000 }));
       let observedPull: ManagedCompletionPull | undefined;
       let completed = false;
       await withServerConfig(ctx, (text) => {
@@ -693,15 +695,28 @@ export const repoSettings: Scenario[] = [
         assert(JSON.stringify(normalizeRuleSets(after.rulesets)) === JSON.stringify(normalizeRuleSets(snapshot.rulesets)), "automatic managed completion changed repository rulesets or bypass actors");
         completed = true;
         await annotatePr(ctx.gh, CLIENT, observedPull.number, ctx.run, prCase(ctx, "fixture"));
-      }, [
-        async () => {
-          if (completed) return;
-          const head = await managedBranchHead(ctx.gh, CLIENT);
-          if (head) await cleanupManagedState(ctx, head, observedPull ? { number: observedPull.number, headSha: observedPull.headSha } : undefined, CLIENT, ["e2e/repo-settings-managed.txt", driftPath]);
-        },
-        restoreDriftFile,
-        () => restoreRepository(ctx.gh, CLIENT, snapshot, createdRulesetIds),
-      ]));
+      }, [async () => {
+        if (!completed) {
+          // A failed or timed-out dispatch can leave a server workflow operating on this branch.
+          // Do not close/delete its PR or restore its inputs until all workflows in the test window
+          // have finished; if drain cannot prove that, retain the e2e lock and test state for review.
+          await drainManagedWorkflows();
+        }
+        const failures: unknown[] = [];
+        for (const cleanup of [
+          async () => {
+            if (!completed) {
+              const head = await managedBranchHead(ctx.gh, CLIENT);
+              if (head) await cleanupManagedState(ctx, head, observedPull ? { number: observedPull.number, headSha: observedPull.headSha } : undefined, CLIENT, ["e2e/repo-settings-managed.txt", driftPath]);
+            }
+          },
+          restoreDriftFile,
+          () => restoreRepository(ctx.gh, CLIENT, snapshot, createdRulesetIds),
+        ]) {
+          try { await cleanup(); } catch (error) { failures.push(error); }
+        }
+        if (failures.length) throw new AggregateError(failures, "managed auto-completion cleanup failed");
+      }]), async () => drainManagedWorkflows());
     },
   },
   {

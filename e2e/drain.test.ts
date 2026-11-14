@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { drainQueue, releaseAfterDrain } from "./drain.ts";
+import { drainQueue, onceAsync, releaseAfterDrain } from "./drain.ts";
 
 test("cancellation waits for active work and prevents queued work from starting", async () => {
   let stop = false;
@@ -50,4 +50,15 @@ test("the lock is released after downstream workflows finish", async () => {
   const events: string[] = [];
   await releaseAfterDrain(async () => { events.push("workflows finished"); }, async () => { events.push("lock released"); });
   expect(events).toEqual(["workflows finished", "lock released"]);
+});
+
+test("a failed cleanup drain is shared with the outer configuration restore barrier", async () => {
+  let calls = 0;
+  const drain = onceAsync(async () => {
+    calls += 1;
+    throw new Error("workflow still running");
+  });
+  await expect(drain()).rejects.toThrow("workflow still running");
+  await expect(drain()).rejects.toThrow("workflow still running");
+  expect(calls).toBe(1);
 });

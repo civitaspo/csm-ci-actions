@@ -25,3 +25,8 @@ export async function releaseAfterDrain(drain: () => Promise<void>, release: () 
   await drain();
   await release();
 }
+
+export function onceAsync<T>(task: () => Promise<T>): () => Promise<T> {
+  let result: Promise<T> | undefined;
+  return () => result ??= task();
+}
