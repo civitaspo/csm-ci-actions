@@ -24,6 +24,8 @@ repositories:
   - { name: owner/*, ops: [approve, merge, policy-check] }
 `;
 
+export const REPO_SETTINGS_CONFIG_YAML = `${CONFIG_YAML}\nrepo_settings: { auto_merge_managed_files: false }\n`;
+
 export function config(): Config {
   return parseConfig(CONFIG_YAML);
 }

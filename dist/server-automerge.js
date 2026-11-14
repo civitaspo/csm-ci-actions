@@ -26701,6 +26701,9 @@ function warning(message, properties = {}) {
   issueCommand("warning", toCommandProperties(properties), message instanceof Error ? message.toString() : message);
 }
 
+// src/server-automerge/main.ts
+import { createHash as createHash2 } from "node:crypto";
+
 // node_modules/zod/v4/core/util.js
 function getEnumValues(entries) {
   const numericValues = Object.values(entries).filter((v) => typeof v === "number");
@@ -27258,6 +27261,9 @@ function constantCatch(value) {
 
 // node_modules/zod/v4/core/core.js
 var _a;
+var NEVER = /* @__PURE__ */ Object.freeze({
+  status: "aborted"
+});
 var _zodDesc = { value: undefined, enumerable: false };
 var _E = "captureStackTrace" in Error ? Error : null;
 function newError(Definition) {
@@ -32624,7 +32630,7 @@ function duration2(params) {
   return _isoDuration(ZodISODuration, params);
 }
 // src/lib/automerge.ts
-var ReservationPayloadSchema = strictObject({
+var HumanBotReservationPayloadSchema = strictObject({
   version: literal(1),
   repository_id: number2().int().positive(),
   repository: string2().regex(/^[^/]+\/[^/]+$/),
@@ -32643,6 +32649,37 @@ var ReservationPayloadSchema = strictObject({
 }).refine((payload) => payload.mode === "bot" === (payload.merger.type === "Bot"), {
   message: "mode must match the merger type",
   path: ["mode"]
+});
+var ManagedReservationPayloadSchema = strictObject({
+  version: literal(2),
+  kind: literal("managed-files"),
+  repository_id: number2().int().positive(),
+  repository: string2().regex(/^[^/]+\/[^/]+$/),
+  pull_number: number2().int().positive(),
+  pull_node_id: string2().min(1),
+  base_ref: string2().min(1),
+  managed_ref: literal("csm-ci/repo-settings"),
+  accepted_base: string2().regex(/^[0-9a-f]{40}$/),
+  accepted_head: string2().regex(/^[0-9a-f]{40}$/),
+  configuration_sha: string2().regex(/^[0-9a-f]{40}$/),
+  release_version: string2().regex(/^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/),
+  release_sha: string2().regex(/^[0-9a-f]{40}$/),
+  manifest_digest: string2().regex(/^[0-9a-f]{64}$/),
+  idempotency_key: string2().regex(/^[0-9a-f]{64}$/),
+  accepted_at: exports_iso.datetime(),
+  expires_at: exports_iso.datetime()
+}).refine((payload) => Date.parse(payload.expires_at) > Date.parse(payload.accepted_at), {
+  message: "expires_at must be after accepted_at",
+  path: ["expires_at"]
+});
+var ReservationPayloadSchema = unknown().transform((value, ctx) => {
+  const parsed = typeof value === "object" && value !== null && "version" in value && value.version === 2 ? ManagedReservationPayloadSchema.safeParse(value) : HumanBotReservationPayloadSchema.safeParse(value);
+  if (!parsed.success) {
+    for (const issue of parsed.error.issues)
+      ctx.addIssue({ code: "custom", message: issue.message, path: issue.path });
+    return NEVER;
+  }
+  return parsed.data;
 });
 var terminalReasonPrefix = "csm-ci:automerge:reason=";
 var terminalReasons = ["external-merge", "closed", "expired", "invalidated", "rejected", "merged", "cancelled", "other"];
@@ -32678,13 +32715,13 @@ function decide(args) {
     return { kind: "terminal", state: "inactive", reason: "invalidated", description: "merger is no longer trusted", comment: "complete" };
   if (!args.mergeEnabled)
     return { kind: "terminal", state: "inactive", reason: "invalidated", description: "merge is disabled", comment: "complete" };
-  if (payload.mode === "bot" && !args.allowBotRequests)
+  if (payload.version === 1 && payload.mode === "bot" && !args.allowBotRequests)
     return { kind: "terminal", state: "inactive", reason: "invalidated", description: "bot merge requests are disabled", comment: "complete" };
   if (args.pull.baseRef !== payload.base_ref)
     return { kind: "terminal", state: "inactive", reason: "invalidated", description: "base branch changed", comment: "complete" };
   if (!args.baseBranchAllowed)
     return { kind: "terminal", state: "inactive", reason: "invalidated", description: "integration branch is no longer configured", comment: "complete" };
-  if (payload.mode === "bot" && !args.botCommitsValid)
+  if (payload.version === 1 && payload.mode === "bot" && !args.botCommitsValid)
     return { kind: "terminal", state: "failure", reason: "rejected", description: `a commit is not authored by ${payload.merger.login}`, comment: "complete" };
   if (args.pull.draft)
     return { kind: "wait", reason: "draft" };
@@ -36805,6 +36842,7 @@ var RepoSettings = preprocess((input, ctx) => {
   }
   return input;
 }, strictObject({
+  auto_merge_managed_files: boolean2().default(false),
   sponsorships: Sponsorships.optional(),
   settings: strictObject({
     delete_branch_on_merge: boolean2().optional(),
@@ -37246,6 +37284,1016 @@ function ambiguousWrite(error) {
   return typeof error === "object" && error !== null && "status" in error && (error.status === 502 || error.status === 503 || error.status === 504);
 }
 
+// src/lib/generated-workflows.ts
+var STANDARD_CALLERS = {
+  approve: "client-approve.yml",
+  "policy-check": "client-policy-check.yml",
+  merge: "client-merge.yml",
+  release: "client-release-publish.yml",
+  "release-pr": "client-release-prepare.yml"
+};
+var callerPath = (caller) => `.github/workflows/csm-ci-${caller}.yml`;
+var ReleasedRevision = strictObject({ version: string2().regex(/^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u), sha: string2().regex(/^[a-f0-9]{40}$/u) });
+var GENERATED_HEADER = "# Generated by csm-ci from ";
+var hasGeneratedHeader = (text) => text.startsWith(GENERATED_HEADER);
+var isWorkflowFileName = (name) => name.endsWith(".yml") || name.endsWith(".yaml");
+function selectedCallers(config, repository) {
+  const entry = repositoryEntry(config, repository);
+  if (!entry)
+    throw new Error(`repository ${repository} is not configured`);
+  const selected = [];
+  for (const op of ["approve", "policy-check", "merge", "release"])
+    if (entry.ops.includes(op))
+      selected.push(op);
+  if (entry.ops.includes("securefix") && config.securefix?.routes.some((route) => route.name === "release-pr"))
+    selected.push("release-pr");
+  return selected;
+}
+function generateWorkflows(config, repository, defaultBranch, release) {
+  ReleasedRevision.parse(release);
+  const entry = repositoryEntry(config, repository);
+  return Object.fromEntries(selectedCallers(config, repository).map((caller) => {
+    const prepare = caller === "release-pr";
+    const files = entry?.release_prepare?.version_files;
+    const events = caller === "approve" ? { pull_request_target: { types: ["opened", "synchronize", "reopened", "ready_for_review"] }, issue_comment: { types: ["created"] } } : caller === "policy-check" ? { pull_request_target: { types: ["opened", "synchronize", "reopened", "ready_for_review", "edited"] } } : caller === "merge" ? { issue_comment: { types: ["created"] } } : caller === "release" ? { pull_request: { types: ["closed"] } } : { push: { branches: [defaultBranch] }, workflow_dispatch: { inputs: { version: { description: "Optional semantic version without a v prefix.", type: "string", required: false, default: "" } } } };
+    const job = {
+      ...prepare ? { if: "github.event_name == 'workflow_dispatch' || (!startsWith(github.event.head_commit.message, 'chore(release): v') && !startsWith(github.event.head_commit.message, 'release-pr: chore(release): v'))" } : {},
+      uses: `civitaspo/csm-ci-actions/.github/workflows/${STANDARD_CALLERS[caller]}@${release.sha}`,
+      permissions: prepare ? { contents: "read" } : {},
+      ...prepare ? { with: { version: "${{ inputs.version || '' }}", ...files ? { "version-files": JSON.stringify(files) } : {} } } : {},
+      secrets: { CSM_CI_CLIENT_APP_PRIVATE_KEY: "${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}" }
+    };
+    const body = $stringify({ name: `csm-ci-${caller}`, on: events, permissions: {}, jobs: { [caller]: job } }, { lineWidth: 0 });
+    const pinned = body.replace(`@${release.sha}
+`, `@${release.sha} # ${release.version}
+`);
+    const lint = caller === "release" || caller === "release-pr" ? "concurrency-limits" : "concurrency-limits,dangerous-triggers";
+    return [callerPath(caller), `${GENERATED_HEADER}${release.version} (${release.sha}).
+${pinned.replace(`
+on:
+`, `
+# jactionlint ignore=${lint}
+on:
+`)}`];
+  }));
+}
+
+// src/lib/securefix.ts
+var MAX_SECUREFIX_FILES = 512;
+var MAX_SECUREFIX_FILE_SIZE = 8 * 1024 * 1024;
+var MAX_SECUREFIX_TOTAL_SIZE = 10 * 1024 * 1024;
+var MAX_SECUREFIX_MANIFEST_SIZE = 1024 * 1024;
+var SHA256 = /^[a-f0-9]{64}$/;
+var SHA = /^[a-f0-9]{40}$/;
+var ManifestEntry = discriminatedUnion("kind", [
+  strictObject({ kind: literal("write"), path: string2(), size: number2().int().nonnegative(), sha256: string2().regex(SHA256) }),
+  strictObject({ kind: literal("delete"), path: string2() })
+]);
+var SecurefixManifestSchema = strictObject({
+  version: literal(1),
+  repository: string2().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/).transform((value) => value.toLowerCase()),
+  run_id: number2().int().positive(),
+  head_sha: string2().regex(SHA),
+  message: string2().min(1).max(500),
+  files: array(ManifestEntry)
+});
+var SECUREFIX_CLIENT_EVENTS = new Set(["pull_request", "push", "workflow_dispatch"]);
+var SecurefixRunSchema = object({
+  id: number2().int().positive(),
+  run_attempt: number2().int().positive(),
+  event: string2(),
+  head_branch: string2(),
+  head_sha: string2(),
+  path: string2(),
+  repository: object({ id: number2().int().positive(), full_name: string2() }),
+  head_repository: object({ id: number2().int().positive(), full_name: string2() }).nullable(),
+  pull_requests: array(object({
+    number: number2().int().positive(),
+    head: object({ ref: string2(), sha: string2() }),
+    base: object({ ref: string2(), sha: string2() })
+  }))
+});
+
+// src/lib/server-owned-history.ts
+async function isServerMadeCommit(gh, input) {
+  const { data: commit } = await gh.rest.repos.getCommit({ owner: input.owner, repo: input.repo, ref: input.sha });
+  if (commit.committer?.login !== "web-flow" || Number(commit.author?.id) !== input.serverBotId || commit.commit.verification?.verified !== true)
+    return false;
+  const data = await gh.graphql("query($owner: String!, $repo: String!, $sha: GitObjectID!) { repository(owner: $owner, name: $repo) { commit: object(oid: $sha) { ... on Commit { signature { isValid wasSignedByGitHub } } } } }", { owner: input.owner, repo: input.repo, sha: input.sha });
+  const signature = data.repository.commit?.signature;
+  return signature?.isValid === true && signature.wasSignedByGitHub === true;
+}
+async function loadServerOwnedHistory(gh, input) {
+  const comparisonInput = {
+    owner: input.owner,
+    repo: input.repo,
+    basehead: `${input.baseSha}...${input.headSha}`,
+    per_page: 100
+  };
+  const comparison = await gh.rest.repos.compareCommitsWithBasehead(comparisonInput);
+  const result = [];
+  const mergeBaseSha = comparison.data.merge_base_commit?.sha;
+  if (!mergeBaseSha)
+    throw new Rejection(input.messages.incomplete);
+  let expectedParent = mergeBaseSha;
+  const seen = new Set;
+  let commits = comparison.data.commits;
+  let collected = 0;
+  for (let page = 1;; page++) {
+    if (page > 1 && (commits.length === 0 || commits.some(({ sha }) => seen.has(sha)))) {
+      throw new Rejection(input.messages.incomplete);
+    }
+    for (const compared of commits) {
+      seen.add(compared.sha);
+      collected++;
+      if (!await isServerMadeCommit(gh, { owner: input.owner, repo: input.repo, sha: compared.sha, serverBotId: input.serverBotId })) {
+        throw new Rejection(input.messages.untrusted);
+      }
+      const { data: commit } = await gh.rest.repos.getCommit({ owner: input.owner, repo: input.repo, ref: compared.sha });
+      if (commit.parents.length !== 1 || commit.parents[0]?.sha !== expectedParent)
+        throw new Rejection(input.messages.nonLinear);
+      if (commit.files === undefined || commit.files.length >= 300)
+        throw new Rejection(input.messages.changesIncomplete);
+      result.push({ sha: compared.sha, parentSha: expectedParent, files: commit.files });
+      expectedParent = compared.sha;
+    }
+    if (collected >= comparison.data.ahead_by)
+      break;
+    const next = await gh.rest.repos.compareCommitsWithBasehead({ ...comparisonInput, page: page + 1 });
+    commits = next.data.commits;
+  }
+  if (expectedParent !== input.headSha)
+    throw new Rejection(input.messages.incomplete);
+  return result;
+}
+
+// src/lib/managed-files.ts
+var BRANCH = "csm-ci/repo-settings";
+var MANAGED_FILES_TITLE = "chore(repo-settings): sync managed files";
+var PULL_BODY = `Update files managed by csm-ci.
+
+<!-- csm-ci:repo-settings:managed-files -->`;
+var DEFAULT_BRANCH_MESSAGES = {
+  incomplete: "managed files branch commit list is incomplete",
+  untrusted: "managed files branch contains a commit not made by the server",
+  changesIncomplete: "managed files branch change list is incomplete",
+  nonLinear: "managed files branch contains a merge or root commit"
+};
+function validateManagedFiles(files) {
+  const entries = Object.entries(files).map(([path, content]) => ({ path, content }));
+  if (entries.length > MAX_SECUREFIX_FILES)
+    throw new Rejection(`managed files has more than ${MAX_SECUREFIX_FILES} files`);
+  entries.sort((left, right) => left.path.localeCompare(right.path));
+  let totalSize = 0;
+  const paths = new Set;
+  for (const { path, content } of entries) {
+    validateManagedPath(path);
+    if (typeof content !== "string")
+      throw new Rejection(`managed file ${JSON.stringify(path)} content is not text`);
+    const size = Buffer.byteLength(content, "utf8");
+    if (size > MAX_SECUREFIX_FILE_SIZE)
+      throw new Rejection(`managed file ${JSON.stringify(path)} is larger than 8MB`);
+    totalSize += size;
+    if (totalSize > MAX_SECUREFIX_TOTAL_SIZE)
+      throw new Rejection("managed files are larger than 10MB in total");
+    if (paths.has(path))
+      throw new Rejection(`managed files contain duplicate path ${JSON.stringify(path)}`);
+    paths.add(path);
+  }
+  for (const { path } of entries) {
+    const parts = path.split("/");
+    for (let index = 1;index < parts.length; index++) {
+      const ancestor = parts.slice(0, index).join("/");
+      if (paths.has(ancestor))
+        throw new Rejection(`managed file paths conflict at ${JSON.stringify(ancestor)}`);
+    }
+  }
+  return entries;
+}
+function validateManagedPath(path) {
+  if (path.length === 0 || path.startsWith("/") || /^[A-Za-z]:/u.test(path) || path.includes("\\") || /[\u0000-\u001f\u007f]/u.test(path)) {
+    throw new Rejection(`managed file path ${JSON.stringify(path)} is absolute or contains a control character`);
+  }
+  const segments = path.split("/");
+  if (segments.some((segment) => segment === ".."))
+    throw new Rejection(`managed file path ${JSON.stringify(path)} contains ..`);
+  if (segments.some((segment) => segment.toLowerCase() === ".git"))
+    throw new Rejection(`managed file path ${JSON.stringify(path)} contains a .git segment`);
+  if (segments.some((segment) => segment === "" || segment === "."))
+    throw new Rejection(`managed file path ${JSON.stringify(path)} is not normalized`);
+  if (/[!*?{}()[\]]/u.test(path))
+    throw new Rejection(`managed file path ${JSON.stringify(path)} contains a glob character`);
+}
+async function inspectManagedFiles(gh, input) {
+  const files = validateManagedFiles({ ...input.files, ...input.generated?.files });
+  if (input.defaultBranch === BRANCH)
+    throw new Rejection(`managed files branch ${BRANCH} cannot be the repository default branch`);
+  const { owner, repo } = splitRepository(input.repository);
+  const { data: defaultRef } = await gh.rest.git.getRef({ owner, repo, ref: `heads/${input.defaultBranch}` });
+  const defaultSha = defaultRef.object.sha;
+  const generated = input.generated;
+  const deletions = generated ? await generatedDeletions(gh, { owner, repo, defaultSha, generated, additional: input.files }) : [];
+  validateManagedFiles({ ...input.files, ...generated?.files, ...Object.fromEntries(deletions.map((path) => [path, ""])) });
+  const pullBody = generated ? `${PULL_BODY}
+
+Standard client workflows: ${generated.release.version} (${generated.release.sha}).` : PULL_BODY;
+  const metadata = generated ? { deletions, pullBody } : {};
+  if (files.length === 0 && deletions.length === 0)
+    return {
+      status: "already-applied",
+      requiresWorkflowsWrite: false,
+      requiresPullRequestUpdate: false,
+      branchNeedsWrite: false,
+      repository: input.repository.toLowerCase(),
+      defaultBranch: input.defaultBranch,
+      defaultSha,
+      targetSha: null,
+      files,
+      changedPaths: [],
+      pullRequest: null
+    };
+  const sourceValues = await readFiles(gh, owner, repo, defaultSha, files);
+  const changedPaths = [...files.filter(({ path, content }) => sourceValues.get(path)?.content !== content).map(({ path }) => path), ...deletions];
+  if (changedPaths.length === 0)
+    return {
+      status: "already-applied",
+      requiresWorkflowsWrite: false,
+      requiresPullRequestUpdate: false,
+      branchNeedsWrite: false,
+      repository: input.repository.toLowerCase(),
+      defaultBranch: input.defaultBranch,
+      defaultSha,
+      targetSha: null,
+      files,
+      changedPaths,
+      pullRequest: null
+    };
+  const targetSha = await branchHead(gh, owner, repo);
+  let targetHistoryLength;
+  if (targetSha) {
+    const history = await loadServerOwnedHistory(gh, {
+      owner,
+      repo,
+      baseSha: defaultSha,
+      headSha: targetSha,
+      serverBotId: input.serverBotId,
+      messages: DEFAULT_BRANCH_MESSAGES
+    });
+    targetHistoryLength = history.length;
+    const allowed = new Set([...files.map(({ path }) => path), ...deletions]);
+    for (const commit of history) {
+      for (const change of commit.files) {
+        if (!allowed.has(change.filename))
+          throw new Rejection(`managed files branch changed unmanaged path ${JSON.stringify(change.filename)}`);
+        if (change.previous_filename && !allowed.has(change.previous_filename)) {
+          throw new Rejection(`managed files branch changed unmanaged path ${JSON.stringify(change.previous_filename)}`);
+        }
+      }
+    }
+  }
+  const inspectedFiles = [...files, ...deletions.map((path) => ({ path, content: "" }))];
+  const targetValues = targetSha ? await readFiles(gh, owner, repo, targetSha, inspectedFiles) : new Map;
+  const targetMatches = targetSha !== null && files.every(({ path, content }) => targetValues.get(path)?.content === content) && deletions.every((path) => targetValues.get(path)?.content === null);
+  const targetIsAncestorOfDefault = targetSha !== null && targetSha !== defaultSha && targetHistoryLength === 0;
+  const branchNeedsWrite = !targetMatches || targetIsAncestorOfDefault;
+  const pullRequest = await findPullRequest(gh, input.repository, input.defaultBranch, targetSha);
+  const requiresPullRequestUpdate = !pullRequest || pullRequest.title !== MANAGED_FILES_TITLE || pullRequest.body !== pullBody;
+  const status = branchNeedsWrite || requiresPullRequestUpdate ? "ready" : "already-applied";
+  return {
+    status,
+    requiresWorkflowsWrite: branchNeedsWrite && (changedPaths.some((path) => path.startsWith(".github/workflows/")) || targetSha !== null && targetSha !== defaultSha),
+    requiresPullRequestUpdate,
+    branchNeedsWrite,
+    repository: input.repository.toLowerCase(),
+    defaultBranch: input.defaultBranch,
+    defaultSha,
+    targetSha,
+    files,
+    changedPaths,
+    pullRequest: pullRequest?.number ?? null,
+    ...metadata
+  };
+}
+async function generatedDeletions(gh, input) {
+  const { owner, repo } = input;
+  const deletions = [];
+  for (const entry of await listWorkflowFiles(gh, owner, repo, input.defaultSha)) {
+    const path = `.github/workflows/${entry.path}`;
+    if (Object.hasOwn(input.generated.files, path))
+      continue;
+    if (hasGeneratedHeader((await readBlob(gh, owner, repo, path, entry.sha)).toString("latin1")))
+      deletions.push(path);
+  }
+  for (const path of [...Object.keys(input.generated.files), ...deletions]) {
+    if (Object.hasOwn(input.additional, path))
+      throw new Rejection(`managed files contain duplicate producer destination ${JSON.stringify(path)}`);
+  }
+  return deletions.sort();
+}
+async function generatedManagedDeletionsAtRef(gh, input) {
+  const { owner, repo } = splitRepository(input.repository);
+  return generatedDeletions(gh, { owner, repo, defaultSha: input.baseSha, generated: input.generated, additional: input.additional });
+}
+async function listWorkflowFiles(gh, owner, repo, ref) {
+  const { data: commit } = await gh.rest.repos.getCommit({ owner, repo, ref });
+  let treeSha = commit.commit.tree.sha;
+  if (!treeSha)
+    throw new Rejection("managed files commit has no Git tree SHA");
+  for (const segment of [".github", "workflows"]) {
+    const { data: tree } = await gh.rest.git.getTree({ owner, repo, tree_sha: treeSha });
+    if (tree.truncated)
+      throw new Rejection("managed files could not safely inspect a Git tree");
+    const entry = tree.tree.find((candidate) => candidate.path === segment);
+    if (!entry || entry.type !== "tree" || entry.mode !== "040000" || !entry.sha)
+      return [];
+    treeSha = entry.sha;
+  }
+  const { data: tree } = await gh.rest.git.getTree({ owner, repo, tree_sha: treeSha });
+  if (tree.truncated)
+    throw new Rejection("managed files could not safely inspect a Git tree");
+  return tree.tree.flatMap((entry) => entry.type === "blob" && (entry.mode === "100644" || entry.mode === "100755") && entry.sha && entry.path && isWorkflowFileName(entry.path) ? [{ path: entry.path, sha: entry.sha }] : []);
+}
+async function readFiles(gh, owner, repo, ref, files) {
+  const results = await Promise.all(files.map(async ({ path }) => [path, await readFileAtRef(gh, owner, repo, path, ref)]));
+  return new Map(results);
+}
+async function readFileAtRef(gh, owner, repo, path, ref) {
+  const entry = await findTreeEntry(gh, owner, repo, path, ref);
+  if (!entry)
+    return { content: null };
+  const bytes = await readBlob(gh, owner, repo, path, entry.sha);
+  try {
+    return { content: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes) };
+  } catch {
+    throw new Rejection(`managed file ${JSON.stringify(path)} is not UTF-8`);
+  }
+}
+async function readBlob(gh, owner, repo, path, sha) {
+  const { data } = await gh.rest.git.getBlob({ owner, repo, file_sha: sha });
+  if (data.encoding !== "base64")
+    throw new Rejection(`managed file ${JSON.stringify(path)} has an unsupported Git blob encoding`);
+  const encoded = data.content.replaceAll(`
+`, "");
+  const bytes = Buffer.from(encoded, "base64");
+  if (bytes.toString("base64") !== encoded)
+    throw new Rejection(`managed file ${JSON.stringify(path)} has malformed base64`);
+  return bytes;
+}
+async function findTreeEntry(gh, owner, repo, path, ref) {
+  const { data: commit } = await gh.rest.repos.getCommit({ owner, repo, ref });
+  let treeSha = commit.commit.tree.sha;
+  if (!treeSha)
+    throw new Rejection("managed files commit has no Git tree SHA");
+  const segments = path.split("/");
+  for (const [index, segment] of segments.entries()) {
+    const { data: tree } = await gh.rest.git.getTree({ owner, repo, tree_sha: treeSha });
+    if (tree.truncated)
+      throw new Rejection("managed files could not safely inspect a Git tree");
+    const entry = tree.tree.find((candidate) => candidate.path === segment);
+    if (!entry)
+      return null;
+    const fullPath = segments.slice(0, index + 1).join("/");
+    if (index < segments.length - 1) {
+      if (entry.type !== "tree" || entry.mode !== "040000" || !entry.sha)
+        throw new Rejection(`managed path ${JSON.stringify(path)} traverses a non-directory Git entry at ${JSON.stringify(fullPath)}`);
+      treeSha = entry.sha;
+    } else if (entry.type !== "blob" || entry.mode !== "100644" && entry.mode !== "100755" || !entry.sha) {
+      throw new Rejection(`managed file ${JSON.stringify(path)} is not a regular file in the Git tree`);
+    }
+    if (index === segments.length - 1)
+      return entry;
+  }
+  return null;
+}
+async function branchHead(gh, owner, repo) {
+  try {
+    const { data } = await gh.rest.git.getRef({ owner, repo, ref: `heads/${BRANCH}` });
+    return data.object.sha;
+  } catch (error) {
+    if (httpStatus(error) === 404)
+      return null;
+    throw error;
+  }
+}
+async function findPullRequest(gh, repository, defaultBranch, targetSha) {
+  const { owner, repo } = splitRepository(repository);
+  const pulls = await gh.paginate(gh.rest.pulls.list, { owner, repo, state: "open", head: `${owner}:${BRANCH}`, per_page: 100 });
+  if (pulls.length > 1)
+    throw new Rejection("managed files branch has multiple open pull requests");
+  const current = pulls[0];
+  if (!current)
+    return null;
+  if (current.base.ref !== defaultBranch)
+    throw new Rejection("managed files branch has an open pull request for a different base branch");
+  if (targetSha && current.head.sha !== targetSha)
+    throw new Rejection("managed files pull request head does not match the branch head");
+  return current;
+}
+function httpStatus(error) {
+  return typeof error === "object" && error !== null && "status" in error && typeof error.status === "number" ? error.status : undefined;
+}
+
+// src/lib/managed-pull.ts
+import { createHash } from "node:crypto";
+
+// src/lib/additional-managed-files.ts
+async function loadAdditionalManagedFiles(gh, input) {
+  const files = [];
+  const address = splitRepository(input.repository);
+  for (const [destination, source] of Object.entries(input.settings?.additional_managed_files ?? {})) {
+    validateManagedPath(destination);
+    validateManagedPath(source);
+    const entry = await findTreeEntry(gh, address.owner, address.repo, source, input.sha);
+    if (!entry?.sha)
+      throw new Rejection(`additional managed source ${JSON.stringify(source)} is missing`);
+    const { data } = await gh.rest.git.getBlob({ ...address, file_sha: entry.sha });
+    if (data.encoding !== "base64" || typeof data.content !== "string")
+      throw new Rejection(`additional managed source ${JSON.stringify(source)} has malformed or unsupported Git blob encoding`);
+    const encoded = data.content.replaceAll(`
+`, "");
+    const bytes = Buffer.from(encoded, "base64");
+    if (bytes.toString("base64") !== encoded)
+      throw new Rejection(`additional managed source ${JSON.stringify(source)} has malformed or unsupported Git blob encoding`);
+    try {
+      files.push([destination, new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes)]);
+    } catch {
+      throw new Rejection(`additional managed source ${JSON.stringify(source)} is not UTF-8`);
+    }
+    validateManagedFiles(repoSettingsManagedFiles(input.settings, Object.fromEntries(files)));
+  }
+  return repoSettingsManagedFiles(input.settings, Object.fromEntries(files));
+}
+
+// src/lib/workflow-release.ts
+var address = { owner: "civitaspo", repo: "csm-ci-actions" };
+var shaPattern = /^[a-f0-9]{40}$/u;
+var ReleaseMetadata = object({ tag_name: ReleasedRevision.shape.version, draft: literal(false), prerelease: literal(false), published_at: string2().datetime(), id: number2().int().positive() });
+var ObjectReference = object({ type: _enum(["commit", "tag"]), sha: string2().regex(shaPattern) });
+var RecordValue = record(string2(), unknown());
+function object2(value) {
+  return RecordValue.parse(value);
+}
+async function resolveWorkflowRelease(gh, callers) {
+  const { data } = await gh.rest.repos.getLatestRelease(address);
+  const release = ReleaseMetadata.safeParse(data);
+  if (!release.success)
+    throw new Rejection("standard workflows require valid published stable release metadata");
+  const { data: ref } = await gh.rest.git.getRef({ ...address, ref: `tags/${release.data.tag_name}` });
+  let target = ObjectReference.safeParse(ref.object);
+  const seen = new Set;
+  for (let depth = 0;; depth++) {
+    if (!target.success)
+      throw new Rejection("standard workflows release tag must resolve to a full commit SHA");
+    if (target.data.type === "commit")
+      break;
+    if (depth >= 8)
+      throw new Rejection("standard workflows release tag chain exceeds eight tags");
+    if (seen.has(target.data.sha))
+      throw new Rejection("standard workflows release tag chain contains a cycle");
+    seen.add(target.data.sha);
+    const { data: tag } = await gh.rest.git.getTag({ ...address, tag_sha: target.data.sha });
+    target = ObjectReference.safeParse(tag.object);
+  }
+  if (!target.success)
+    throw new Rejection("standard workflows release tag must resolve to a full commit SHA");
+  const revision = ReleasedRevision.parse({ version: release.data.tag_name, sha: target.data.sha });
+  await validateReleasedRevision(gh, revision, callers);
+  return revision;
+}
+async function verifyWorkflowReleaseRevision(gh, revision, callers) {
+  const { data } = await gh.rest.repos.getReleaseByTag({ ...address, tag: revision.version });
+  const release = ReleaseMetadata.safeParse(data);
+  if (!release.success || release.data.tag_name !== revision.version)
+    throw new Rejection("pinned standard workflow release is not a published stable release");
+  const { data: ref } = await gh.rest.git.getRef({ ...address, ref: `tags/${revision.version}` });
+  let target = ObjectReference.safeParse(ref.object);
+  const seen = new Set;
+  for (let depth = 0;; depth++) {
+    if (!target.success)
+      throw new Rejection("standard workflows release tag must resolve to a full commit SHA");
+    if (target.data.type === "commit")
+      break;
+    if (depth >= 8)
+      throw new Rejection("standard workflows release tag chain exceeds eight tags");
+    if (seen.has(target.data.sha))
+      throw new Rejection("standard workflows release tag chain contains a cycle");
+    seen.add(target.data.sha);
+    const { data: tag } = await gh.rest.git.getTag({ ...address, tag_sha: target.data.sha });
+    target = ObjectReference.safeParse(tag.object);
+  }
+  if (!target.success || target.data.sha !== revision.sha)
+    throw new Rejection("pinned standard workflow release version and SHA do not match");
+  await validateReleasedRevision(gh, revision, callers);
+  return revision;
+}
+async function validateReleasedRevision(gh, revision, callers) {
+  const read = (path) => readReleasedFile(gh, path, revision.sha);
+  if (callers.length > 0) {
+    const lock = $parse(await read(".github/workflows/actions.lock"));
+    for (const caller of new Set(callers)) {
+      const path = `.github/workflows/${STANDARD_CALLERS[caller]}`;
+      try {
+        await validateWorkflowContract($parse(await read(path)), caller, lock, read);
+      } catch (error) {
+        throw new Rejection(`released workflow ${path} is incompatible: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+}
+async function readReleasedFile(gh, path, sha) {
+  const { data } = await gh.rest.repos.getContent({ ...address, path, ref: sha });
+  if (Array.isArray(data) || !("content" in data) || data.type !== "file" || data.encoding !== "base64" || typeof data.content !== "string")
+    throw new Rejection(`released file ${path} is not a regular base64 file`);
+  const encoded = data.content.replaceAll(`
+`, "");
+  const bytes = Buffer.from(encoded, "base64");
+  if (bytes.toString("base64") !== encoded)
+    throw new Rejection(`released file ${path} has malformed base64`);
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch {
+    throw new Rejection(`released file ${path} is not UTF-8`);
+  }
+}
+async function validateWorkflowContract(value, caller, lockValue, read) {
+  const workflow = object2(value);
+  const call = object2(object2(workflow.on).workflow_call);
+  const secrets = object2(call.secrets);
+  if (object2(secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY).required !== true)
+    throw new Error("required Client App Secret declaration is missing");
+  for (const [name, declaration] of Object.entries(secrets)) {
+    if (name !== "CSM_CI_CLIENT_APP_PRIVATE_KEY" && object2(declaration).required === true)
+      throw new Error("additional required credentials are unsupported");
+  }
+  const inputs = call.inputs === undefined ? {} : object2(call.inputs);
+  const expected = caller === "release-pr" ? { version: { type: "string", default: "" }, "version-files": { type: "string", default: "" } } : {};
+  for (const [name, required] of Object.entries(expected)) {
+    const declaration = object2(inputs[name]);
+    if (declaration.type !== required.type || declaration.default !== required.default || declaration.required === true)
+      throw new Error(`input ${name} has an incompatible type, default, or requirement`);
+  }
+  for (const [name, declaration] of Object.entries(inputs)) {
+    if (!Object.hasOwn(expected, name) && object2(declaration).required === true)
+      throw new Error(`unsupported required input ${name}`);
+  }
+  const checkPermissions = (value) => {
+    for (const [name, permission] of Object.entries(object2(value ?? {}))) {
+      if (caller !== "release-pr" || name !== "contents" || permission !== "read")
+        throw new Error("workflow permissions exceed caller permissions");
+    }
+  };
+  checkPermissions(workflow.permissions);
+  const lock = object2(lockValue);
+  if (lock.version !== "v0.0.3")
+    throw new Error("unsupported defining action-lock version");
+  const workflowPath = `.github/workflows/${STANDARD_CALLERS[caller]}`;
+  const locked = array(string2()).parse(object2(lock.workflows)[workflowPath]);
+  const dependencies = object2(lock.dependencies);
+  const seen = new Set;
+  const visit = async (steps) => {
+    for (const stepValue of array(unknown()).parse(steps)) {
+      const step = object2(stepValue);
+      if (step.uses === undefined)
+        continue;
+      const uses = string2().parse(step.uses);
+      if (uses.startsWith("$/")) {
+        const local = uses.slice(2);
+        if (!/^actions\/client\/[a-z-]+$/u.test(local))
+          throw new Error("unsupported defining local composite path");
+        if (seen.has(local))
+          throw new Error("defining local composite cycle");
+        seen.add(local);
+        const action = object2($parse(await read(`${local}/action.yml`)));
+        const runs = object2(action.runs);
+        if (runs.using !== "composite")
+          throw new Error("defining local action is not composite");
+        await visit(runs.steps);
+        seen.delete(local);
+      } else {
+        if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_./-]+@[a-f0-9]{40}$/u.test(uses) || !locked.includes(uses))
+          throw new Error(`dependency ${uses} is not supported by the defining action-lock`);
+        const dependency = object2(dependencies[uses]);
+        if (dependency.commit !== `sha1-${uses.split("@")[1]}` || typeof dependency.owner_id !== "number" || typeof dependency.repo_id !== "number")
+          throw new Error(`dependency ${uses} has invalid defining action-lock metadata`);
+      }
+    }
+  };
+  for (const jobValue of Object.values(object2(workflow.jobs))) {
+    const job = object2(jobValue);
+    checkPermissions(job.permissions);
+    if (job.uses !== undefined)
+      throw new Error("nested reusable workflows are unsupported");
+    await visit(job.steps);
+  }
+}
+
+// src/lib/managed-pull.ts
+var MANAGED_REF = "csm-ci/repo-settings";
+var SHA2 = /^[0-9a-f]{40}$/u;
+var GITHUB_ACTIONS_BOT_ID = 41898282;
+function managedDriftDispatchState(input) {
+  const repository = normalizeRepository(input.repository);
+  if (!SHA2.test(input.mergeCommit))
+    reject("managed drift merge commit SHA is invalid");
+  const key = createHash("sha256").update(`${repository}#${input.mergeCommit}`).digest("hex");
+  const expectedTitle = `csm-ci-repo-settings ${repository} ${key}`;
+  const now = (input.now ?? new Date).getTime();
+  const cutoff = now - 30 * 24 * 60 * 60 * 1000;
+  let succeeded = false;
+  let failed = false;
+  for (const run of input.runs) {
+    if (run.displayTitle !== expectedTitle)
+      continue;
+    const createdAt = Date.parse(run.createdAt);
+    if (!Number.isFinite(createdAt))
+      reject("matching managed-drift workflow run has an invalid creation time");
+    if (createdAt > now + 5 * 60 * 1000)
+      reject("matching managed-drift workflow run has a future creation time");
+    if (createdAt < cutoff)
+      continue;
+    if (input.notBefore && createdAt < input.notBefore.getTime())
+      continue;
+    if (run.headBranch !== input.defaultBranch || run.event !== "workflow_dispatch" || run.actorId !== GITHUB_ACTIONS_BOT_ID || run.actorLogin !== "github-actions[bot]") {
+      reject("a matching managed-drift run has ambiguous workflow identity");
+    }
+    if (["queued", "in_progress", "waiting", "pending", "requested"].includes(run.status))
+      return "already-running";
+    if (run.status !== "completed")
+      reject("matching managed-drift workflow run has an unknown status");
+    if (run.conclusion === "success")
+      succeeded = true;
+    else
+      failed = true;
+  }
+  return succeeded ? "already-succeeded" : failed ? "previous-failed" : "dispatch";
+}
+async function verifyManagedMergeTree(input) {
+  const payload = input.reservation;
+  const repository = normalizeRepository(payload.repository);
+  if (!SHA2.test(input.mergeCommit))
+    return { matches: false, reason: "merge commit SHA is invalid" };
+  try {
+    const { owner, repo } = splitRepository(repository);
+    const [repositoryInfo, pullResult] = await Promise.all([
+      input.target.rest.repos.get({ owner, repo }),
+      input.target.rest.pulls.get({ owner, repo, pull_number: payload.pull_number })
+    ]);
+    const pull = pullResult.data;
+    if (Number(repositoryInfo.data.id) !== payload.repository_id || repositoryInfo.data.full_name?.toLowerCase() !== repository) {
+      return { matches: false, reason: "merged managed pull repository identity changed" };
+    }
+    if (pull.state !== "closed" || pull.merged !== true || pull.merge_commit_sha !== input.mergeCommit || pull.node_id !== payload.pull_node_id || pull.head.sha !== payload.accepted_head || pull.base.ref !== payload.base_ref || pull.head.ref !== payload.managed_ref || Number(pull.base.repo?.id) !== payload.repository_id || Number(pull.head.repo?.id) !== payload.repository_id) {
+      return { matches: false, reason: "merged pull does not match the accepted managed reservation" };
+    }
+    const history = await loadServerOwnedHistory(input.target, {
+      owner,
+      repo,
+      baseSha: payload.accepted_base,
+      headSha: payload.accepted_head,
+      serverBotId: input.serverBotId,
+      messages: { incomplete: "accepted managed pull history is incomplete", untrusted: "accepted managed pull contains a commit not made by the server", changesIncomplete: "accepted managed pull change list is incomplete", nonLinear: "accepted managed pull contains a merge or root commit" }
+    });
+    const serverRepository = normalizeRepository(input.serverRepository);
+    const config = await loadConfig(input.source, serverRepository, payload.configuration_sha, input.configPath);
+    if (config.server_repository !== serverRepository)
+      return { matches: false, reason: "accepted managed configuration identifies a different server repository" };
+    if (config.repo_settings?.auto_merge_managed_files !== true)
+      return { matches: false, reason: "accepted managed configuration no longer enables managed completion" };
+    const configured = repositoryEntry(config, repository);
+    if (!configured || !configured.ops.includes("approve") || !configured.ops.includes("policy-check") || !configured.ops.includes("merge")) {
+      return { matches: false, reason: "accepted managed configuration no longer authorizes managed completion" };
+    }
+    const callers = selectedCallers(config, repository);
+    const release = await verifyWorkflowReleaseRevision(input.source, { version: payload.release_version, sha: payload.release_sha }, []);
+    const additional = await loadAdditionalManagedFiles(input.source, { repository: serverRepository, sha: payload.configuration_sha, settings: config.repo_settings });
+    const generated = { release, files: generateWorkflows(config, repository, payload.base_ref, release) };
+    const deletions = await generatedManagedDeletionsAtRef(input.target, { repository, baseSha: payload.accepted_base, generated, additional });
+    if (Object.keys(additional).some((path) => Object.hasOwn(generated.files, path)))
+      return { matches: false, reason: "accepted managed manifest has duplicate producer paths" };
+    const desired = [
+      ...validateManagedFiles({ ...additional, ...generated.files }),
+      ...deletions.map((path) => ({ path, content: null }))
+    ].sort((a, b) => a.path.localeCompare(b.path));
+    const desiredPaths = new Set(desired.map(({ path }) => path));
+    if (desiredPaths.size !== desired.length || history.some((commit) => commit.files.some((file) => file.status === "renamed" || file.previous_filename || !desiredPaths.has(file.filename)))) {
+      return { matches: false, reason: "accepted managed pull changed paths outside the regenerated managed manifest" };
+    }
+    if (managedManifestDigest(desired) !== payload.manifest_digest)
+      return { matches: false, reason: "accepted manifest digest does not match its pinned configuration and release" };
+    return compareManagedManifestTrees(input.target, { owner, repo, expectedRef: payload.accepted_head, actualRef: input.mergeCommit, desired });
+  } catch (error) {
+    if (error instanceof Rejection)
+      return { matches: false, reason: error.message };
+    throw error;
+  }
+}
+async function compareManagedManifestTrees(gh, input) {
+  for (const { path, content } of input.desired) {
+    const [expectedFile, actualFile, expectedEntry, actualEntry] = await Promise.all([
+      readFileAtRef(gh, input.owner, input.repo, path, input.expectedRef),
+      readFileAtRef(gh, input.owner, input.repo, path, input.actualRef),
+      findTreeEntry(gh, input.owner, input.repo, path, input.expectedRef),
+      findTreeEntry(gh, input.owner, input.repo, path, input.actualRef)
+    ]);
+    const expectedMatchesDesired = content === null ? expectedFile.content === null && expectedEntry === null : expectedFile.content === content && expectedEntry?.mode === "100644";
+    if (!expectedMatchesDesired || expectedFile.content !== actualFile.content || expectedEntry?.mode !== actualEntry?.mode) {
+      return { matches: false, reason: `merged tree differs from the accepted managed pull at ${JSON.stringify(path)}` };
+    }
+  }
+  return { matches: true };
+}
+async function attestManagedPull(gh, expectation) {
+  const repository = normalizeRepository(expectation.repository);
+  if (!Number.isSafeInteger(expectation.repositoryId) || expectation.repositoryId <= 0)
+    reject("managed pull repository identity is invalid");
+  if (!Number.isSafeInteger(expectation.pullNumber) || expectation.pullNumber <= 0 || !expectation.pullNodeId)
+    reject("managed pull identity is invalid");
+  for (const [name, sha] of [["base", expectation.defaultSha], ["head", expectation.headSha], ["configuration", expectation.configSha], ["release", expectation.releaseSha]]) {
+    if (!SHA2.test(sha))
+      reject(`managed pull ${name} SHA is invalid`);
+  }
+  if (expectation.inspection.repository.toLowerCase() !== repository || expectation.inspection.defaultBranch !== expectation.defaultBranch || expectation.inspection.defaultSha !== expectation.defaultSha || expectation.inspection.targetSha !== expectation.headSha)
+    reject("managed pull does not match the inspected managed-files state");
+  const desired = desiredChanges(expectation.inspection);
+  const initial = await readPullState(gh, expectation, repository);
+  const history = await loadServerOwnedHistory(gh, {
+    ...splitRepository(repository),
+    baseSha: expectation.defaultSha,
+    headSha: expectation.headSha,
+    serverBotId: expectation.serverBotId,
+    messages: { incomplete: "managed pull commit list is incomplete", untrusted: "managed pull contains a commit not made by the server", changesIncomplete: "managed pull change list is incomplete", nonLinear: "managed pull contains a merge or root commit" }
+  });
+  if (history.length === 0 || history[0]?.parentSha !== expectation.defaultSha)
+    reject("managed pull history does not start at the current default branch");
+  const allowed = new Set(desired.map(({ path }) => path));
+  for (const commit of history) {
+    for (const change of commit.files) {
+      if (!allowed.has(change.filename) || change.previous_filename && !allowed.has(change.previous_filename))
+        reject(`managed pull history changed an unexpected path ${JSON.stringify(change.previous_filename ?? change.filename)}`);
+    }
+  }
+  const { owner, repo } = splitRepository(repository);
+  const changed = await gh.paginate(gh.rest.pulls.listFiles, { owner, repo, pull_number: expectation.pullNumber, per_page: 100 });
+  const actualPaths = changed.map((file) => file.filename).sort();
+  const expectedPaths = desired.map(({ path }) => path).sort();
+  if (actualPaths.length !== expectedPaths.length || actualPaths.some((path, index) => path !== expectedPaths[index]) || changed.some((file) => file.status === "renamed" || file.previous_filename))
+    reject("managed pull diff does not exactly match the managed manifest");
+  for (const entry of desired) {
+    const current = await readFileAtRef(gh, owner, repo, entry.path, expectation.headSha);
+    const treeEntry = await findTreeEntry(gh, owner, repo, entry.path, expectation.headSha);
+    if (entry.content === null ? current.content !== null || treeEntry !== null : current.content !== entry.content || treeEntry?.mode !== "100644")
+      reject(`managed pull content or mode differs from the managed manifest at ${JSON.stringify(entry.path)}`);
+  }
+  const final = await readPullState(gh, expectation, repository);
+  if (JSON.stringify(initial) !== JSON.stringify(final))
+    reject("managed pull state changed during validation");
+  return {
+    repositoryId: expectation.repositoryId,
+    repository,
+    pullNumber: expectation.pullNumber,
+    pullNodeId: expectation.pullNodeId,
+    baseRef: expectation.defaultBranch,
+    baseSha: expectation.defaultSha,
+    headSha: expectation.headSha,
+    configSha: expectation.configSha,
+    releaseSha: expectation.releaseSha,
+    releaseVersion: expectation.releaseVersion,
+    manifestDigest: managedManifestDigest(allDesiredChanges(expectation.inspection))
+  };
+}
+function desiredChanges(inspection) {
+  const deletions = inspection.deletions ?? [];
+  const changes = [
+    ...inspection.files.filter(({ path }) => inspection.changedPaths.includes(path)),
+    ...deletions.map((path) => ({ path, content: null }))
+  ];
+  const paths = changes.map(({ path }) => path);
+  if (new Set(paths).size !== paths.length || paths.some((path) => !inspection.changedPaths.includes(path)))
+    reject("managed pull inspection has an invalid change manifest");
+  if (inspection.changedPaths.length !== paths.length || inspection.changedPaths.some((path) => !paths.includes(path)))
+    reject("managed pull inspection has an incomplete change manifest");
+  return changes.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+}
+function allDesiredChanges(inspection) {
+  return [...inspection.files, ...(inspection.deletions ?? []).map((path) => ({ path, content: null }))];
+}
+function managedManifestDigest(changes) {
+  const hash = createHash("sha256");
+  for (const { path, content } of [...changes].sort((a, b) => a.path.localeCompare(b.path))) {
+    const pathBytes = Buffer.from(path, "utf8");
+    const contentBytes = content === null ? null : Buffer.from(content, "utf8");
+    hash.update(contentBytes === null ? "D" : "F");
+    hash.update(String(pathBytes.length));
+    hash.update(":");
+    hash.update(pathBytes);
+    if (contentBytes) {
+      hash.update(String(contentBytes.length));
+      hash.update(":");
+      hash.update(contentBytes);
+    }
+  }
+  return hash.digest("hex");
+}
+async function readPullState(gh, expected, repository) {
+  const { owner, repo } = splitRepository(repository);
+  const [pulls, { data: currentPull }, { data: defaultRef }, { data: headRef }] = await Promise.all([
+    gh.paginate(gh.rest.pulls.list, { owner, repo, state: "open", head: `${owner}:${MANAGED_REF}`, per_page: 100 }),
+    gh.rest.pulls.get({ owner, repo, pull_number: expected.pullNumber }),
+    gh.rest.git.getRef({ owner, repo, ref: `heads/${expected.defaultBranch}` }),
+    gh.rest.git.getRef({ owner, repo, ref: `heads/${MANAGED_REF}` })
+  ]);
+  const pull = currentPull;
+  if (pulls.length !== 1 || pulls[0]?.number !== expected.pullNumber)
+    reject("managed pull branch does not have exactly one open pull request");
+  if (pull.state !== "open" || pull.merged || pull.draft || pull.node_id !== expected.pullNodeId || pull.number !== expected.pullNumber)
+    reject("managed pull identity or state changed");
+  if (pull.base.repo?.id !== expected.repositoryId || pull.head.repo?.id !== expected.repositoryId || pull.base.repo?.full_name?.toLowerCase() !== repository || pull.head.repo?.full_name?.toLowerCase() !== repository)
+    reject("managed pull repository identity changed");
+  if (pull.base.ref !== expected.defaultBranch || pull.base.repo?.default_branch !== expected.defaultBranch || pull.head.ref !== MANAGED_REF)
+    reject("managed pull base or head ref changed");
+  if (pull.head.sha !== expected.headSha || headRef.object.sha !== expected.headSha || defaultRef.object.sha !== expected.defaultSha)
+    reject("managed pull base or head moved");
+  return JSON.stringify({ repositoryId: pull.base.repo.id, pullNumber: pull.number, pullNodeId: pull.node_id, baseRef: pull.base.ref, baseSha: defaultRef.object.sha, headRef: pull.head.ref, headSha: pull.head.sha, draft: pull.draft });
+}
+function normalizeRepository(value) {
+  if (!/^[^/\s]+\/[^/\s]+$/u.test(value))
+    reject("managed pull repository is invalid");
+  return value.toLowerCase();
+}
+function reject(message) {
+  throw new Rejection(message);
+}
+
+// src/lib/managed-pull-context.ts
+var MANAGED_REF2 = "csm-ci/repo-settings";
+var SHA3 = /^[0-9a-f]{40}$/u;
+async function deriveManagedPullAttestation(input) {
+  const repository = normalizeRepository2(input.repository);
+  const { owner, repo } = splitRepository(repository);
+  const { data: pull } = await input.target.rest.pulls.get({ owner, repo, pull_number: input.pullNumber });
+  if (pull.head.ref !== MANAGED_REF2)
+    return;
+  if (!SHA3.test(input.configSha))
+    throw new Rejection("managed pull configuration revision is invalid");
+  const serverRepository = normalizeRepository2(input.serverRepository);
+  const serverAddress = splitRepository(serverRepository);
+  const { data: server } = await input.source.rest.repos.get(serverAddress);
+  if (!server.default_branch)
+    throw new Rejection("managed pull server default branch is unavailable");
+  const { data: serverRef } = await input.source.rest.git.getRef({ ...serverAddress, ref: `heads/${server.default_branch}` });
+  if (serverRef.object.sha !== input.configSha)
+    throw new Rejection("managed pull configuration is no longer at the server default-branch head");
+  const config = await loadConfig(input.source, serverRepository, input.configSha, input.configPath);
+  if (config.server_repository !== serverRepository)
+    throw new Rejection("managed pull configuration identifies a different server repository");
+  const entry = repositoryEntry(config, repository);
+  if (!entry)
+    throw new Rejection(`managed pull target ${repository} is not configured`);
+  if (config.repo_settings?.auto_merge_managed_files !== true)
+    return;
+  if (!entry.ops.includes("approve") || !entry.ops.includes("policy-check") || !entry.ops.includes("merge")) {
+    throw new Rejection("managed pull automatic completion requires approve, policy-check, and merge operations");
+  }
+  const { data: targetInfo } = await input.target.rest.repos.get({ owner, repo });
+  const repositoryId = Number(targetInfo.id);
+  if (targetInfo.full_name?.toLowerCase() !== repository || !Number.isSafeInteger(repositoryId) || repositoryId <= 0) {
+    throw new Rejection("managed pull target repository identity is invalid");
+  }
+  if (pull.base.repo?.id !== targetInfo.id || pull.head.repo?.id !== targetInfo.id || pull.base.ref !== targetInfo.default_branch || pull.head.repo?.full_name?.toLowerCase() !== repository || pull.base.repo?.full_name?.toLowerCase() !== repository) {
+    throw new Rejection("managed pull repository or base identity changed");
+  }
+  const callers = selectedCallers(config, repository);
+  const headerRelease = await releaseCandidateFromPull(input.target, owner, repo, pull.head.sha, callers);
+  const releaseContext = await resolveManagedPullRelease(input, {
+    repository,
+    repositoryId,
+    pullNumber: pull.number,
+    pullNodeId: pull.node_id,
+    headSha: pull.head.sha,
+    baseRef: pull.base.ref,
+    serverBotId: config.apps.server_bot_id,
+    headerRelease,
+    callers
+  });
+  const release = releaseContext.release;
+  const additional = await loadAdditionalManagedFiles(input.source, { repository: serverRepository, sha: input.configSha, settings: config.repo_settings });
+  const generated = { release, files: generateWorkflows(config, repository, targetInfo.default_branch, release) };
+  const inspection = await inspectManagedFiles(input.target, {
+    repository,
+    defaultBranch: targetInfo.default_branch,
+    serverBotId: config.apps.server_bot_id,
+    generated,
+    files: additional
+  });
+  if (inspection.status !== "ready" || inspection.pullRequest !== input.pullNumber || inspection.targetSha !== pull.head.sha) {
+    throw new Rejection("managed pull does not match the current trusted managed-file proposal");
+  }
+  await assertManagedPullContextCurrent({ source: input.source, serverRepository, defaultBranch: server.default_branch, configSha: input.configSha, callers, release });
+  await revalidateManagedPullRelease(input, {
+    repository,
+    repositoryId,
+    pullNumber: pull.number,
+    pullNodeId: pull.node_id,
+    headSha: pull.head.sha,
+    baseRef: pull.base.ref,
+    serverBotId: config.apps.server_bot_id,
+    headerRelease,
+    callers
+  }, releaseContext);
+  return attestManagedPull(input.target, {
+    repository,
+    repositoryId,
+    pullNumber: pull.number,
+    pullNodeId: pull.node_id,
+    defaultBranch: targetInfo.default_branch,
+    defaultSha: inspection.defaultSha,
+    headSha: pull.head.sha,
+    serverBotId: config.apps.server_bot_id,
+    configSha: input.configSha,
+    releaseSha: release.sha,
+    releaseVersion: release.version,
+    inspection
+  });
+}
+function assertManagedPullReleaseContextCurrent(previous, current) {
+  if (JSON.stringify(current) !== JSON.stringify(previous))
+    throw new Rejection("managed pull reservation or release pin changed during validation");
+}
+async function revalidateManagedPullRelease(input, facts, previous) {
+  const current = await resolveManagedPullRelease(input, facts);
+  assertManagedPullReleaseContextCurrent(previous, current);
+}
+async function resolveManagedPullRelease(input, facts) {
+  if (input.workflowRelease) {
+    await verifyWorkflowReleaseRevision(input.source, input.workflowRelease, facts.callers);
+    return { release: input.workflowRelease };
+  }
+  if (input.deployments) {
+    const records = await findReservationsForPull({
+      server: input.deployments,
+      serverRepository: input.serverRepository,
+      serverBotId: facts.serverBotId,
+      repositoryId: facts.repositoryId,
+      pullNumber: facts.pullNumber,
+      now: new Date
+    });
+    const active = records.filter((record) => record.state.kind === "active");
+    const managed = active.filter((record) => record.payload.version === 2 && record.payload.kind === "managed-files");
+    if (active.some((record) => record.payload.version === 1) || managed.length > 1) {
+      throw new Rejection("managed pull has an ambiguous active reservation");
+    }
+    if (managed.length === 1) {
+      const payload = managed[0].payload;
+      if (payload.repository.toLowerCase() !== facts.repository || payload.repository_id !== facts.repositoryId || payload.pull_number !== facts.pullNumber || payload.pull_node_id !== facts.pullNodeId || payload.base_ref !== facts.baseRef || payload.accepted_head !== facts.headSha || payload.configuration_sha !== input.configSha)
+        throw new Rejection("active managed reservation does not match the current pull request and configuration");
+      if (Date.parse(payload.expires_at) <= Date.now())
+        throw new Rejection("active managed reservation has expired");
+      const pinned = { version: payload.release_version, sha: payload.release_sha };
+      await verifyWorkflowReleaseRevision(input.source, pinned, facts.callers);
+      return { release: pinned, reservation: { deploymentId: managed[0].deploymentId, idempotencyKey: payload.idempotency_key } };
+    }
+  }
+  const latest = await resolveWorkflowRelease(input.source, facts.callers);
+  if (latest.version !== facts.headerRelease.version || latest.sha !== facts.headerRelease.sha) {
+    throw new Rejection("managed pull workflow release is not the current stable release and has no active reservation pin");
+  }
+  return { release: latest };
+}
+async function assertManagedPullContextCurrent(input) {
+  const serverAddress = splitRepository(input.serverRepository);
+  const [currentServerRef] = await Promise.all([
+    input.source.rest.git.getRef({ ...serverAddress, ref: `heads/${input.defaultBranch}` })
+  ]);
+  if (currentServerRef.data.object.sha !== input.configSha)
+    throw new Rejection("managed pull configuration changed during validation");
+  await verifyWorkflowReleaseRevision(input.source, input.release, input.callers);
+}
+async function releaseCandidateFromPull(gh, owner, repo, ref, callers) {
+  const path = `.github/workflows/csm-ci-${callers[0]}.yml`;
+  const { data } = await gh.rest.repos.getContent({ owner, repo, path, ref });
+  if (Array.isArray(data) || data.type !== "file" || data.encoding !== "base64" || typeof data.content !== "string") {
+    throw new Rejection("managed pull has no generated workflow release pin");
+  }
+  const encoded = data.content.replaceAll(`
+`, "");
+  const bytes = Buffer.from(encoded, "base64");
+  if (bytes.toString("base64") !== encoded)
+    throw new Rejection("managed pull generated workflow has malformed base64");
+  const content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  return parseManagedWorkflowReleaseHint(content);
+}
+function parseManagedWorkflowReleaseHint(content) {
+  const header = /^# Generated by csm-ci from (v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?) \(([a-f0-9]{40})\)\.$/mu.exec(content);
+  if (!header)
+    throw new Rejection("managed pull has no valid generated workflow release pin");
+  return ReleasedRevision.parse({ version: header[1], sha: header[2] });
+}
+function normalizeRepository2(value) {
+  if (!/^[^/\s]+\/[^/\s]+$/u.test(value))
+    throw new Rejection("managed pull repository is invalid");
+  return value.toLowerCase();
+}
+
 // src/lib/notify.ts
 function hasServerMarker(comments, text, serverBotId) {
   return comments.some((c) => Number(c.user?.id) === serverBotId && (c.body ?? "").includes(text));
@@ -37613,7 +38661,18 @@ function effectivePolicies(config, repository) {
 async function evaluatePullPolicies(ctx, commandApproval) {
   const trust = evaluateTrust(await fetchCommitFacts(ctx.server, ctx.repository, ctx.pull.number), ctx.pull.headSha, ctx.config);
   const policies = effectivePolicies(ctx.config, ctx.repository);
-  return evaluatePolicies(policies, {
+  let managedAttestation;
+  let managedFailure;
+  if (ctx.managedSource) {
+    try {
+      managedAttestation = await deriveManagedPullAttestation({ ...ctx.managedSource, target: ctx.server, repository: ctx.repository, pullNumber: ctx.pull.number });
+    } catch (error) {
+      if (!(error instanceof Rejection))
+        throw error;
+      managedFailure = error.message;
+    }
+  }
+  const policyContext = {
     trust,
     gh: ctx.server,
     config: ctx.config,
@@ -37622,7 +38681,16 @@ async function evaluatePullPolicies(ctx, commandApproval) {
     head: ctx.pull.headSha,
     authorId: ctx.pull.authorId,
     ...commandApproval ? { commandApproval } : {}
-  });
+  };
+  const results = await evaluatePolicies(policies.filter((policy) => !(managedAttestation && policy.type === "sensitive-paths")), policyContext);
+  if (managedAttestation) {
+    if (policies.some((policy) => policy.type === "sensitive-paths"))
+      results.push({ type: "sensitive-paths", ok: true, problems: [] });
+    results.push({ type: "managed-files", ok: true, problems: [] });
+  } else if (managedFailure) {
+    results.push({ type: "managed-files", ok: false, problems: [managedFailure] });
+  }
+  return results;
 }
 async function approverApprovedHead(server, config, repository, pull) {
   const reviews = await server.paginate(server.rest.pulls.listReviews, { ...splitRepository(repository), pull_number: pull.number, per_page: 100 });
@@ -37652,6 +38720,7 @@ async function pullFacts(server, repository, number) {
     number: p.number,
     state: p.state === "closed" ? "closed" : "open",
     merged: p.merged === true,
+    mergeCommitSha: p.merge_commit_sha ?? null,
     draft: p.draft === true,
     headSha: p.head.sha,
     headRepository: p.head.repo?.full_name ?? null,
@@ -37660,7 +38729,9 @@ async function pullFacts(server, repository, number) {
     defaultBranch: p.base.repo.default_branch,
     authorId: Number(p.user.id),
     repositoryId: Number(p.base.repo.id),
-    nodeId: p.node_id
+    nodeId: p.node_id,
+    title: p.title,
+    body: p.body
   };
 }
 function status(error) {
@@ -37678,9 +38749,10 @@ async function postAutomergeComment(ctx, record, event, text, head) {
   const comments = await ctx.notify.paginate(ctx.notify.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: record.payload.pull_number, per_page: 100 });
   if (hasServerMarker(comments, markerText, ctx.config.apps.server_bot_id))
     return;
+  const footer = record.payload.version === 1 ? receiptFooter({ repository: ctx.repository, pullNumber: record.payload.pull_number, commentId: record.payload.command_comment_id, head, serverRun: ctx.serverRun }) : `<sub><a href="${ctx.serverRun.serverUrl}/${ctx.repository}/pull/${record.payload.pull_number}">Pull request #${record.payload.pull_number}</a> · <a href="${ctx.serverRun.serverUrl}/${ctx.repository}/commit/${head}">Head ${head.slice(0, 7)}</a> · <a href="${ctx.serverRun.serverUrl}/${ctx.serverRun.repository}/actions/runs/${ctx.serverRun.id}/attempts/${ctx.serverRun.attempt}">Server run ${ctx.serverRun.id}, attempt ${ctx.serverRun.attempt}</a></sub>`;
   const body = `csm-ci: ${escapeHtml(text)}
 
-${receiptFooter({ repository: ctx.repository, pullNumber: record.payload.pull_number, commentId: record.payload.command_comment_id, head, serverRun: ctx.serverRun })}
+${footer}
 
 <a href="https://api.github.com/repos/${ctx.serverRepository}/deployments/${record.deploymentId}">Automerge deployment ${record.deploymentId} (API JSON)</a>`;
   try {
@@ -37722,8 +38794,8 @@ async function requiredChecks(ctx, pull) {
   }
   return { ok: problems.length === 0, problems };
 }
-async function readiness(ctx, pull) {
-  const facts = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull });
+async function evaluateMergeReadiness(ctx, pull, managedSource) {
+  const facts = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, ...managedSource ? { managedSource } : {} });
   const failures = facts.filter((result) => !result.ok).flatMap((result) => result.problems.map((problem) => `${result.type}: ${problem}`));
   if (failures.length)
     return { kind: "waiting", reason: `policies failed: ${failures.join("; ")}` };
@@ -37733,6 +38805,13 @@ async function readiness(ctx, pull) {
   if (!checks.ok)
     return { kind: "waiting", reason: `waiting for check ${checks.problems[0]}` };
   return { kind: "ready" };
+}
+async function readiness(ctx, pull) {
+  return evaluateMergeReadiness(ctx, pull);
+}
+function matchesManagedAttestation(record, attestation, pull) {
+  const payload = record.payload;
+  return payload.version === 2 && attestation.repositoryId === payload.repository_id && attestation.repository.toLowerCase() === payload.repository.toLowerCase() && attestation.pullNumber === payload.pull_number && attestation.pullNodeId === payload.pull_node_id && attestation.baseRef === payload.base_ref && attestation.headSha === payload.accepted_head && attestation.configSha === payload.configuration_sha && attestation.releaseSha === payload.release_sha && attestation.releaseVersion === payload.release_version && attestation.baseSha === payload.accepted_base && attestation.manifestDigest === payload.manifest_digest && pull.repositoryId === payload.repository_id && pull.nodeId === payload.pull_node_id && pull.baseRef === payload.base_ref && pull.headSha === payload.accepted_head;
 }
 async function evaluateReservation(ctx, record) {
   ctx.config = await ctx.reloadConfig();
@@ -37768,10 +38847,68 @@ async function evaluateReservation(ctx, record) {
     const decision = latest.state.kind === "terminal" ? terminalDecision(latest) : { kind: "terminal", state: "inactive", reason: "invalidated", description: "reservation identity changed", comment: "complete" };
     return persistTerminal(ctx, latest, targetContext.repository, decision, current, true);
   }
-  const mergerStillTrusted = record.payload.mode === "bot" ? ctx.config.trust.bot_mergers.some((item) => item.id === record.payload.merger.id) : ctx.config.trust.mergers.some((item) => item.id === record.payload.merger.id);
+  if (latest.payload.version === 2 && pull.merged && latest.state.kind === "active") {
+    if (!ctx.verifyManagedMerge || !pull.mergeCommitSha)
+      throw new Rejection("managed merge result verifier is unavailable for the already-merged pull request");
+    const verification = await ctx.verifyManagedMerge({ repository: targetContext.repository, pullNumber: pull.number, mergeCommit: pull.mergeCommitSha, reservation: latest.payload });
+    const decision = verification.matches ? { kind: "terminal", state: "success", reason: "merged", description: `merged as ${pull.mergeCommitSha.slice(0, 7)}`, comment: "complete" } : { kind: "terminal", state: "failure", reason: "rejected", description: `merged, but managed files drifted: ${verification.reason ?? "the merged tree does not match the current desired manifest"}; run repo-settings again`, comment: "complete" };
+    return persistTerminal(ctx, latest, targetContext.repository, decision, current);
+  }
+  if (record.payload.version === 2) {
+    const managedReservation = latest.payload;
+    if (managedReservation.version !== 2)
+      throw new Rejection("managed reservation changed during evaluation");
+    if (!ctx.attestManagedPull || !ctx.managedReadiness || !ctx.verifyManagedMerge) {
+      throw new Rejection("managed-file reservation evaluator is not connected to current configuration, manifest, policy, and merge-result verification");
+    }
+    let attestation;
+    try {
+      attestation = await ctx.attestManagedPull({ repository: targetContext.repository, pullNumber: pull.number, reservation: managedReservation });
+    } catch (error) {
+      if (!(error instanceof Rejection))
+        throw error;
+      const decision = { kind: "terminal", state: "inactive", reason: "invalidated", description: error.message, comment: "complete" };
+      return persistTerminal(ctx, latest, targetContext.repository, decision, current);
+    }
+    if (!attestation || !matchesManagedAttestation(latest, attestation, pull)) {
+      const decision = { kind: "terminal", state: "inactive", reason: "invalidated", description: "managed-file provenance does not match the current reservation", comment: "complete" };
+      return persistTerminal(ctx, latest, targetContext.repository, decision, current);
+    }
+    const entry = repositoryEntry(ctx.config, targetContext.repository);
+    const baseBranchAllowed = pull.baseRef === pull.defaultBranch || entry?.integration_branches?.includes(pull.baseRef) === true;
+    const readinessResult = await ctx.managedReadiness({ repository: targetContext.repository, pull, attestation, reservation: managedReservation });
+    const decision = decide({
+      reservation: { state: latest.state, payload: latest.payload },
+      pull,
+      now: ctx.now(),
+      trustValid: true,
+      mergeEnabled: entry?.ops.includes("merge") === true,
+      baseBranchAllowed,
+      allowBotRequests: true,
+      botCommitsValid: true,
+      readiness: readinessResult
+    });
+    if (latest.state.kind === "active") {
+      await postAutomergeComment(targetContext, latest, "accepted", `Managed-file merge reserved until ${latest.payload.expires_at}. It requires the current managed manifest, approval, policies, and checks. Cancel with /merge cancel. The ${AUTOMERGE_LABEL} label shows the reservation state.`, latest.payload.accepted_head);
+    }
+    if (decision.kind !== "merge" && (decision.kind === "terminal" || latest.state.kind !== "active" || latest.state.waitingReason !== decision.reason)) {
+      const statusDescription = decision.kind === "terminal" ? terminalDescription(decision.reason, decision.description) : decision.reason;
+      await createReservationStatus({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, deploymentId: latest.deploymentId, serverRunUrl: runUrl(ctx.serverRun), pullUrl: pullUrl(ctx.serverRun.serverUrl, targetContext.repository, pull.number), state: decision.kind === "terminal" ? decision.state : "queued", description: statusDescription });
+    }
+    if (decision.kind === "terminal" && decision.comment === "complete") {
+      await postAutomergeComment(targetContext, latest, eventFor(decision), humanTerminalDescription(decision.description), pull.headSha);
+    }
+    const newerActive = current.some((item) => item.deploymentId !== latest.deploymentId && item.state.kind === "active" && Date.parse(item.createdAt) > Date.parse(latest.createdAt));
+    await setLabel(targetContext, pull.number, newerActive || decision.kind !== "terminal" || decision.state === "success");
+    return { decision, ready: decision.kind === "merge", head: decision.kind === "merge" ? decision.head : pull.headSha, reservation: latest, repository: targetContext.repository };
+  }
+  const humanPayload = record.payload;
+  if (humanPayload.version !== 1)
+    throw new Rejection("managed reservation changed during evaluation");
+  const mergerStillTrusted = humanPayload.mode === "bot" ? ctx.config.trust.bot_mergers.some((item) => item.id === humanPayload.merger.id) : ctx.config.trust.mergers.some((item) => item.id === humanPayload.merger.id);
   const baseBranchAllowed = pull.baseRef === pull.defaultBranch || entry?.integration_branches?.includes(pull.baseRef) === true;
-  const botCheckRequired = record.payload.mode === "bot" && latest.state.kind === "active" && pull.state === "open" && ctx.now().getTime() < Date.parse(record.payload.expires_at) && mergerStillTrusted && entry?.ops.includes("merge") === true && baseBranchAllowed && entry.merge?.allow_bot_requests !== false && pull.baseRef === record.payload.base_ref;
-  const botCommitsValid = !botCheckRequired || await verifyBotCommits(targetContext, pull, record.payload.merger);
+  const botCheckRequired = humanPayload.mode === "bot" && latest.state.kind === "active" && pull.state === "open" && ctx.now().getTime() < Date.parse(humanPayload.expires_at) && mergerStillTrusted && entry?.ops.includes("merge") === true && baseBranchAllowed && entry.merge?.allow_bot_requests !== false && pull.baseRef === humanPayload.base_ref;
+  const botCommitsValid = !botCheckRequired || await verifyBotCommits(targetContext, pull, humanPayload.merger);
   let ready = { kind: "waiting", reason: "not evaluated" };
   const preflight = decide({ reservation: { state: latest.state, payload: latest.payload }, pull, now: ctx.now(), trustValid: mergerStillTrusted, mergeEnabled: entry?.ops.includes("merge") === true, baseBranchAllowed, allowBotRequests: entry?.merge?.allow_bot_requests !== false, botCommitsValid, readiness: ready });
   if (preflight.kind === "wait" && preflight.reason === "not evaluated")
@@ -37833,10 +38970,11 @@ async function mergeReservation(ctx, record, head) {
   }
   if (await fetchAutoMergeRequest(ctx.server, evaluated.repository, pull.number))
     throw new Rejection(`GitHub auto-merge is still enabled for pull request #${pull.number}`);
+  const commit = commitText(pull);
   const latest = await evaluateReservation(targetContext, record);
   if (latest.decision.kind !== "merge" || latest.decision.head !== head)
     throw new Rejection("merge readiness changed after disabling auto-merge");
-  const { title, message } = await commitText(targetContext, pull.number);
+  const { title, message } = commit;
   let mergedSha;
   for (let attempt = 0;; attempt++) {
     try {
@@ -37883,6 +39021,18 @@ async function mergeReservation(ctx, record, head) {
   }
   if (!mergedSha)
     throw new Error("merge completed without a commit SHA");
+  if (record.payload.version === 2) {
+    if (!ctx.verifyManagedMerge)
+      throw new Rejection("managed merge completed, but its result verifier is unavailable");
+    const verification = await ctx.verifyManagedMerge({ repository: evaluated.repository, pullNumber: pull.number, mergeCommit: mergedSha, reservation: record.payload });
+    if (!verification.matches) {
+      const message = `merged, but managed files drifted: ${verification.reason ?? "the merged tree does not match the current desired manifest"}; run repo-settings again`;
+      await createReservationStatus({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, deploymentId: record.deploymentId, serverRunUrl: runUrl(ctx.serverRun), pullUrl: pullUrl(ctx.serverRun.serverUrl, evaluated.repository, pull.number), state: "failure", description: terminalDescription("rejected", message) });
+      await postAutomergeComment(targetContext, record, "rejected", message, head);
+      await setLabel(targetContext, pull.number, false);
+      throw new Rejection(message);
+    }
+  }
   await createReservationStatus({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, deploymentId: record.deploymentId, serverRunUrl: runUrl(ctx.serverRun), pullUrl: pullUrl(ctx.serverRun.serverUrl, evaluated.repository, pull.number), state: "success", description: terminalDescription("merged", `merged as ${mergedSha.slice(0, 7)}`) });
   await postAutomergeComment(targetContext, record, "merged", `Pull request squash-merged as ${mergedSha}.`, head);
   await setLabel(targetContext, pull.number, true);
@@ -37916,10 +39066,9 @@ async function disableAutoMerge(ctx, write, pullNumber) {
       throw error;
   }
 }
-async function commitText(ctx, number) {
-  const { data } = await ctx.server.rest.pulls.get({ ...splitRepository(ctx.repository), pull_number: number });
+function commitText(pull) {
   const seen = new Set;
-  const message = (data.body ?? "").split(/\r?\n/).filter((line) => {
+  const message = (pull.body ?? "").split(/\r?\n/).filter((line) => {
     if (!/^Co-authored-by:\s*.+$/i.test(line))
       return true;
     const key = line.toLowerCase();
@@ -37929,7 +39078,7 @@ async function commitText(ctx, number) {
     return true;
   }).join(`
 `);
-  return { title: `${data.title} (#${number})`, message };
+  return { title: `${pull.title} (#${pull.number})`, message };
 }
 function eventFor(decision) {
   if (decision.reason === "merged" || decision.reason === "external-merge")
@@ -38147,6 +39296,124 @@ async function main() {
     notify: github(getInput("notification-token", { required: true })),
     ...mode === "merge" ? { write: github(getInput("write-token", { required: true })) } : {},
     reloadConfig: () => loadCurrentServerConfig(configReader, serverRepository, configPath),
+    attestManagedPull: async ({ repository, pullNumber, reservation }) => {
+      const { owner, repo } = splitRepository(serverRepository);
+      const { data: serverInfo } = await configReader.rest.repos.get({ owner, repo });
+      if (!serverInfo.default_branch)
+        throw new Error("server default branch is unavailable for managed-pull validation");
+      const { data: defaultRef } = await configReader.rest.git.getRef({ owner, repo, ref: `heads/${serverInfo.default_branch}` });
+      return deriveManagedPullAttestation({
+        source: configReader,
+        target: server,
+        serverRepository,
+        configSha: defaultRef.object.sha,
+        configPath,
+        workflowRelease: ReleasedRevision.parse({ version: reservation.release_version, sha: reservation.release_sha }),
+        repository,
+        pullNumber
+      });
+    },
+    managedReadiness: async ({ repository, pull, reservation }) => {
+      const serverInfo = await configReader.rest.repos.get(splitRepository(serverRepository));
+      if (!serverInfo.data.default_branch)
+        throw new Error("server default branch is unavailable for managed policy validation");
+      const defaultRef = await configReader.rest.git.getRef({ ...splitRepository(serverRepository), ref: `heads/${serverInfo.data.default_branch}` });
+      const managedSource = {
+        source: configReader,
+        serverRepository,
+        configSha: defaultRef.data.object.sha,
+        configPath,
+        workflowRelease: ReleasedRevision.parse({ version: reservation.release_version, sha: reservation.release_sha })
+      };
+      return evaluateMergeReadiness({ server, config: ctx.config, repository }, pull, managedSource);
+    },
+    verifyManagedMerge: async ({ repository: targetRepository, mergeCommit, reservation }) => {
+      if (targetRepository.toLowerCase() !== reservation.repository.toLowerCase()) {
+        return { matches: false, reason: "managed merge target identity changed; reconciliation was not dispatched" };
+      }
+      const verification = await verifyManagedMergeTree({
+        source: configReader,
+        target: server,
+        serverRepository,
+        serverBotId: ctx.config.apps.server_bot_id,
+        configPath,
+        reservation,
+        mergeCommit
+      });
+      if (verification.matches)
+        return verification;
+      try {
+        const { owner, repo } = splitRepository(serverRepository);
+        const { data: serverInfo } = await configReader.rest.repos.get({ owner, repo });
+        if (!serverInfo.default_branch)
+          throw new Error("server default branch is unavailable");
+        const readDispatchState = async (notBefore) => {
+          const runs = await configReader.paginate(configReader.rest.actions.listWorkflowRuns, {
+            owner,
+            repo,
+            workflow_id: "csm-ci-repo-settings.yml",
+            event: "workflow_dispatch",
+            per_page: 100
+          });
+          return managedDriftDispatchState({
+            runs: runs.map((run) => ({
+              displayTitle: run.display_title,
+              headBranch: run.head_branch,
+              event: run.event,
+              status: run.status ?? "",
+              conclusion: run.conclusion ?? null,
+              actorId: run.actor?.id == null ? null : Number(run.actor.id),
+              actorLogin: run.actor?.login ?? null,
+              createdAt: run.created_at
+            })),
+            repository: reservation.repository,
+            mergeCommit,
+            defaultBranch: serverInfo.default_branch,
+            ...notBefore ? { notBefore } : {}
+          });
+        };
+        const dispatchState = await readDispatchState();
+        if (dispatchState === "already-running" || dispatchState === "already-succeeded") {
+          const detail = dispatchState === "already-succeeded" ? "already completed successfully" : "is already queued or running";
+          return { ...verification, reason: `${verification.reason ?? "merged tree differs from the accepted managed manifest"}; managed-files reconciliation ${detail}` };
+        }
+        const driftKey = createHash2("sha256").update(`${reservation.repository.toLowerCase()}#${mergeCommit}`).digest("hex");
+        const dispatchStartedAt = new Date;
+        try {
+          await configReader.rest.actions.createWorkflowDispatch({
+            owner,
+            repo,
+            workflow_id: "csm-ci-repo-settings.yml",
+            ref: serverInfo.default_branch,
+            inputs: { repository: reservation.repository.toLowerCase(), targets: "managed-files", "managed-drift-key": driftKey }
+          });
+        } catch (dispatchError) {
+          let lastReadError;
+          for (let attempt = 0;attempt < 3; attempt++) {
+            if (attempt > 0)
+              await new Promise((resolve) => setTimeout(resolve, 500));
+            try {
+              const recovered = await readDispatchState(dispatchStartedAt);
+              if (recovered === "already-running" || recovered === "already-succeeded") {
+                return { ...verification, reason: `${verification.reason ?? "merged tree differs from the accepted managed manifest"}; reconciliation run was found after an ambiguous dispatch response` };
+              }
+              if (recovered === "previous-failed") {
+                return { ...verification, reason: `${verification.reason ?? "merged tree differs from the accepted managed manifest"}; reconciliation run was created but failed after an ambiguous dispatch response` };
+              }
+            } catch (error) {
+              lastReadError = error;
+            }
+          }
+          const writeMessage = dispatchError instanceof Error ? dispatchError.message : String(dispatchError);
+          const readMessage = lastReadError instanceof Error ? `; run lookup also failed: ${lastReadError.message}` : "; no matching run appeared in bounded recovery lookup";
+          return { ...verification, reason: `${verification.reason ?? "merged tree differs from the accepted managed manifest"}; dispatch response was ambiguous and no retry was attempted: ${writeMessage}${readMessage}` };
+        }
+        return { ...verification, reason: `${verification.reason ?? "merged tree differs from the accepted managed manifest"}; managed-files reconciliation dispatched` };
+      } catch (error) {
+        const dispatchError = error instanceof Error ? error.message : String(error);
+        return { ...verification, reason: `${verification.reason ?? "merged tree differs from the accepted managed manifest"}; managed-files reconciliation dispatch failed: ${dispatchError}` };
+      }
+    },
     now: () => new Date
   };
   const summarize = async (state) => {

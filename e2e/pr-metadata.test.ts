@@ -59,7 +59,7 @@ describe("PR intent catalog", () => {
       securefix: ["pr-write", ...["unsafe-path", "symlink", "file-limit", "single-file-size-limit", "total-size-limit"].map((mode) => `client-${mode}`), "workflow-disabled", "forged-run", "target-event", "route-refresh", "alternate-base"].map((id) => `securefix.${id}`),
       release: ["publish-none", "publish-js-action", "publish-goreleaser", "publish-cargo", "publish-cargo-raw", "publish-cargo-raw-metadata", "terraform-replay", "none-replay", "stale-dist", "tag-collision", "foreign-release", "invalid-version", "wrong-merger"].map((id) => `release.${id}`),
       "release-pr": ["version-files-empty", "version-files-explicit", "explicit-refresh", "inferred-version"].map((id) => `release-pr.${id}`),
-      "repo-settings": ["funding-true", "funding-false", "funding-managed-files", "reconciliation"].map((id) => `repo-settings.${id}`),
+      "repo-settings": ["funding-true", "funding-false", "funding-managed-files", "managed-auto-completion", "reconciliation"].map((id) => `repo-settings.${id}`),
     });
   });
 

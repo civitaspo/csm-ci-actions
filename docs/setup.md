@@ -127,6 +127,7 @@ jobs:
       CSM_CI_SERVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
       CSM_CI_APPROVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_APPROVER_APP_PRIVATE_KEY }}
     permissions:
+      actions: write
       contents: read
       issues: write
       id-token: write
@@ -161,6 +162,7 @@ jobs:
   check:
     uses: civitaspo/csm-ci-actions/.github/workflows/server-check.yml@<sha>
     permissions:
+      actions: write
       contents: read
 ```
 
@@ -177,6 +179,7 @@ jobs:
   sweep:
     uses: civitaspo/csm-ci-actions/.github/workflows/server-automerge.yml@<sha> # <version>
     permissions:
+      actions: write
       contents: read
     secrets:
       CSM_CI_SERVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
@@ -307,6 +310,7 @@ Add `.github/workflows/csm-ci-repo-settings.yml` to the server's default branch:
 
 ```yaml
 name: csm-ci-repo-settings
+run-name: csm-ci-repo-settings ${{ inputs.repository }}${{ inputs.managed-drift-key && format(' {0}', inputs.managed-drift-key) || '' }}
 on:
   schedule:
     - cron: '23 3 * * *'
@@ -320,10 +324,15 @@ on:
         description: Comma-separated settings, rulesets, releases, managed-files, or all.
         type: string
         default: all
+      managed-drift-key:
+        description: Deterministic key for automatic managed-file drift re-sync.
+        type: string
+        required: false
 permissions: {}
 jobs:
   settings:
     permissions:
+      actions: write
       contents: read
     uses: civitaspo/csm-ci-actions/.github/workflows/server-repo-settings.yml@<sha>
     with:
@@ -333,6 +342,8 @@ jobs:
       CSM_CI_SERVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
       CSM_CI_APPROVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_APPROVER_APP_PRIVATE_KEY }}
 ```
+
+The `actions: write` permission lets managed-file verification dispatch this workflow when it detects post-merge drift. The optional `managed-drift-key` input and matching `run-name` let the evaluator recover safely if the dispatch response is lost. Update the caller permission, input, run name, and reusable workflow pin together; older callers cannot provide this token scope or accept the correlation input.
 
 Pin `<sha>` to the reviewed actions commit. `targets` selects what a dispatch changes; see [targets](repo-settings.md#targets). A schedule has no inputs and always uses `all`. The schedule repairs drift without creating or re-enabling `controlled-merges`. To activate it, first distribute the merge caller and clear the auto-merge queue, then dispatch for that repository. The server verifies these prerequisites before it changes anything, whenever a dispatch would activate the ruleset.
 

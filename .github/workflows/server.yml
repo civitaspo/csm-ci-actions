@@ -82,6 +82,15 @@ jobs:
           permission-contents: read
           permission-pull-requests: write
           permission-checks: write
+      - id: managed-deployments-token
+        if: contains(fromJSON('["approve", "policy-check"]'), needs.intake.outputs.kind)
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-deployments: read
       - id: securefix-read-token
         if: needs.intake.outputs.kind == 'securefix'
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
@@ -109,6 +118,7 @@ jobs:
         with:
           config-path: ${{ inputs.config-path }}
           server-token: ${{ steps.server-token.outputs.token }}
+          managed-deployments-token: ${{ steps.managed-deployments-token.outputs.token }}
           approver-token: ${{ steps.approver-token.outputs.token }}
           repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
           args: ${{ needs.intake.outputs.args }}
@@ -274,6 +284,7 @@ jobs:
         with:
           config-path: ${{ inputs.config-path }}
           server-token: ${{ steps.server-token.outputs.token }}
+          managed-deployments-token: ${{ steps.managed-deployments-token.outputs.token }}
           repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}
           pull-number: ${{ fromJSON(needs.intake.outputs.args).pull_number }}
       - if: >-
@@ -310,6 +321,7 @@ jobs:
       contains(fromJSON('["approve", "merge", "policy-check"]'), needs.intake.outputs.kind)
     uses: ./.github/workflows/server-automerge-evaluate.yml
     permissions:
+      actions: write
       contents: read
     with:
       repository: ${{ needs.intake.outputs.owner }}/${{ needs.intake.outputs.name }}

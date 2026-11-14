@@ -8,6 +8,7 @@ The optional `repo_settings` block belongs in the server's `csm-ci.yaml`:
 
 ```yaml
 repo_settings:
+  auto_merge_managed_files: false
   settings:
     delete_branch_on_merge: true
     allow_auto_merge: true
@@ -21,7 +22,9 @@ repo_settings:
     .github/PULL_REQUEST_TEMPLATE.md: managed-files/pull-request-template.md
 ```
 
-Omitted repository settings remain unchanged. The merge-method settings accept only the values shown above. `allow_auto_merge` accepts either value. The planned deployment-backed `/merge` does not enable GitHub auto-merge, so this setting will not control that operation. Earlier releases can use GitHub auto-merge; follow their versioned merge documentation until a compatible runtime and reusable workflow are released and installed.
+Omitted repository settings remain unchanged. The merge-method settings accept only the values shown above. `allow_auto_merge` accepts either value and controls GitHub's native auto-merge setting; csm-ci's deployment-backed `/merge` operation uses the Server App and does not enable native auto-merge.
+
+`auto_merge_managed_files` is optional and defaults to `false`. When enabled, csm-ci validates, approves, reserves, and merges only the exact managed-file pull request produced by a successful `managed-files` stage. It uses the ordinary policy, approval, required-check, and protected-merge path. The Approver App must be installed on each target, and target callers must use compatible reusable workflows. The repo-settings caller must accept the optional `managed-drift-key` input, include it in its `run-name`, and grant `actions: write` to the caller job that invokes `server-repo-settings.yml`. The label and automerge callers also need `actions: write` propagated through each reusable-workflow call so the evaluator can dispatch a drift reconciliation. See [setup](setup.md#4-add-the-server-workflows) for caller templates and permissions. Keep the option disabled until the compatible callers and runtime have been installed and the testing-repository E2E suites pass.
 
 `has_wiki`, `has_projects`, and `allow_update_branch` are optional booleans. Each accepts `true` or `false`. The example disables Wiki and Projects and enables GitHub's suggestion to update pull request branches. `allow_update_branch` does not update branches or require branches to be up to date before merging. Existing merge, approval, required-check, and ruleset behavior remains unchanged.
 
@@ -275,11 +278,11 @@ The managed commit headline and pull request title use the Conventional Commit s
 
 Managed files reach default only through the pull request. A trusted merger requests `/merge` after review. New executable files are unsupported because `createCommitOnBranch` cannot set their executable bit.
 
-## Automatic completion, planned
+## Automatic completion
 
-The current managed-file operation stops after it creates or updates the pull request. The normal review, policy, required-check, approval, and protected-merge path remains the safety net until this planned behavior is implemented, released, and enabled by the Server configuration. A branch name, title, body marker, Server Bot identity, or green check by itself does not authorize automatic approval or merge.
+Automatic completion is disabled by default. When `auto_merge_managed_files` is true, the managed-file workflow continues after it creates or confirms the pull request. A branch name, title, body marker, Server Bot identity, or green check by itself does not authorize automatic approval or merge.
 
-The planned behavior applies only to the exact pull request produced by a successful `managed-files` stage. After the stage has written or confirmed the branch and pull request, the server starts a managed-file reservation. The reservation waits for the ordinary client workflows, evaluates current repository policy and required checks, then merges through the Server App when every required condition passes. A rejected or ambiguous managed-file validation creates no reservation. A failure to start or persist a reservation leaves the pull request open for the existing human process and is reported in the run summary.
+The behavior applies only to the exact pull request produced by a successful `managed-files` stage. After the stage has written or confirmed the branch and pull request, the server validates and approves it, then starts a managed-file reservation. The reservation waits for the ordinary client workflows, evaluates current repository policy and required checks, then merges through the Server App when every required condition passes. A rejected or ambiguous managed-file validation creates no reservation. A failure to start or persist a reservation leaves the pull request open for the existing human process and is reported in the run summary.
 
 ### Authorization boundary
 
@@ -317,11 +320,11 @@ Serialize managed reservation creation with `/merge` acceptance for the same PR,
 
 ### Verification and deployment gate
 
-Before implementation, update [design](design.md), [policy-check](policy-check.md), [approve](approve.md), and [merge](merge.md) to define the internal managed attestation, approval authority, reservation schema and lifecycle, trust rules, concurrency groups, and unchanged ruleset boundary. This section does not authorize a configuration, credential, App-permission, or ruleset change. Implement and review those contract changes before enabling automatic managed merges.
+The managed attestation, approval authority, reservation schema and lifecycle, trust rules, concurrency groups, and unchanged ruleset boundary are defined by the corresponding operation contracts. Enabling this behavior changes only the trusted `auto_merge_managed_files` configuration value; it does not require a repository-rule bypass, new credential, or App-permission change. Caller workflow `actions: write` permissions are required for post-merge drift dispatch and must be installed with the compatible caller revision.
 
 Tests must prove that title/body/marker/label alone, a forged Server Bot PR, an extra managed or unmanaged path, modified bytes, a symlink/submodule, unverified or non-linear history, wrong repository/base/ref, duplicate PRs, stale config/release/manifest, and another actor's Server-authored commit cannot obtain an attestation, approval, reservation, or merge. Cover retries after lost deployment/status/approval/merge responses; same-PR races with `/merge`; simultaneous repo-settings runs; head/base/default-branch changes; approval or checks for an old head; old and new reservation schema coexistence; human/bot reservation conflicts; cancellation, expiry, external merge, and recovery from invalidation. Assert that ordinary `/approve`, `/merge`, Renovate, securefix, and unrelated Server Bot PRs retain their current behavior. Mutation-check each new rejection rule.
 
-Deployment is gated on the implementation passing local checks, independent review against the updated specification, and live repo-settings, approve, policy-check, and merge E2E suites in the testing repositories. Confirm that the deployed Server workflow and runtime use compatible revisions before enabling the behavior. Initially enable it only through a trusted server-side configuration flag that defaults off; remove or change that gate only in a reviewed configuration change after the live tests pass. Verify the first enabled run's exact config/release SHAs, generated PRs, reservation IDs, review/check evidence, merge SHAs, and run URLs. Production rollout remains one repository at a time under the repo-settings operational procedure.
+Enable the behavior only after compatible callers and runtime revisions are installed and live repo-settings, approve, policy-check, and merge E2E suites pass in the testing repositories. Verify the first enabled run's exact config/release SHAs, generated PRs, reservation IDs, review/check evidence, merge SHAs, and run URLs. Production rollout remains one repository at a time under the repo-settings operational procedure.
 
 ## Credentials
 

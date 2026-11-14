@@ -5,9 +5,12 @@ import { evaluateTrust, fetchCommitFacts } from "./trust.ts";
 import type { PullFacts } from "./command.ts";
 import { publishPolicyReport } from "./policy-report.ts";
 import type { ServerRun } from "./notify.ts";
+import { deriveManagedPullAttestation, type ManagedPullSourceContext } from "./managed-pull-context.ts";
+import type { ManagedPullAttestation } from "./managed-pull.ts";
+import { Rejection } from "./request.ts";
 
 const ALWAYS: Policy[] = [{ type: "signed-commits" }, { type: "trusted-committers" }];
-export type PolicyCheckContext = { server: GitHub; config: Config; repository: string; pull: PullFacts };
+export type PolicyCheckContext = { server: GitHub; config: Config; repository: string; pull: PullFacts; managedSource?: ManagedPullSourceContext };
 type PublicationContext = PolicyCheckContext & { serverRun: ServerRun; requestKind?: "approve" | "policy-check"; requestCommentId?: number };
 
 export function effectivePolicies(config: Config, repository: string): Policy[] {
@@ -25,11 +28,29 @@ export function effectivePolicies(config: Config, repository: string): Policy[] 
 export async function evaluatePullPolicies(ctx: PolicyCheckContext, commandApproval?: { commentId: number; authorId: number; head: string }): Promise<PolicyResult[]> {
   const trust = evaluateTrust(await fetchCommitFacts(ctx.server, ctx.repository, ctx.pull.number), ctx.pull.headSha, ctx.config);
   const policies = effectivePolicies(ctx.config, ctx.repository);
-  return evaluatePolicies(policies, {
+  let managedAttestation: ManagedPullAttestation | undefined;
+  let managedFailure: string | undefined;
+  if (ctx.managedSource) {
+    try {
+      managedAttestation = await deriveManagedPullAttestation({ ...ctx.managedSource, target: ctx.server, repository: ctx.repository, pullNumber: ctx.pull.number });
+    } catch (error) {
+      if (!(error instanceof Rejection)) throw error;
+      managedFailure = error.message;
+    }
+  }
+  const policyContext = {
     trust, gh: ctx.server, config: ctx.config, repository: ctx.repository,
     pullNumber: ctx.pull.number, head: ctx.pull.headSha, authorId: ctx.pull.authorId,
     ...(commandApproval ? { commandApproval } : {}),
-  });
+  };
+  const results = await evaluatePolicies(policies.filter((policy) => !(managedAttestation && policy.type === "sensitive-paths")), policyContext);
+  if (managedAttestation) {
+    if (policies.some((policy) => policy.type === "sensitive-paths")) results.push({ type: "sensitive-paths", ok: true, problems: [] });
+    results.push({ type: "managed-files", ok: true, problems: [] });
+  } else if (managedFailure) {
+    results.push({ type: "managed-files", ok: false, problems: [managedFailure] });
+  }
+  return results;
 }
 
 export async function approverApprovedHead(server: GitHub, config: Config, repository: string, pull: PullFacts): Promise<boolean> {
@@ -68,18 +89,22 @@ export type PolicyCheckOutcome =
 export async function updatePolicyCheck(ctx: PublicationContext): Promise<PolicyCheckOutcome> {
   if (ctx.pull.state !== "open") return { result: "skipped", reason: `#${ctx.pull.number} is closed` };
   const { owner, repo } = splitRepository(ctx.repository);
+  const checkRuns = await ctx.server.paginate(ctx.server.rest.checks.listForRef, { owner, repo, ref: ctx.pull.headSha, per_page: 100 });
+  const existing = checkRuns.find((c) => c.name === "csm-ci/policy" && c.external_id === ctx.pull.headSha && Number(c.app?.id) === ctx.config.apps.server_app_id);
+  const { data: current } = await ctx.server.rest.pulls.get({ owner, repo, pull_number: ctx.pull.number });
+  if (current.state !== "open") return { result: "skipped", reason: `#${ctx.pull.number} closed before policy publication` };
+  if (current.head.sha !== ctx.pull.headSha) return { result: "skipped", reason: `#${ctx.pull.number} head moved before policy publication` };
+  // Read provenance and all policy inputs after confirming the pinned head, close to publication.
   const policies = await evaluatePullPolicies(ctx);
   const approved = await approverApprovedHead(ctx.server, ctx.config, ctx.repository, ctx.pull);
   const results: PolicyResult[] = [...policies, { type: "approval", ok: approved, problems: approved ? [] : [`${ctx.config.approver.login} has not approved head ${ctx.pull.headSha}`] }];
   const ok = results.every((r) => r.ok);
   const summary = policySummary(results);
-  const completedAt = new Date().toISOString();
-  const checkRuns = await ctx.server.paginate(ctx.server.rest.checks.listForRef, { owner, repo, ref: ctx.pull.headSha, per_page: 100 });
-  const existing = checkRuns.find((c) => c.name === "csm-ci/policy" && c.external_id === ctx.pull.headSha && Number(c.app?.id) === ctx.config.apps.server_app_id);
   const output = { title: ok ? "Policies passed" : "Policies failed", summary };
-  const { data: current } = await ctx.server.rest.pulls.get({ owner, repo, pull_number: ctx.pull.number });
-  if (current.state !== "open") return { result: "skipped", reason: `#${ctx.pull.number} closed before policy publication` };
-  if (current.head.sha !== ctx.pull.headSha) return { result: "skipped", reason: `#${ctx.pull.number} head moved before policy publication` };
+  const completedAt = new Date().toISOString();
+  const { data: final } = await ctx.server.rest.pulls.get({ owner, repo, pull_number: ctx.pull.number });
+  if (final.state !== "open") return { result: "skipped", reason: `#${ctx.pull.number} closed before policy publication` };
+  if (final.head.sha !== ctx.pull.headSha) return { result: "skipped", reason: `#${ctx.pull.number} head moved before policy publication` };
   if (existing) {
     await ctx.server.rest.checks.update({ owner, repo, check_run_id: Number(existing.id), name: "csm-ci/policy", external_id: ctx.pull.headSha, head_sha: ctx.pull.headSha, status: "completed", completed_at: completedAt, conclusion: ok ? "success" : "failure", output });
   } else {

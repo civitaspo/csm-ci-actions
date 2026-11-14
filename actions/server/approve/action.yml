@@ -13,6 +13,9 @@ inputs:
   approver-token:
     description: Approver App token for the client repository with pull_requests:write.
     required: true
+  managed-deployments-token:
+    description: Optional Server App token scoped to the server repository with deployments:read, used to recover an active managed-file release pin.
+    default: ''
   repository:
     description: owner/repo of the client repository.
     required: true

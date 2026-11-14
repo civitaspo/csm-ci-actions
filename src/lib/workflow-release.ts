@@ -29,6 +29,33 @@ export async function resolveWorkflowRelease(gh: GitHub, callers: readonly Calle
   }
   if (!target.success) throw new Rejection("standard workflows release tag must resolve to a full commit SHA");
   const revision = ReleasedRevision.parse({ version: release.data.tag_name, sha: target.data.sha });
+  await validateReleasedRevision(gh, revision, callers);
+  return revision;
+}
+
+/** Verifies a pinned version/SHA pair against trusted stable release and tag APIs. */
+export async function verifyWorkflowReleaseRevision(gh: GitHub, revision: ReleasedRevision, callers: readonly Caller[]): Promise<ReleasedRevision> {
+  const { data } = await gh.rest.repos.getReleaseByTag({ ...address, tag: revision.version });
+  const release = ReleaseMetadata.safeParse(data);
+  if (!release.success || release.data.tag_name !== revision.version) throw new Rejection("pinned standard workflow release is not a published stable release");
+  const { data: ref } = await gh.rest.git.getRef({ ...address, ref: `tags/${revision.version}` });
+  let target = ObjectReference.safeParse(ref.object);
+  const seen = new Set<string>();
+  for (let depth = 0; ; depth++) {
+    if (!target.success) throw new Rejection("standard workflows release tag must resolve to a full commit SHA");
+    if (target.data.type === "commit") break;
+    if (depth >= 8) throw new Rejection("standard workflows release tag chain exceeds eight tags");
+    if (seen.has(target.data.sha)) throw new Rejection("standard workflows release tag chain contains a cycle");
+    seen.add(target.data.sha);
+    const { data: tag } = await gh.rest.git.getTag({ ...address, tag_sha: target.data.sha });
+    target = ObjectReference.safeParse(tag.object);
+  }
+  if (!target.success || target.data.sha !== revision.sha) throw new Rejection("pinned standard workflow release version and SHA do not match");
+  await validateReleasedRevision(gh, revision, callers);
+  return revision;
+}
+
+async function validateReleasedRevision(gh: GitHub, revision: ReleasedRevision, callers: readonly Caller[]): Promise<void> {
   const read = (path: string) => readReleasedFile(gh, path, revision.sha);
   if (callers.length > 0) {
     const lock = parse(await read(".github/workflows/actions.lock"));
@@ -41,7 +68,6 @@ export async function resolveWorkflowRelease(gh: GitHub, callers: readonly Calle
       }
     }
   }
-  return revision;
 }
 
 async function readReleasedFile(gh: GitHub, path: string, sha: string): Promise<string> {

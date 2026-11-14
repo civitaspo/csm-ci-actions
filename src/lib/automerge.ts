@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-const ReservationPayloadSchema = z.strictObject({
+const HumanBotReservationPayloadSchema = z.strictObject({
   version: z.literal(1),
   repository_id: z.number().int().positive(),
   repository: z.string().regex(/^[^/]+\/[^/]+$/),
@@ -21,7 +21,42 @@ const ReservationPayloadSchema = z.strictObject({
   path: ["mode"],
 });
 
-type ReservationPayload = z.infer<typeof ReservationPayloadSchema>;
+const ManagedReservationPayloadSchema = z.strictObject({
+  version: z.literal(2),
+  kind: z.literal("managed-files"),
+  repository_id: z.number().int().positive(),
+  repository: z.string().regex(/^[^/]+\/[^/]+$/),
+  pull_number: z.number().int().positive(),
+  pull_node_id: z.string().min(1),
+  base_ref: z.string().min(1),
+  managed_ref: z.literal("csm-ci/repo-settings"),
+  accepted_base: z.string().regex(/^[0-9a-f]{40}$/),
+  accepted_head: z.string().regex(/^[0-9a-f]{40}$/),
+  configuration_sha: z.string().regex(/^[0-9a-f]{40}$/),
+  release_version: z.string().regex(/^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/),
+  release_sha: z.string().regex(/^[0-9a-f]{40}$/),
+  manifest_digest: z.string().regex(/^[0-9a-f]{64}$/),
+  idempotency_key: z.string().regex(/^[0-9a-f]{64}$/),
+  accepted_at: z.iso.datetime(),
+  expires_at: z.iso.datetime(),
+}).refine((payload) => Date.parse(payload.expires_at) > Date.parse(payload.accepted_at), {
+  message: "expires_at must be after accepted_at",
+  path: ["expires_at"],
+});
+
+type HumanBotReservationPayload = z.infer<typeof HumanBotReservationPayloadSchema>;
+type ManagedReservationPayload = z.infer<typeof ManagedReservationPayloadSchema>;
+type ReservationPayload = HumanBotReservationPayload | ManagedReservationPayload;
+const ReservationPayloadSchema = z.unknown().transform((value, ctx): ReservationPayload => {
+  const parsed = typeof value === "object" && value !== null && "version" in value && value.version === 2
+    ? ManagedReservationPayloadSchema.safeParse(value)
+    : HumanBotReservationPayloadSchema.safeParse(value);
+  if (!parsed.success) {
+    for (const issue of parsed.error.issues) ctx.addIssue({ code: "custom", message: issue.message, path: issue.path });
+    return z.NEVER;
+  }
+  return parsed.data;
+});
 type TerminalState = "success" | "failure" | "inactive";
 type DeploymentStatus = {
   id: number;
@@ -93,10 +128,10 @@ function decide(args: {
   if (args.now.getTime() >= Date.parse(payload.expires_at)) return { kind: "terminal", state: "inactive", reason: "expired", description: "expired", comment: "complete" };
   if (!args.trustValid) return { kind: "terminal", state: "inactive", reason: "invalidated", description: "merger is no longer trusted", comment: "complete" };
   if (!args.mergeEnabled) return { kind: "terminal", state: "inactive", reason: "invalidated", description: "merge is disabled", comment: "complete" };
-  if (payload.mode === "bot" && !args.allowBotRequests) return { kind: "terminal", state: "inactive", reason: "invalidated", description: "bot merge requests are disabled", comment: "complete" };
+  if (payload.version === 1 && payload.mode === "bot" && !args.allowBotRequests) return { kind: "terminal", state: "inactive", reason: "invalidated", description: "bot merge requests are disabled", comment: "complete" };
   if (args.pull.baseRef !== payload.base_ref) return { kind: "terminal", state: "inactive", reason: "invalidated", description: "base branch changed", comment: "complete" };
   if (!args.baseBranchAllowed) return { kind: "terminal", state: "inactive", reason: "invalidated", description: "integration branch is no longer configured", comment: "complete" };
-  if (payload.mode === "bot" && !args.botCommitsValid) return { kind: "terminal", state: "failure", reason: "rejected", description: `a commit is not authored by ${payload.merger.login}`, comment: "complete" };
+  if (payload.version === 1 && payload.mode === "bot" && !args.botCommitsValid) return { kind: "terminal", state: "failure", reason: "rejected", description: `a commit is not authored by ${payload.merger.login}`, comment: "complete" };
   if (args.pull.draft) return { kind: "wait", reason: "draft" };
   if (args.readiness.kind === "waiting") return { kind: "wait", reason: args.readiness.reason };
   return { kind: "merge", head: args.pull.headSha };
@@ -119,6 +154,7 @@ function truncateDeploymentDescription(description: string): string {
 export {
   AUTOMERGE_LABEL,
   ReservationPayloadSchema,
+  ManagedReservationPayloadSchema,
   automergeMarker,
   canCancelReservation,
   decide,
@@ -126,4 +162,4 @@ export {
   terminalDescription,
   truncateDeploymentDescription,
 };
-export type { Decision, DeploymentStatus, ReservationPayload, ReservationState, TerminalReason, TerminalState };
+export type { Decision, DeploymentStatus, HumanBotReservationPayload, ManagedReservationPayload, ReservationPayload, ReservationState, TerminalReason, TerminalState };

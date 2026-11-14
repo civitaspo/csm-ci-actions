@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { type Op, type Release, parseConfig, repositoryEntry } from "./config.ts";
-import { CONFIG_YAML, config } from "./testing.ts";
+import { CONFIG_YAML, config, REPO_SETTINGS_CONFIG_YAML } from "./testing.ts";
 
 describe("parseConfig", () => {
   test("accepts the fixture and lowercases names", () => {
@@ -10,9 +10,15 @@ describe("parseConfig", () => {
   });
 
   test("accepts global repository settings and defaults managed files", () => {
-    const parsed = parseConfig(`${CONFIG_YAML}\nrepo_settings: { settings: { delete_branch_on_merge: true, allow_auto_merge: true, allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false } }\n`);
+    const parsed = parseConfig(REPO_SETTINGS_CONFIG_YAML.replace("auto_merge_managed_files: false", "settings: { delete_branch_on_merge: true, allow_auto_merge: true, allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false }"));
     expect(parsed.repo_settings?.additional_managed_files).toEqual({});
+    expect(parsed.repo_settings?.auto_merge_managed_files).toBe(false);
     expect(parsed.repo_settings?.settings?.allow_squash_merge).toBe(true);
+  });
+
+  test("accepts managed-file automatic completion as an explicit opt-in", () => {
+    const parsed = parseConfig(REPO_SETTINGS_CONFIG_YAML.replace("auto_merge_managed_files: false", "auto_merge_managed_files: true"));
+    expect(parsed.repo_settings?.auto_merge_managed_files).toBe(true);
   });
 
   test("accepts integration branches only on exact repositories with approve and merge enabled", () => {
@@ -24,6 +30,7 @@ describe("parseConfig", () => {
   const rejects: [string, string, RegExp][] = [
     ["unknown top-level key", `${CONFIG_YAML}\nextra: 1\n`, /extra/],
     ["unknown repo settings key", `${CONFIG_YAML}\nrepo_settings: { extra: true }\n`, /extra/],
+    ["managed-file automatic completion flag must be boolean", `${CONFIG_YAML}\nrepo_settings: { auto_merge_managed_files: yes }\n`, /auto_merge_managed_files/],
     ["integration branches reject repository globs", CONFIG_YAML.replace("{ name: owner/*, ops: [approve, merge, policy-check] }", "{ name: owner/*, ops: [approve, merge, policy-check], integration_branches: [prototype/first-ticket] }"), /exact repository name/],
     ["integration branches require approve and merge", CONFIG_YAML.replace("{ name: owner/*, ops: [approve, merge, policy-check] }", "{ name: owner/repo, ops: [policy-check], integration_branches: [prototype/first-ticket] }"), /integration_branches require approve and merge/],
     ["integration branches reject unsafe branch names", CONFIG_YAML.replace("{ name: owner/*, ops: [approve, merge, policy-check] }", "{ name: owner/repo, ops: [approve, merge], integration_branches: [../main] }"), /safe branch name/],

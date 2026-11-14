@@ -27261,6 +27261,9 @@ function constantCatch(value) {
 
 // node_modules/zod/v4/core/core.js
 var _a;
+var NEVER = /* @__PURE__ */ Object.freeze({
+  status: "aborted"
+});
 var _zodDesc = { value: undefined, enumerable: false };
 var _E = "captureStackTrace" in Error ? Error : null;
 function newError(Definition) {
@@ -32771,6 +32774,7 @@ var RepoSettings = preprocess((input, ctx) => {
   }
   return input;
 }, strictObject({
+  auto_merge_managed_files: boolean2().default(false),
   sponsorships: Sponsorships.optional(),
   settings: strictObject({
     delete_branch_on_merge: boolean2().optional(),
@@ -37206,8 +37210,53 @@ var stateSchema = object({ node: object({
   author: object({ __typename: literal("Bot"), databaseId: number2() }),
   issue: object({ number: number2(), repository: object({ nameWithOwner: string2() }) })
 }) });
+
+// src/lib/generated-workflows.ts
+var ReleasedRevision = strictObject({ version: string2().regex(/^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u), sha: string2().regex(/^[a-f0-9]{40}$/u) });
+
+// src/lib/securefix.ts
+var MAX_SECUREFIX_FILE_SIZE = 8 * 1024 * 1024;
+var MAX_SECUREFIX_TOTAL_SIZE = 10 * 1024 * 1024;
+var MAX_SECUREFIX_MANIFEST_SIZE = 1024 * 1024;
+var SHA256 = /^[a-f0-9]{64}$/;
+var SHA = /^[a-f0-9]{40}$/;
+var ManifestEntry = discriminatedUnion("kind", [
+  strictObject({ kind: literal("write"), path: string2(), size: number2().int().nonnegative(), sha256: string2().regex(SHA256) }),
+  strictObject({ kind: literal("delete"), path: string2() })
+]);
+var SecurefixManifestSchema = strictObject({
+  version: literal(1),
+  repository: string2().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/).transform((value) => value.toLowerCase()),
+  run_id: number2().int().positive(),
+  head_sha: string2().regex(SHA),
+  message: string2().min(1).max(500),
+  files: array(ManifestEntry)
+});
+var SECUREFIX_CLIENT_EVENTS = new Set(["pull_request", "push", "workflow_dispatch"]);
+var SecurefixRunSchema = object({
+  id: number2().int().positive(),
+  run_attempt: number2().int().positive(),
+  event: string2(),
+  head_branch: string2(),
+  head_sha: string2(),
+  path: string2(),
+  repository: object({ id: number2().int().positive(), full_name: string2() }),
+  head_repository: object({ id: number2().int().positive(), full_name: string2() }).nullable(),
+  pull_requests: array(object({
+    number: number2().int().positive(),
+    head: object({ ref: string2(), sha: string2() }),
+    base: object({ ref: string2(), sha: string2() })
+  }))
+});
+
+// src/lib/workflow-release.ts
+var shaPattern = /^[a-f0-9]{40}$/u;
+var ReleaseMetadata = object({ tag_name: ReleasedRevision.shape.version, draft: literal(false), prerelease: literal(false), published_at: string2().datetime(), id: number2().int().positive() });
+var ObjectReference = object({ type: _enum(["commit", "tag"]), sha: string2().regex(shaPattern) });
+var RecordValue = record(string2(), unknown());
+
 // src/lib/automerge.ts
-var ReservationPayloadSchema = strictObject({
+var HumanBotReservationPayloadSchema = strictObject({
   version: literal(1),
   repository_id: number2().int().positive(),
   repository: string2().regex(/^[^/]+\/[^/]+$/),
@@ -37226,6 +37275,37 @@ var ReservationPayloadSchema = strictObject({
 }).refine((payload) => payload.mode === "bot" === (payload.merger.type === "Bot"), {
   message: "mode must match the merger type",
   path: ["mode"]
+});
+var ManagedReservationPayloadSchema = strictObject({
+  version: literal(2),
+  kind: literal("managed-files"),
+  repository_id: number2().int().positive(),
+  repository: string2().regex(/^[^/]+\/[^/]+$/),
+  pull_number: number2().int().positive(),
+  pull_node_id: string2().min(1),
+  base_ref: string2().min(1),
+  managed_ref: literal("csm-ci/repo-settings"),
+  accepted_base: string2().regex(/^[0-9a-f]{40}$/),
+  accepted_head: string2().regex(/^[0-9a-f]{40}$/),
+  configuration_sha: string2().regex(/^[0-9a-f]{40}$/),
+  release_version: string2().regex(/^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/),
+  release_sha: string2().regex(/^[0-9a-f]{40}$/),
+  manifest_digest: string2().regex(/^[0-9a-f]{64}$/),
+  idempotency_key: string2().regex(/^[0-9a-f]{64}$/),
+  accepted_at: exports_iso.datetime(),
+  expires_at: exports_iso.datetime()
+}).refine((payload) => Date.parse(payload.expires_at) > Date.parse(payload.accepted_at), {
+  message: "expires_at must be after accepted_at",
+  path: ["expires_at"]
+});
+var ReservationPayloadSchema = unknown().transform((value, ctx) => {
+  const parsed = typeof value === "object" && value !== null && "version" in value && value.version === 2 ? ManagedReservationPayloadSchema.safeParse(value) : HumanBotReservationPayloadSchema.safeParse(value);
+  if (!parsed.success) {
+    for (const issue of parsed.error.issues)
+      ctx.addIssue({ code: "custom", message: issue.message, path: issue.path });
+    return NEVER;
+  }
+  return parsed.data;
 });
 var terminalReasonPrefix = "csm-ci:automerge:reason=";
 var terminalReasons = ["external-merge", "closed", "expired", "invalidated", "rejected", "merged", "cancelled", "other"];
@@ -37325,7 +37405,7 @@ async function getReservation(args) {
 async function createReservation(args) {
   const find = () => findReservationsForPull({ server: args.server, serverRepository: args.serverRepository, serverBotId: args.serverBotId, repositoryId: args.payload.repository_id, pullNumber: args.payload.pull_number, now: new Date });
   const existing = await find();
-  const replay = existing.find((r) => r.payload.command_comment_id === args.payload.command_comment_id);
+  const replay = existing.find((r) => r.payload.version === 1 && r.payload.command_comment_id === args.payload.command_comment_id);
   if (replay)
     return replay;
   const { owner, repo } = splitRepository(args.serverRepository);
@@ -37338,7 +37418,7 @@ async function createReservation(args) {
   } catch (error) {
     if (!ambiguousWrite(error))
       throw error;
-    const created = (await find()).find((r) => r.payload.command_comment_id === args.payload.command_comment_id);
+    const created = (await find()).find((r) => r.payload.version === 1 && r.payload.command_comment_id === args.payload.command_comment_id);
     if (created)
       return created;
     throw error;
@@ -37416,7 +37496,6 @@ function ambiguousWrite(error) {
     return true;
   return typeof error === "object" && error !== null && "status" in error && (error.status === 502 || error.status === 503 || error.status === 504);
 }
-
 // src/lib/automerge-display-commit.ts
 var BRANCH = "csm-ci/automerge";
 var ATTEMPTS = 3;
@@ -37450,8 +37529,10 @@ async function readCommit(server, repository, oid) {
   return object({ repository: object({ object: Commit }) }).parse(response).repository.object;
 }
 function owned(commit, serverBotId) {
-  return commit.author?.user?.databaseId === serverBotId && commit.signature?.isValid === true && commit.signature.wasSignedByGitHub && commit.changedFilesIfAvailable === 0 && commit.parents.nodes.length === 1 && /^csm-ci: automerge [A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[1-9][0-9]*$/u.test(commit.messageHeadline) && commit.messageBody.startsWith(`${DISPLAY_IDENTITY}
+  const validIdentity = commit.messageBody.startsWith(`${DISPLAY_IDENTITY}
+`) || commit.messageBody.startsWith(`csm-ci:automerge-display:managed-files:v2
 `);
+  return commit.author?.user?.databaseId === serverBotId && commit.signature?.isValid === true && commit.signature.wasSignedByGitHub && commit.changedFilesIfAvailable === 0 && commit.parents.nodes.length === 1 && /^csm-ci: automerge [A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[1-9][0-9]*$/u.test(commit.messageHeadline) && validIdentity;
 }
 async function createAutomergeDisplayCommit(args) {
   const { server, serverRepository, payload } = args;
@@ -37460,9 +37541,11 @@ async function createAutomergeDisplayCommit(args) {
   const headline = `csm-ci: automerge ${payload.repository}#${payload.pull_number}`;
   if (headline.length > 255)
     throw new Error("display commit subject is too long");
-  const body = `${DISPLAY_IDENTITY}
+  const body = payload.version === 1 ? `${DISPLAY_IDENTITY}
 repository_id=${payload.repository_id}
-command_comment_id=${payload.command_comment_id}`;
+command_comment_id=${payload.command_comment_id}` : `csm-ci:automerge-display:managed-files:v2
+repository_id=${payload.repository_id}
+idempotency_key=${payload.idempotency_key}`;
   let head = await readHead(server, serverRepository);
   let bootstrapped = false;
   if (!head) {
@@ -37518,6 +37601,7 @@ async function pullFacts(server, repository, number) {
     number: p.number,
     state: p.state === "closed" ? "closed" : "open",
     merged: p.merged === true,
+    mergeCommitSha: p.merge_commit_sha ?? null,
     draft: p.draft === true,
     headSha: p.head.sha,
     headRepository: p.head.repo?.full_name ?? null,
@@ -37526,7 +37610,9 @@ async function pullFacts(server, repository, number) {
     defaultBranch: p.base.repo.default_branch,
     authorId: Number(p.user.id),
     repositoryId: Number(p.base.repo.id),
-    nodeId: p.node_id
+    nodeId: p.node_id,
+    title: p.title,
+    body: p.body
   };
 }
 function status2(error) {
@@ -37594,9 +37680,10 @@ async function postAutomergeComment(ctx, record, event, text, head) {
   const comments = await ctx.notify.paginate(ctx.notify.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: record.payload.pull_number, per_page: 100 });
   if (hasServerMarker(comments, markerText, ctx.config.apps.server_bot_id))
     return;
+  const footer = record.payload.version === 1 ? receiptFooter({ repository: ctx.repository, pullNumber: record.payload.pull_number, commentId: record.payload.command_comment_id, head, serverRun: ctx.serverRun }) : `<sub><a href="${ctx.serverRun.serverUrl}/${ctx.repository}/pull/${record.payload.pull_number}">Pull request #${record.payload.pull_number}</a> · <a href="${ctx.serverRun.serverUrl}/${ctx.repository}/commit/${head}">Head ${head.slice(0, 7)}</a> · <a href="${ctx.serverRun.serverUrl}/${ctx.serverRun.repository}/actions/runs/${ctx.serverRun.id}/attempts/${ctx.serverRun.attempt}">Server run ${ctx.serverRun.id}, attempt ${ctx.serverRun.attempt}</a></sub>`;
   const body = `csm-ci: ${escapeHtml(text)}
 
-${receiptFooter({ repository: ctx.repository, pullNumber: record.payload.pull_number, commentId: record.payload.command_comment_id, head, serverRun: ctx.serverRun })}
+${footer}
 
 <a href="https://api.github.com/repos/${ctx.serverRepository}/deployments/${record.deploymentId}">Automerge deployment ${record.deploymentId} (API JSON)</a>`;
   try {
@@ -37656,11 +37743,12 @@ async function postCancelReceipt(ctx, record, commentId, message) {
   const comments = await ctx.notify.paginate(ctx.notify.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: record.payload.pull_number, per_page: 100 });
   if (hasServerMarker(comments, receipt, ctx.config.apps.server_bot_id))
     return;
+  const footer = record.payload.version === 1 ? receiptFooter({ repository: ctx.repository, pullNumber: record.payload.pull_number, commentId, head: record.payload.accepted_head, serverRun: ctx.serverRun }) : `<sub><a href="${ctx.serverRun.serverUrl}/${ctx.repository}/pull/${record.payload.pull_number}">Pull request #${record.payload.pull_number}</a> · <a href="${ctx.serverRun.serverUrl}/${ctx.serverRun.repository}/actions/runs/${ctx.serverRun.id}/attempts/${ctx.serverRun.attempt}">Server run ${ctx.serverRun.id}, attempt ${ctx.serverRun.attempt}</a></sub>`;
   const body = `${receipt}
 ${eventMarker}
 ${message}
 
-${receiptFooter({ repository: ctx.repository, pullNumber: record.payload.pull_number, commentId, head: record.payload.accepted_head, serverRun: ctx.serverRun })}`;
+${footer}`;
   await postResult(ctx.notify, ctx.repository, record.payload.pull_number, receipt, body);
 }
 async function prepareMergeAcceptance(ctx, args) {
@@ -37676,7 +37764,7 @@ async function prepareMergeAcceptance(ctx, args) {
   if (command.name !== "merge")
     throw new Rejection(`comment ${comment.id} is not /merge`);
   const existing = await findReservationsForPull({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, repositoryId: pull.repositoryId, pullNumber: pull.number, now: ctx.now() });
-  const replay = existing.find((record) => record.payload.command_comment_id === comment.id);
+  const replay = existing.find((record) => record.payload.version === 1 && record.payload.command_comment_id === comment.id);
   if (replay)
     return { kind: "replay", pull, comment, reservation: replay };
   const oldReceipts = await ctx.server.paginate(ctx.server.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: pull.number, per_page: 100 });
@@ -37707,8 +37795,9 @@ async function rejectActiveReservation(ctx, pull, comment, active) {
   const markerText = `<!-- csm-ci:automerge:merge:${comment.id}:rejected -->`;
   const comments = await ctx.notify.paginate(ctx.notify.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: pull.number, per_page: 100 });
   if (!hasServerMarker(comments, markerText, ctx.config.apps.server_bot_id)) {
+    const owner = active.payload.version === 1 ? ` by ${active.payload.merger.login}` : " by the managed-files operation";
     const body = `${markerText}
-Pull request is already reserved by ${active.payload.merger.login}.
+Pull request is already reserved${owner}.
 
 ${receiptFooter({ repository: ctx.repository, pullNumber: pull.number, commentId: comment.id, head: pull.headSha, serverRun: ctx.serverRun })}`;
     await postResult(ctx.notify, ctx.repository, pull.number, markerText, body);
@@ -37752,7 +37841,7 @@ async function acceptMerge(ctx, args) {
   if (autoMerge)
     throw new Rejection(`GitHub auto-merge is still enabled for pull request #${pull.number}; csm-ci could not safely accept the request`);
   const acceptedAt = ctx.now();
-  const payload = ReservationPayloadSchema.parse({
+  const parsedPayload = ReservationPayloadSchema.parse({
     version: 1,
     repository_id: pull.repositoryId,
     repository: ctx.repository,
@@ -37766,6 +37855,9 @@ async function acceptMerge(ctx, args) {
     accepted_at: acceptedAt.toISOString(),
     expires_at: new Date(acceptedAt.getTime() + 7 * 24 * 60 * 60000).toISOString()
   });
+  if (parsedPayload.version !== 1)
+    throw new Error("human merge reservation produced an invalid payload kind");
+  const payload = parsedPayload;
   const { data: serverRepo } = await ctx.deployments.rest.repos.get(splitRepository(ctx.serverRepository));
   let displayCommit;
   let displayFailure;
@@ -37795,11 +37887,12 @@ function authorizeCancellation(args) {
     throw new Rejection("only the reserving User or a trusted merger can cancel a merge reservation");
   const active = args.records.find((record) => record.state.kind === "active");
   if (active) {
-    if (!canCancelReservation({ commenterId: author.id, trustedMergerIds: args.trustedMergerIds, reservationMergerId: active.payload.merger.id }))
+    const allowed = active.payload.version === 2 ? args.trustedMergerIds.includes(author.id) : canCancelReservation({ commenterId: author.id, trustedMergerIds: args.trustedMergerIds, reservationMergerId: active.payload.merger.id });
+    if (!allowed)
       throw new Rejection(`${author.login} cannot cancel this merge reservation`);
     return { author, active };
   }
-  const previous = args.records.find((record) => record.payload.merger.id === author.id);
+  const previous = args.records.find((record) => record.payload.version === 1 && record.payload.merger.id === author.id);
   const cancelledByThisComment = args.records.find((record) => record.state.kind === "terminal" && record.state.reason === "cancelled" && cancellationCommandId(record) === args.commentId);
   const replayingOwnCancellation = cancelledByThisComment !== undefined && cancellationAuthorId(cancelledByThisComment) === author.id;
   if (!args.trustedMergerIds.includes(author.id) && !previous && !replayingOwnCancellation)

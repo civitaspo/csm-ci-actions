@@ -10,6 +10,9 @@ inputs:
   server-token:
     description: Server App token with checks:write on the pull request repository.
     required: true
+  managed-deployments-token:
+    description: Optional Server App token scoped to the server repository with deployments:read, used to recover an active managed-file release pin.
+    default: ''
   repository:
     description: owner/repo of the client repository.
     required: true

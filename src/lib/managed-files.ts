@@ -185,6 +185,12 @@ async function generatedDeletions(gh: GitHub, input: { owner: string; repo: stri
   return deletions.sort();
 }
 
+/** Returns generated workflow paths owned at a pinned base but absent from the supplied generated set. */
+export async function generatedManagedDeletionsAtRef(gh: GitHub, input: { repository: string; baseSha: string; generated: GeneratedWorkflows; additional: Readonly<Record<string, string>> }): Promise<string[]> {
+  const { owner, repo } = splitRepository(input.repository);
+  return generatedDeletions(gh, { owner, repo, defaultSha: input.baseSha, generated: input.generated, additional: input.additional });
+}
+
 async function listWorkflowFiles(gh: GitHub, owner: string, repo: string, ref: string): Promise<{ path: string; sha: string }[]> {
   const { data: commit } = await gh.rest.repos.getCommit({ owner, repo, ref });
   let treeSha = commit.commit.tree.sha;

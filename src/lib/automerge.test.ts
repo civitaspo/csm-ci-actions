@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   AUTOMERGE_LABEL,
   ReservationPayloadSchema,
+  ManagedReservationPayloadSchema,
   automergeMarker,
   canCancelReservation,
   decide,
@@ -56,7 +57,7 @@ function facts(overrides: Partial<Parameters<typeof decide>[0]> = {}): Parameter
 describe("reservation payload", () => {
   test.each([
     ["unknown key", { ...payload, extra: true }, "Unrecognized key: \"extra\""],
-    ["wrong version", { ...payload, version: 2 }, "Invalid input: expected 1"],
+    ["wrong version", { ...payload, version: 2 }, "Invalid input: expected \"managed-files\""],
     ["invalid repository id", { ...payload, repository_id: 0 }, "Too small: expected number to be >0"],
     ["non-integer command comment id", { ...payload, command_comment_id: 99.5 }, "Invalid input: expected int, received number"],
     ["non-positive command comment id", { ...payload, command_comment_id: 0 }, "Too small: expected number to be >0"],
@@ -79,6 +80,44 @@ describe("reservation payload", () => {
 
   test("accepts the complete version 1 payload", () => {
     expect(ReservationPayloadSchema.parse(payload)).toEqual(payload);
+  });
+
+  const managedPayload = {
+    version: 2 as const,
+    kind: "managed-files" as const,
+    repository_id: 123,
+    repository: "owner/repo",
+    pull_number: 7,
+    pull_node_id: "PR_kwDOAA",
+    base_ref: "main",
+    managed_ref: "csm-ci/repo-settings" as const,
+    accepted_base: "9".repeat(40),
+    accepted_head: "a".repeat(40),
+    configuration_sha: "b".repeat(40),
+    release_version: "v1.2.3",
+    release_sha: "c".repeat(40),
+    manifest_digest: "d".repeat(64),
+    idempotency_key: "e".repeat(64),
+    accepted_at: acceptedAt,
+    expires_at: "2026-01-02T00:00:00.000Z",
+  };
+
+  test("accepts a strict managed-files v2 payload in the compatible union", () => {
+    expect(ReservationPayloadSchema.parse(managedPayload)).toEqual(managedPayload);
+    expect(ManagedReservationPayloadSchema.parse(managedPayload)).toEqual(managedPayload);
+  });
+
+  test.each([
+    ["extra field", { ...managedPayload, approved: true }, "Unrecognized key: \"approved\""],
+    ["wrong kind", { ...managedPayload, kind: "merge" }, "Invalid input: expected \"managed-files\""],
+    ["invalid managed ref", { ...managedPayload, managed_ref: "main" }, "Invalid input: expected \"csm-ci/repo-settings\""],
+    ["short manifest digest", { ...managedPayload, manifest_digest: "abc" }, "Invalid string: must match pattern /^[0-9a-f]{64}$/"],
+    ["non-SHA configuration revision", { ...managedPayload, configuration_sha: "main" }, "Invalid string: must match pattern /^[0-9a-f]{40}$/"],
+    ["expiry before acceptance", { ...managedPayload, expires_at: "2025-12-31T23:00:00.000Z" }, "expires_at must be after accepted_at"],
+  ])("rejects managed payload with %s", (_name, value, message) => {
+    const result = ManagedReservationPayloadSchema.safeParse(value);
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error.issues[0]?.message).toBe(message);
   });
 });
 

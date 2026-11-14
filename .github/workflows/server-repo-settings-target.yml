@@ -37,6 +37,10 @@ concurrency:
 
 jobs:
   reconcile:
+    outputs:
+      target-owner: ${{ steps.target.outputs.target-owner }}
+      target-name: ${{ steps.target.outputs.target-name }}
+      managed-pull-number: ${{ steps.managed-apply.outcome == 'success' && steps.managed-apply.outputs.pull-request || steps.managed-inspect.outputs.pull-request || '' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     environment: csm-ci
@@ -170,7 +174,8 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
           permission-workflows: write
-      - name: Apply managed files
+      - id: managed-apply
+        name: Apply managed files
         if: steps.managed-inspect.outputs.has-changes == 'true'
         uses: ./.csm-ci-actions/actions/server/repo-settings
         with:
@@ -183,3 +188,223 @@ jobs:
           actions-repository: ${{ job.workflow_repository }}
           read-token: ${{ steps.read-token.outputs.token }}
           contents-token: ${{ steps.workflow-token.outputs.token || steps.contents-token.outputs.token }}
+
+  managed-preflight:
+    needs: [reconcile]
+    if: needs.reconcile.outputs.managed-pull-number != ''
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    environment: csm-ci
+    permissions:
+      contents: read
+    outputs:
+      authorized: ${{ steps.preflight.outputs.authorized }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .csm-ci-actions
+          persist-credentials: false
+      - id: target
+        uses: ./.csm-ci-actions/actions/server/repo-settings
+        with:
+          mode: validate-target
+          targets: ${{ inputs.targets }}
+          event-mode: ${{ inputs.event-mode }}
+          github-token: ${{ github.token }}
+          config-path: ${{ inputs.config-path }}
+          repository: ${{ inputs.repository }}
+          actions-repository: ${{ job.workflow_repository }}
+      - id: read-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ steps.target.outputs.target-owner }}
+          repositories: ${{ steps.target.outputs.target-name }}
+          permission-contents: read
+          permission-pull-requests: read
+          permission-checks: read
+      - id: preflight
+        uses: ./.csm-ci-actions/actions/server/repo-settings
+        with:
+          mode: managed-preflight
+          workflow-release: ${{ inputs.workflow-release }}
+          targets: ${{ inputs.targets }}
+          github-token: ${{ github.token }}
+          config-path: ${{ inputs.config-path }}
+          repository: ${{ inputs.repository }}
+          pull-number: ${{ needs.reconcile.outputs.managed-pull-number }}
+          actions-repository: ${{ job.workflow_repository }}
+          read-token: ${{ steps.read-token.outputs.token }}
+
+  managed-approve:
+    needs: [reconcile, managed-preflight]
+    if: needs.reconcile.outputs.managed-pull-number != '' && needs.managed-preflight.outputs.authorized == 'true'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    environment: csm-ci
+    # This is the same lane as /approve and policy-check. Release it before managed-accept
+    # takes the merge lane, then revalidate the complete managed PR at each boundary.
+    concurrency:
+      group: csm-ci-pull-request-${{ needs.reconcile.outputs.target-owner }}/${{ needs.reconcile.outputs.target-name }}#${{ needs.reconcile.outputs.managed-pull-number }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    outputs:
+      approval-result: ${{ steps.approve.outputs.result }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .csm-ci-actions
+          persist-credentials: false
+      - id: target
+        uses: ./.csm-ci-actions/actions/server/repo-settings
+        with:
+          mode: validate-target
+          targets: ${{ inputs.targets }}
+          event-mode: ${{ inputs.event-mode }}
+          github-token: ${{ github.token }}
+          config-path: ${{ inputs.config-path }}
+          repository: ${{ inputs.repository }}
+          actions-repository: ${{ job.workflow_repository }}
+      - id: read-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ needs.reconcile.outputs.target-owner }}
+          repositories: ${{ needs.reconcile.outputs.target-name }}
+          permission-contents: read
+          permission-pull-requests: read
+          permission-checks: read
+      # Re-run preflight only after this job owns the /approve + policy lane.
+      # The earlier preflight is a queue gate; it never authorizes token minting.
+      - id: preflight
+        uses: ./.csm-ci-actions/actions/server/repo-settings
+        with:
+          mode: managed-preflight
+          workflow-release: ${{ inputs.workflow-release }}
+          targets: ${{ inputs.targets }}
+          github-token: ${{ github.token }}
+          config-path: ${{ inputs.config-path }}
+          repository: ${{ inputs.repository }}
+          pull-number: ${{ needs.reconcile.outputs.managed-pull-number }}
+          actions-repository: ${{ job.workflow_repository }}
+          read-token: ${{ steps.read-token.outputs.token }}
+      - id: policy-token
+        if: steps.preflight.outputs.authorized == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ steps.target.outputs.target-owner }}
+          repositories: ${{ steps.target.outputs.target-name }}
+          permission-contents: read
+          permission-pull-requests: read
+          permission-checks: write
+      - id: approver-token
+        if: steps.preflight.outputs.authorized == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_APPROVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_APPROVER_APP_PRIVATE_KEY }}
+          owner: ${{ steps.target.outputs.target-owner }}
+          repositories: ${{ steps.target.outputs.target-name }}
+          permission-pull-requests: write
+      - id: approve
+        if: steps.preflight.outputs.authorized == 'true'
+        uses: ./.csm-ci-actions/actions/server/repo-settings
+        with:
+          mode: managed-approve
+          workflow-release: ${{ inputs.workflow-release }}
+          targets: ${{ inputs.targets }}
+          github-token: ${{ github.token }}
+          config-path: ${{ inputs.config-path }}
+          repository: ${{ inputs.repository }}
+          pull-number: ${{ needs.reconcile.outputs.managed-pull-number }}
+          actions-repository: ${{ job.workflow_repository }}
+          read-token: ${{ steps.policy-token.outputs.token }}
+          approver-token: ${{ steps.approver-token.outputs.token }}
+
+  managed-accept:
+    needs: [reconcile, managed-approve]
+    if: >-
+      needs.reconcile.outputs.managed-pull-number != '' &&
+      contains(fromJSON('["approved", "already-approved"]'), needs.managed-approve.outputs.approval-result)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    environment: csm-ci
+    concurrency:
+      group: csm-ci-merge-${{ needs.reconcile.outputs.target-owner }}/${{ needs.reconcile.outputs.target-name }}#${{ needs.reconcile.outputs.managed-pull-number }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    outputs:
+      deployment-id: ${{ steps.accept.outputs.deployment-id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .csm-ci-actions
+          persist-credentials: false
+      - id: target
+        uses: ./.csm-ci-actions/actions/server/repo-settings
+        with:
+          mode: validate-target
+          targets: ${{ inputs.targets }}
+          event-mode: ${{ inputs.event-mode }}
+          github-token: ${{ github.token }}
+          config-path: ${{ inputs.config-path }}
+          repository: ${{ inputs.repository }}
+          actions-repository: ${{ job.workflow_repository }}
+      - id: read-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ steps.target.outputs.target-owner }}
+          repositories: ${{ steps.target.outputs.target-name }}
+          permission-contents: read
+          permission-pull-requests: read
+      - id: deployments-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-deployments: write
+      - id: accept
+        uses: ./.csm-ci-actions/actions/server/repo-settings
+        with:
+          mode: managed-accept
+          workflow-release: ${{ inputs.workflow-release }}
+          targets: ${{ inputs.targets }}
+          github-token: ${{ github.token }}
+          config-path: ${{ inputs.config-path }}
+          repository: ${{ inputs.repository }}
+          pull-number: ${{ needs.reconcile.outputs.managed-pull-number }}
+          actions-repository: ${{ job.workflow_repository }}
+          read-token: ${{ steps.read-token.outputs.token }}
+          deployments-token: ${{ steps.deployments-token.outputs.token }}
+
+  managed-evaluate:
+    needs: [reconcile, managed-accept]
+    if: needs.reconcile.outputs.managed-pull-number != '' && needs.managed-accept.outputs.deployment-id != ''
+    uses: ./.github/workflows/server-automerge-evaluate.yml
+    permissions:
+      actions: write
+      contents: read
+    with:
+      repository: ${{ inputs.repository }}
+      repository-owner: ${{ needs.reconcile.outputs.target-owner }}
+      pull-number: ${{ fromJSON(needs.reconcile.outputs.managed-pull-number) }}
+      deployment-id: ${{ needs.managed-accept.outputs.deployment-id }}
+      config-path: ${{ inputs.config-path }}
+    secrets:
+      CSM_CI_SERVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
