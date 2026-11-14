@@ -16,6 +16,8 @@ const Owner = z
   .string()
   .regex(/^[A-Za-z0-9-]+$/)
   .transform((s) => s.toLowerCase());
+export const VersionProbeArgs = z.array(z.string().min(1).max(1024).refine((arg) => !arg.includes("\0"), "arguments must not contain NUL"))
+  .min(1).max(16).refine((args) => args.reduce((size, arg) => size + arg.length, 0) <= 4096, "combined arguments must not exceed 4096 characters");
 
 export const CARGO_TARGETS = [
   "aarch64-apple-darwin",
@@ -48,6 +50,11 @@ export const ReleaseSchema = z.discriminatedUnion("build_type", [
     build_type: z.literal("cargo-raw"),
     binary: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}(?![\s\S])/u, "binary must be a safe Cargo binary name of at most 64 characters"),
     targets: z.array(z.enum(CARGO_RAW_TARGETS)).min(1).refine((targets) => new Set(targets).size === targets.length, "duplicate cargo-raw target"),
+    version_probe_args: VersionProbeArgs.optional(),
+  }).superRefine((release, context) => {
+    if (release.version_probe_args && release.targets.some((target) => target.endsWith("linux-musl"))) {
+      context.addIssue({ code: "custom", path: ["targets"], message: "version_probe_args supports Apple and Linux GNU targets only" });
+    }
   }),
 ]);
 export type Release = z.infer<typeof ReleaseSchema>;

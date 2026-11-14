@@ -57,7 +57,7 @@ describe("PR intent catalog", () => {
       merge: ["authorized", "reserve-then-approve", "head-change-carries-over", "head-change-needs-approval", "cancel", "cancel-unauthorized", "closed", "command-edit-ignored", "label-reconcile", "sweep", "platform-auto-merge-disabled", "workflow-change", "notification-scope", "non-merger", "configured-bot-ownership"].map((id) => `merge.${id}`),
       "policy-check": ["repository-sensitivity", "trusted", "closed-shared-sha", "unsigned", "untrusted", "sensitive-approval", "recheck", "non-approver-marker", "comment-marker"].map((id) => `policy-check.${id}`),
       securefix: ["pr-write", ...["unsafe-path", "symlink", "file-limit", "single-file-size-limit", "total-size-limit"].map((mode) => `client-${mode}`), "workflow-disabled", "forged-run", "target-event", "route-refresh", "alternate-base"].map((id) => `securefix.${id}`),
-      release: ["publish-none", "publish-js-action", "publish-goreleaser", "publish-cargo", "publish-cargo-raw", "terraform-replay", "none-replay", "stale-dist", "tag-collision", "foreign-release", "invalid-version", "wrong-merger"].map((id) => `release.${id}`),
+      release: ["publish-none", "publish-js-action", "publish-goreleaser", "publish-cargo", "publish-cargo-raw", "publish-cargo-raw-metadata", "terraform-replay", "none-replay", "stale-dist", "tag-collision", "foreign-release", "invalid-version", "wrong-merger"].map((id) => `release.${id}`),
       "release-pr": ["version-files-empty", "version-files-explicit", "explicit-refresh", "inferred-version"].map((id) => `release-pr.${id}`),
       "repo-settings": ["funding-true", "funding-false", "funding-managed-files", "reconciliation"].map((id) => `repo-settings.${id}`),
     });

@@ -32612,6 +32612,7 @@ var Login = string2().min(1);
 var Principal = strictObject({ id: Id, login: Login });
 var RepoName = string2().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/).transform((s) => s.toLowerCase());
 var Owner = string2().regex(/^[A-Za-z0-9-]+$/).transform((s) => s.toLowerCase());
+var VersionProbeArgs = array(string2().min(1).max(1024).refine((arg) => !arg.includes("\x00"), "arguments must not contain NUL")).min(1).max(16).refine((args) => args.reduce((size, arg) => size + arg.length, 0) <= 4096, "combined arguments must not exceed 4096 characters");
 var CARGO_TARGETS = [
   "aarch64-apple-darwin",
   "aarch64-unknown-linux-gnu",
@@ -32642,7 +32643,12 @@ var ReleaseSchema = discriminatedUnion("build_type", [
   strictObject({
     build_type: literal("cargo-raw"),
     binary: string2().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}(?![\s\S])/u, "binary must be a safe Cargo binary name of at most 64 characters"),
-    targets: array(_enum(CARGO_RAW_TARGETS)).min(1).refine((targets) => new Set(targets).size === targets.length, "duplicate cargo-raw target")
+    targets: array(_enum(CARGO_RAW_TARGETS)).min(1).refine((targets) => new Set(targets).size === targets.length, "duplicate cargo-raw target"),
+    version_probe_args: VersionProbeArgs.optional()
+  }).superRefine((release, context) => {
+    if (release.version_probe_args && release.targets.some((target) => target.endsWith("linux-musl"))) {
+      context.addIssue({ code: "custom", path: ["targets"], message: "version_probe_args supports Apple and Linux GNU targets only" });
+    }
   })
 ]);
 var OPS = ["approve", "merge", "policy-check", "securefix", "release"];

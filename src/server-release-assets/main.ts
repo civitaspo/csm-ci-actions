@@ -19,7 +19,8 @@ async function main(): Promise<void> {
       sourceDateEpoch, fingerprint, credentials: { mode: "prepare", privateKey, passphrase } });
   }
   const assets = await prepareAssets(directory, release.build_type === "terraform-provider"
-    ? { ...release, version: plan.version, sourceDateEpoch, fingerprint, publicKey } : release);
+    ? { ...release, version: plan.version, sourceDateEpoch, fingerprint, publicKey } : release,
+  { version: plan.version, sourceRevision: plan.mergeSha });
   core.setOutput("gpg-public-key", publicKey);
   core.setOutput("subject-path", `${directory}/*`);
   core.setOutput("assets", JSON.stringify(assets.map(({ name, sha256 }) => ({ name, sha256 }))));

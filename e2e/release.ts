@@ -34,6 +34,18 @@ archives:
 `,
   "terraform-registry-manifest.json": '{"version":1,"metadata":{"protocol_versions":["6.0"]}}\n',
 };
+const cargoRawMetadataFixture = `use std::env;
+
+fn main() {
+    let args: Vec<String> = env::args().skip(1).collect();
+    let version = env!("RELEASE_VERSION");
+    match args.as_slice() {
+        [flag] if flag == "--version" => println!("testing-csm-ci-client {version}"),
+        [command, flag] if command == "version" && flag == "--json" => println!(r#"{{"version":"{version}"}}"#),
+        _ => std::process::exit(2),
+    }
+}
+`;
 
 function version(): string {
   return `1.0.${Date.now()}`;
@@ -86,14 +98,16 @@ async function releasePipeline(ctx: Ctx, since: Date, pr: ReleasePr, label?: str
   return { run, jobRows, label: cleanedLabel };
 }
 
-async function completedRelease(ctx: Ctx, ver: string, buildType: ReleaseBuildType, intent = prCase(ctx, "fixture")): Promise<{ pipeline: ReleaseRun; pr: ReleasePr; sha: string; clientRun: Run }> {
-  return withServerConfig(ctx, configureRelease(buildType), async () => withPr(ctx, ver, async (pr) => {
+async function completedRelease(ctx: Ctx, ver: string, buildType: ReleaseBuildType, intent = prCase(ctx, "fixture"), options: { rawMetadata?: boolean } = {}): Promise<{ pipeline: ReleaseRun; pr: ReleasePr; sha: string; clientRun: Run }> {
+  return withServerConfig(ctx, configureRelease(buildType, options), async () => withPr(ctx, ver, async (pr) => {
     const merged = await mergeAsServer(ctx, pr);
     const clientRun = await releaseClientRun(ctx, merged.since, pr);
     assert(clientRun.conclusion === "success", `client release request concluded ${clientRun.conclusion} (${clientRun.html_url})`);
     const pipeline = await releasePipeline(ctx, merged.since, pr);
     return { pipeline, pr, sha: merged.sha, clientRun };
-  }, buildType === "goreleaser" ? { "dist/action.js": null } : buildType === "terraform-provider" ? terraformFixture : {}, intent));
+  }, buildType === "goreleaser" ? { "dist/action.js": null }
+    : buildType === "terraform-provider" ? terraformFixture
+      : options.rawMetadata ? { "src/main.rs": cargoRawMetadataFixture } : {}, intent));
 }
 
 function expectJob(result: ReleaseRun, name: string, conclusion: Conclusion): void {
@@ -109,7 +123,7 @@ async function expectLog(ctx: Ctx, result: ReleaseRun, name: string, pattern: Re
   assert(pattern.test(log), `release job ${name} log does not match ${pattern} (${result.run.html_url})`);
 }
 
-function expectedNames(type: ReleaseBuildType, ver: string): string[] {
+function expectedNames(type: ReleaseBuildType, ver: string, rawMetadata = false): string[] {
   if (type === "terraform-provider") {
     const prefix = `terraform-provider-csm-ci-test_${ver}`;
     return [
@@ -118,7 +132,12 @@ function expectedNames(type: ReleaseBuildType, ver: string): string[] {
     ].sort();
   }
   if (type === "cargo-raw") return [
-    ...CARGO_RAW_TARGETS.flatMap((target) => [`testing-csm-ci-client-${target}`, `testing-csm-ci-client-${target}.sha256`]),
+    ...CARGO_RAW_TARGETS.filter((target) => !rawMetadata || target.endsWith("apple-darwin") || target.endsWith("linux-gnu"))
+      .flatMap((target) => [
+        `testing-csm-ci-client-${target}`,
+        `testing-csm-ci-client-${target}.sha256`,
+        ...(rawMetadata ? [`testing-csm-ci-client-${target}.artifact.json`] : []),
+      ]),
     "SHA256SUMS",
   ].sort();
   if (type === "cargo") return [
@@ -129,7 +148,7 @@ function expectedNames(type: ReleaseBuildType, ver: string): string[] {
   return ["SHA256SUMS"];
 }
 
-async function publishedRelease(ctx: Ctx, ver: string, mergeSha: string, type: ReleaseBuildType): Promise<string> {
+async function publishedRelease(ctx: Ctx, ver: string, mergeSha: string, type: ReleaseBuildType, rawMetadata = false): Promise<string> {
   const tag = `v${ver}`;
   const { data } = await ctx.gh.rest.repos.getReleaseByTag({ ...splitRepository(CLIENT), tag });
   assert(data.draft === false && data.published_at, `release ${tag} is not published`);
@@ -137,7 +156,7 @@ async function publishedRelease(ctx: Ctx, ver: string, mergeSha: string, type: R
   assert(Number(data.author?.id) === SERVER_BOT_ID, `release ${tag} author is ${data.author?.login}, not the Server App`);
   assert(data.target_commitish === mergeSha, `release ${tag} targets ${data.target_commitish}, expected ${mergeSha}`);
   const actual = data.assets.map((asset) => asset.name).sort();
-  const expected = expectedNames(type, ver);
+  const expected = expectedNames(type, ver, rawMetadata);
   assert(JSON.stringify(actual) === JSON.stringify(expected), `release ${tag} asset set was ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)}`);
   assert(data.assets.every((asset) => asset.digest?.startsWith("sha256:")), `release ${tag} has an asset without a SHA256 digest`);
   ctx.urls.push(data.html_url);
@@ -154,14 +173,14 @@ export async function verifyAttestations(ctx: Ctx, tag: string, mergeSha: string
   assert(run.conclusion === "success", `hosted attestation verification concluded ${run.conclusion} (${run.html_url})`);
 }
 
-async function success(ctx: Ctx, type: ReleaseBuildType): Promise<{ tag: string; sha: string }> {
+async function success(ctx: Ctx, type: ReleaseBuildType, options: { rawMetadata?: boolean } = {}): Promise<{ tag: string; sha: string }> {
   const ver = version();
-  const result = await completedRelease(ctx, ver, type);
+  const result = await completedRelease(ctx, ver, type, prCase(ctx, "fixture"), options);
   expectJob(result.pipeline, "intake", "success");
   expectJob(result.pipeline, "release-plan", "success");
   expectJob(result.pipeline, "release-build", "success");
   expectJob(result.pipeline, "release-publish", "success");
-  const tag = await publishedRelease(ctx, ver, result.sha, type);
+  const tag = await publishedRelease(ctx, ver, result.sha, type, options.rawMetadata);
   await verifyAttestations(ctx, tag, result.sha);
   return { tag, sha: result.sha };
 }
@@ -215,6 +234,27 @@ export const release: Scenario[] = [
     name: `publishes an immutable ${type} release with verified asset attestations`, serial: true,
     run: async (ctx: Ctx) => { await success(ctx, type); },
   })),
+  {
+    id: "release.publish-cargo-raw-metadata",
+    cases: {
+      fixture: {
+        id: "fixture",
+        target: "client",
+        title: "publishes attested cargo-raw binaries with per-target runtime manifests",
+        classification: "positive",
+        checks: ["release-publication", "release-verification"],
+        steps: [{
+          operation: "release",
+          outcome: "permitted",
+          expected: "The opted-in native probes produce four manifests and the publisher validates, checksums, and attests the complete asset set",
+        }],
+        identity: OWNER_IDENTITY,
+      },
+    },
+    name: "publishes attested cargo-raw binaries with per-target runtime manifests",
+    serial: true,
+    run: async (ctx) => { await success(ctx, "cargo-raw", { rawMetadata: true }); },
+  },
   {
     id: "release.terraform-replay",
     cases: {

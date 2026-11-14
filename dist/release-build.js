@@ -11230,6 +11230,129 @@ function handleIntersectionResults(result, left, right) {
   result.value = merged.data;
   return result;
 }
+var $ZodTuple = /* @__PURE__ */ $constructor("$ZodTuple", (inst, def) => {
+  $ZodType.init(inst, def);
+  const items = def.items;
+  const memo = globalConfig.memoizer;
+  memo?.attach(inst);
+  inst._zod.parse = (payload, ctx) => {
+    const input = payload.value;
+    if (!Array.isArray(input)) {
+      payload.issues.push({
+        input,
+        inst,
+        expected: "tuple",
+        code: "invalid_type"
+      });
+      return payload;
+    }
+    payload.value = memo ? memo.alloc(inst, payload, [], ctx) : [];
+    const proms = [];
+    const optinStart = getTupleOptStart(items, "optin");
+    const optoutStart = getTupleOptStart(items, "optout");
+    if (!def.rest) {
+      if (input.length < optinStart) {
+        payload.issues.push({
+          code: "too_small",
+          minimum: optinStart,
+          inclusive: true,
+          input,
+          inst,
+          origin: "array"
+        });
+        return payload;
+      }
+      if (input.length > items.length) {
+        payload.issues.push({
+          code: "too_big",
+          maximum: items.length,
+          inclusive: true,
+          input,
+          inst,
+          origin: "array"
+        });
+      }
+    }
+    const itemResults = new Array(items.length);
+    const abortEarly = def.rest ? ctx?.abortEarly : undefined;
+    let itemAborted = false;
+    for (let i = 0;i < items.length; i++) {
+      const r = items[i]._zod.run({ value: input[i], issues: [] }, ctx);
+      if (r instanceof Promise) {
+        proms.push(r.then((rr) => {
+          itemResults[i] = rr;
+        }));
+      } else {
+        itemResults[i] = r;
+        if (abortEarly && !itemAborted && r.issues.length)
+          itemAborted = aborted(r);
+      }
+    }
+    if (def.rest && !itemAborted) {
+      let i = items.length - 1;
+      const rest = input.slice(items.length);
+      let seen = payload.issues.length;
+      for (const el of rest) {
+        if (abortEarly && payload.issues.length !== seen) {
+          if (aborted(payload, seen))
+            break;
+          seen = payload.issues.length;
+        }
+        i++;
+        const result = def.rest._zod.run({ value: el, issues: [] }, ctx);
+        if (result instanceof Promise) {
+          proms.push(result.then((r) => handleTupleResult(r, payload, i)));
+        } else {
+          handleTupleResult(result, payload, i);
+        }
+      }
+    }
+    if (proms.length) {
+      return Promise.all(proms).then(() => handleTupleResults(itemResults, payload, items, input, optoutStart));
+    }
+    return handleTupleResults(itemResults, payload, items, input, optoutStart);
+  };
+});
+function getTupleOptStart(items, key) {
+  for (let i = items.length - 1;i >= 0; i--) {
+    const omittable = key === "optin" ? items[i]._zod.optin !== undefined : items[i]._zod.optout === "optional";
+    if (!omittable)
+      return i + 1;
+  }
+  return 0;
+}
+function handleTupleResult(result, final, index) {
+  if (result.issues.length) {
+    final.issues.push(...prefixIssues(index, result.issues));
+  }
+  final.value[index] = result.value;
+}
+function handleTupleResults(itemResults, final, items, input, optoutStart) {
+  for (let i = 0;i < items.length; i++) {
+    const r = itemResults[i];
+    const isPresent = i < input.length;
+    if (!isPresent && i >= optoutStart && items[i]._zod.optin === "optional") {
+      final.value.length = i;
+      break;
+    }
+    if (r.issues.length) {
+      if (!isPresent && i >= optoutStart) {
+        final.value.length = i;
+        break;
+      }
+      final.issues.push(...prefixIssues(i, r.issues));
+    }
+    final.value[i] = r.value;
+  }
+  for (let i = final.value.length - 1;i >= input.length; i--) {
+    if (items[i]._zod.optout === "optional" && final.value[i] === undefined) {
+      final.value.length = i;
+    } else {
+      break;
+    }
+  }
+  return final;
+}
 var $ZodRecord = /* @__PURE__ */ $constructor("$ZodRecord", (inst, def) => {
   $ZodType.init(inst, def);
   const memo = globalConfig.memoizer;
@@ -13428,6 +13551,70 @@ var intersectionProcessor = (schema, ctx, json, params) => {
   json.allOf = allOf;
   ctx.intersections.push(allOf);
 };
+var tupleProcessor = (schema, ctx, _json, params) => {
+  const json = _json;
+  const def = schema._zod.def;
+  json.type = "array";
+  const prefixPath = ctx.target === "draft-2020-12" ? "prefixItems" : "items";
+  const restPath = ctx.target === "draft-2020-12" ? "items" : ctx.target === "openapi-3.0" ? "items" : "additionalItems";
+  const prefixItems = def.items.map((x, i) => processSchema(x, ctx, {
+    ...params,
+    path: [...params.path, prefixPath, i]
+  }));
+  const rest = def.rest ? processSchema(def.rest, ctx, {
+    ...params,
+    path: [...params.path, restPath, ...ctx.target === "openapi-3.0" ? [def.items.length] : []]
+  }) : null;
+  let minItems = def.items.length;
+  while (minItems > 0) {
+    const item = def.items[minItems - 1];
+    const optional = ctx.io === "input" ? inputOptin(item) !== undefined : item._zod.optout === "optional";
+    if (!optional)
+      break;
+    minItems--;
+  }
+  const maxItems = def.items.length;
+  const isClosed = !def.rest;
+  if (ctx.target === "draft-2020-12") {
+    json.prefixItems = prefixItems;
+    if (isClosed) {
+      json.items = false;
+    } else if (rest) {
+      json.items = rest;
+    }
+    if (minItems > 0)
+      json.minItems = minItems;
+    if (isClosed)
+      json.maxItems = maxItems;
+  } else if (ctx.target === "openapi-3.0") {
+    json.items = {
+      anyOf: prefixItems
+    };
+    if (rest) {
+      json.items.anyOf.push(rest);
+    }
+    if (minItems > 0)
+      json.minItems = minItems;
+    if (isClosed)
+      json.maxItems = maxItems;
+  } else {
+    json.items = prefixItems;
+    if (isClosed) {
+      json.additionalItems = false;
+    } else if (rest) {
+      json.additionalItems = rest;
+    }
+    if (minItems > 0)
+      json.minItems = minItems;
+    if (isClosed)
+      json.maxItems = maxItems;
+  }
+  const { minimum, maximum } = aggregateChecks(schema);
+  if (typeof minimum === "number")
+    json.minItems = minimum;
+  if (typeof maximum === "number")
+    json.maxItems = maximum;
+};
 function stringifyKeyNames(bySchema, json, visited) {
   if (json.$ref) {
     if (visited.has(json))
@@ -14325,6 +14512,39 @@ function intersection(left, right) {
     right
   });
 }
+var ZodTuple = /* @__PURE__ */ $constructor("ZodTuple", (inst, def) => {
+  _ensureDefaultMemoizer();
+  $ZodTuple.init(inst, def);
+  ZodType.init(inst, def);
+  inst._zod.processJSONSchema = (ctx, json, params) => tupleProcessor(inst, ctx, json, params);
+}, {
+  rest(rest) {
+    return this.clone({
+      ...this._zod.def,
+      rest
+    });
+  },
+  partial() {
+    const def = this._zod.def;
+    if (def.checks?.length)
+      throw new Error(".partial() cannot be used on tuple schemas containing refinements");
+    return this.clone({
+      ...def,
+      items: def.items.map((item) => new ZodOptional({ type: "optional", innerType: item }))
+    });
+  }
+});
+function tuple(items, _paramsOrRest, _params) {
+  const hasRest = _paramsOrRest instanceof $ZodType;
+  const params = hasRest ? _params : _paramsOrRest;
+  const rest = hasRest ? _paramsOrRest : null;
+  return new ZodTuple({
+    type: "tuple",
+    items,
+    rest,
+    ...normalizeParams(params)
+  });
+}
 var ZodRecord = /* @__PURE__ */ $constructor("ZodRecord", (inst, def) => {
   _ensureDefaultMemoizer();
   $ZodRecord.init(inst, def);
@@ -14668,6 +14888,7 @@ var Login = string2().min(1);
 var Principal = strictObject({ id: Id, login: Login });
 var RepoName = string2().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/).transform((s) => s.toLowerCase());
 var Owner = string2().regex(/^[A-Za-z0-9-]+$/).transform((s) => s.toLowerCase());
+var VersionProbeArgs = array(string2().min(1).max(1024).refine((arg) => !arg.includes("\x00"), "arguments must not contain NUL")).min(1).max(16).refine((args) => args.reduce((size, arg) => size + arg.length, 0) <= 4096, "combined arguments must not exceed 4096 characters");
 var CARGO_TARGETS = [
   "aarch64-apple-darwin",
   "aarch64-unknown-linux-gnu",
@@ -14698,7 +14919,12 @@ var ReleaseSchema = discriminatedUnion("build_type", [
   strictObject({
     build_type: literal("cargo-raw"),
     binary: string2().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}(?![\s\S])/u, "binary must be a safe Cargo binary name of at most 64 characters"),
-    targets: array(_enum(CARGO_RAW_TARGETS)).min(1).refine((targets) => new Set(targets).size === targets.length, "duplicate cargo-raw target")
+    targets: array(_enum(CARGO_RAW_TARGETS)).min(1).refine((targets) => new Set(targets).size === targets.length, "duplicate cargo-raw target"),
+    version_probe_args: VersionProbeArgs.optional()
+  }).superRefine((release, context) => {
+    if (release.version_probe_args && release.targets.some((target) => target.endsWith("linux-musl"))) {
+      context.addIssue({ code: "custom", path: ["targets"], message: "version_probe_args supports Apple and Linux GNU targets only" });
+    }
   })
 ]);
 var OPS = ["approve", "merge", "policy-check", "securefix", "release"];
@@ -14980,7 +15206,8 @@ function padToRecord(tar) {
 
 // src/release/cargo-raw.ts
 import { execFileSync } from "node:child_process";
-import { accessSync, chmodSync, constants as constants2, copyFileSync, lstatSync as lstatSync2, mkdirSync as mkdirSync2, realpathSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { accessSync, chmodSync, constants as constants2, copyFileSync, lstatSync as lstatSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, realpathSync, statSync, writeFileSync as writeFileSync2 } from "node:fs";
 import { join as join2, resolve } from "node:path";
 var RAW_TARGETS = {
   "aarch64-apple-darwin": ["Mach-O 64-bit", "arm64"],
@@ -14993,6 +15220,79 @@ var RAW_TARGETS = {
 var SEMVER = String.raw`(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?`;
 var escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 var MAX_GLIBC = [2, 39, 0];
+var MAX_PROBE_OUTPUT = 1024 * 1024;
+var PROBE_TIMEOUT_MS = 30000;
+var METADATA_TARGETS = {
+  "aarch64-apple-darwin": { target: "macos-aarch64", floor: "minimum_os" },
+  "x86_64-apple-darwin": { target: "macos-x86_64", floor: "minimum_os" },
+  "aarch64-unknown-linux-gnu": { target: "linux-aarch64", floor: "minimum_libc" },
+  "x86_64-unknown-linux-gnu": { target: "linux-x86_64", floor: "minimum_libc" }
+};
+var SEMVER_PATTERN = new RegExp(`^${SEMVER}$`, "u");
+var VersionJson = record(string2(), unknown());
+var RawVerifierInput = tuple([string2(), string2(), string2(), string2(), string2()]);
+var RawValidationInput = tuple([string2(), string2(), string2()]);
+var RawArtifactManifestSchema = union([
+  strictObject({
+    version: string2().regex(SEMVER_PATTERN),
+    target: _enum(["macos-aarch64", "macos-x86_64"]),
+    rust_target: _enum(["aarch64-apple-darwin", "x86_64-apple-darwin"]),
+    minimum_os: string2().regex(/^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*))?$/u),
+    source_revision: string2().regex(/^[0-9a-f]{40}$/u),
+    dirty: literal(false),
+    version_json: VersionJson,
+    sha256: string2().regex(/^[0-9a-f]{64}$/u)
+  }),
+  strictObject({
+    version: string2().regex(SEMVER_PATTERN),
+    target: _enum(["linux-aarch64", "linux-x86_64"]),
+    rust_target: _enum(["aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"]),
+    minimum_libc: string2().regex(/^glibc (?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u),
+    source_revision: string2().regex(/^[0-9a-f]{40}$/u),
+    dirty: literal(false),
+    version_json: VersionJson,
+    sha256: string2().regex(/^[0-9a-f]{64}$/u)
+  })
+]);
+function metadataTarget(target) {
+  const value = Object.entries(METADATA_TARGETS).find(([rustTarget]) => rustTarget === target)?.[1];
+  ensure(value !== undefined, "version_probe_args supports Apple and Linux GNU targets only");
+  return value;
+}
+function parseMinimumOs(loadCommands) {
+  const commands = loadCommands.split(/(?=^Load command \d+\s*$)/mu);
+  for (const command of commands) {
+    if (/^\s*cmd LC_BUILD_VERSION\s*$/mu.test(command) && /^\s*platform MACOS\s*$/mu.test(command)) {
+      const minimum = /^\s*minos (\d+\.\d+(?:\.\d+)?)\s*$/mu.exec(command)?.[1];
+      if (minimum)
+        return minimum;
+    }
+    if (/^\s*cmd LC_VERSION_MIN_MACOSX\s*$/mu.test(command)) {
+      const minimum = /^\s*version (\d+\.\d+(?:\.\d+)?)\s*$/mu.exec(command)?.[1];
+      if (minimum)
+        return minimum;
+    }
+  }
+  throw new Error("cargo-raw could not read the macOS deployment target from the executable");
+}
+function parseVersionJson(output) {
+  ensure(output.byteLength <= MAX_PROBE_OUTPUT, "cargo-raw version probe output exceeds 1 MiB");
+  let text;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(output);
+  } catch {
+    throw new Error("cargo-raw version probe output is not valid UTF-8");
+  }
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    throw new Error("cargo-raw version probe output is not valid JSON");
+  }
+  const parsed = VersionJson.safeParse(value);
+  ensure(parsed.success, "cargo-raw version probe output must be a JSON object");
+  return parsed.data;
+}
 function glibcVersionNumber(version) {
   const match = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:\.(0|[1-9][0-9]*))?$/u.exec(version);
   if (!match)
@@ -15040,12 +15340,25 @@ var readelf = (...args) => execFileSync("readelf", args, {
 }).trim();
 function verifyRaw(args) {
   if (args.length === 4 && args[0] === "--validate") {
-    validateInputs(args[1], args[2], args[3]);
+    const [target, binary, version] = RawValidationInput.parse(args.slice(1));
+    validateInputs(target, binary, version);
     return;
   }
-  ensure(args.length === 5, "usage: release-build raw BINARY_PATH TARGET BINARY VERSION OUTPUT_DIRECTORY");
-  const [source, target, binary, version, destination] = args;
+  ensure(args.length === 5 || args.length === 7, "usage: release-build raw BINARY_PATH TARGET BINARY VERSION OUTPUT_DIRECTORY [SOURCE_REVISION VERSION_PROBE_ARGS_JSON]");
+  const [source, target, binary, version, destination] = RawVerifierInput.parse(args.slice(0, 5));
   validateInputs(target, binary, version);
+  let sourceRevision;
+  let probeArgs;
+  if (args.length === 7) {
+    sourceRevision = string2().parse(args.at(5));
+    ensure(/^[0-9a-f]{40}$/u.test(sourceRevision), "cargo-raw metadata requires a trusted 40-character source revision");
+    const parsedArgs = JSON.parse(string2().parse(args.at(6)));
+    ensure(Array.isArray(parsedArgs), "cargo-raw version probe arguments must be a JSON array");
+    if (parsedArgs.length > 0)
+      probeArgs = VersionProbeArgs.parse(parsedArgs);
+  }
+  if (probeArgs)
+    metadataTarget(target);
   const path = realpathSync(resolve(source));
   let executable = false;
   try {
@@ -15065,17 +15378,53 @@ function verifyRaw(args) {
   const output = join2(destination, `${binary}-${target}`);
   copyFileSync(path, output);
   chmodSync(output, 493);
+  if (probeArgs && sourceRevision) {
+    ensure(process.env.CSM_CI_SOURCE_REVISION === sourceRevision && process.env.CSM_CI_SOURCE_CLEAN === "true", "cargo-raw metadata requires the validated clean release source marker");
+    const versionJson = parseVersionJson(runVersionProbe(path, probeArgs));
+    const targetMetadata = metadataTarget(target);
+    const floor = targetMetadata.floor === "minimum_os" ? { minimum_os: parseMinimumOs(command("otool", "-l", "-v", path)) } : { minimum_libc: measureMinimumLibc() };
+    const manifest = RawArtifactManifestSchema.parse({
+      version,
+      target: targetMetadata.target,
+      rust_target: target,
+      ...floor,
+      source_revision: sourceRevision,
+      dirty: false,
+      version_json: versionJson,
+      sha256: createHash("sha256").update(readFileSync2(output)).digest("hex")
+    });
+    writeFileSync2(`${output}.artifact.json`, `${JSON.stringify(manifest, null, 2)}
+`, { flag: "wx" });
+  }
   return `verified ${target}: ${description}; ${reported}`;
+}
+function runVersionProbe(path, args, timeoutMs = PROBE_TIMEOUT_MS) {
+  let output;
+  try {
+    output = execFileSync(path, args, { encoding: "buffer", timeout: timeoutMs, killSignal: "SIGKILL", maxBuffer: MAX_PROBE_OUTPUT + 1 });
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+      throw new Error("cargo-raw version probe output exceeds 1 MiB");
+    }
+    throw new Error("cargo-raw version probe failed or exceeded its 30-second limit");
+  }
+  ensure(output.byteLength <= MAX_PROBE_OUTPUT, "cargo-raw version probe output exceeds 1 MiB");
+  return output;
+}
+function measureMinimumLibc() {
+  const version = command("getconf", "GNU_LIBC_VERSION");
+  ensure(/^glibc \d+\.\d+$/u.test(version), "cargo-raw could not measure the GNU libc runtime floor");
+  return version;
 }
 
 // src/release/terraform-collect.ts
-import { constants as constants3, copyFileSync as copyFileSync2, lstatSync as lstatSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync2, realpathSync as realpathSync2 } from "node:fs";
+import { constants as constants3, copyFileSync as copyFileSync2, lstatSync as lstatSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync3, realpathSync as realpathSync2 } from "node:fs";
 import { basename as basename2, join as join3, sep } from "node:path";
 var regular = (path) => lstatSync3(path).isFile();
 function collect(client, destination) {
   const manifest = join3(client, "dist/artifacts.json");
   ensure(regular(manifest), "GoReleaser did not produce a regular artifacts.json manifest");
-  const artifacts = JSON.parse(readFileSync2(manifest, "utf8"));
+  const artifacts = JSON.parse(readFileSync3(manifest, "utf8"));
   ensure(Array.isArray(artifacts), "GoReleaser artifacts manifest is not a list");
   const files = [];
   for (const artifact of artifacts) {

@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, test } from "bun:test";
 import { prepareAssets } from "./assets.ts";
 import { CARGO_RAW_TARGETS, type Release } from "../lib/config.ts";
@@ -37,6 +38,60 @@ describe("prepareAssets", () => {
     }
     expect((await readFile(join(directory, "SHA256SUMS"), "utf8")).trim().split("\n")).toHaveLength(12);
     await expect(prepareAssets(directory, rawRelease)).resolves.toEqual(assets);
+  });
+
+  test("validates opted-in manifests against every declared binary and produces the complete attested asset set", async () => {
+    const directory = await tempDirectory();
+    const targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"] as const;
+    const release = { build_type: "cargo-raw", binary: "app", targets: [...targets], version_probe_args: ["version", "--json"] } satisfies Release;
+    const version = "1.2.3";
+    const sourceRevision = "a".repeat(40);
+    const platformTargets: Record<typeof targets[number], { target: string; floor: Record<string, string> }> = {
+      "aarch64-apple-darwin": { target: "macos-aarch64", floor: { minimum_os: "13.0" } },
+      "x86_64-apple-darwin": { target: "macos-x86_64", floor: { minimum_os: "13.0" } },
+      "aarch64-unknown-linux-gnu": { target: "linux-aarch64", floor: { minimum_libc: "glibc 2.39" } },
+      "x86_64-unknown-linux-gnu": { target: "linux-x86_64", floor: { minimum_libc: "glibc 2.39" } },
+    };
+    for (const target of targets) {
+      const name = `app-${target}`;
+      const content = `binary-${target}`;
+      const sha256 = createHash("sha256").update(content).digest("hex");
+      await writeFile(join(directory, name), content);
+      await writeFile(join(directory, `${name}.artifact.json`), `${JSON.stringify({
+        version, target: platformTargets[target].target, rust_target: target, ...platformTargets[target].floor,
+        source_revision: sourceRevision, dirty: false, version_json: { version }, sha256,
+      })}\n`);
+    }
+    const assets = await prepareAssets(directory, release, { version, sourceRevision });
+    expect(assets.map(({ name }) => name)).toEqual([
+      ...targets.flatMap((target) => [`app-${target}`, `app-${target}.artifact.json`, `app-${target}.sha256`]),
+      "SHA256SUMS",
+    ].sort((a, b) => a.localeCompare(b, "en")));
+    expect((await readFile(join(directory, "SHA256SUMS"), "utf8")).trim().split("\n")).toHaveLength(12);
+  });
+
+  test.each(["missing artifact manifest", "wrong source revision", "wrong binary digest", "extra manifest field"])("rejects opted-in cargo-raw %s", async (failure) => {
+    const directory = await tempDirectory();
+    const target = "x86_64-apple-darwin";
+    const name = `app-${target}`;
+    const content = "binary";
+    const sha256 = createHash("sha256").update(content).digest("hex");
+    await writeFile(join(directory, name), content);
+    if (failure !== "missing artifact manifest") {
+      const manifest = {
+        version: "1.2.3", target: "macos-x86_64", rust_target: target, minimum_os: "13.0",
+        source_revision: failure === "wrong source revision" ? "b".repeat(40) : "a".repeat(40),
+        dirty: false, version_json: { version: "1.2.3" }, sha256: failure === "wrong binary digest" ? "c".repeat(64) : sha256,
+        ...(failure === "extra manifest field" ? { extra: true } : {}),
+      };
+      await writeFile(join(directory, `${name}.artifact.json`), JSON.stringify(manifest));
+    }
+    const release = { build_type: "cargo-raw", binary: "app", targets: [target], version_probe_args: ["version", "--json"] } satisfies Release;
+    const message = failure === "missing artifact manifest" ? /missing cargo-raw artifact manifest/
+      : failure === "wrong source revision" ? /source does not match/
+        : failure === "wrong binary digest" ? /digest does not match/
+          : /invalid shape/;
+    await expect(prepareAssets(directory, release, { version: "1.2.3", sourceRevision: "a".repeat(40) })).rejects.toThrow(message);
   });
 
   test.each([

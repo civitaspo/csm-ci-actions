@@ -118,6 +118,12 @@ describe("parseConfig", () => {
     ["cargo-raw with unsupported target", releaseConfig("{ build_type: cargo-raw, binary: app, targets: [x86_64-pc-windows-msvc] }"), /Invalid option/],
     ["cargo-raw with duplicate targets", releaseConfig("{ build_type: cargo-raw, binary: app, targets: [x86_64-unknown-linux-musl, x86_64-unknown-linux-musl] }"), /duplicate cargo-raw target/],
     ["cargo-raw with unknown fields", releaseConfig("{ build_type: cargo-raw, binary: app, targets: [x86_64-unknown-linux-musl], extra: true }"), /Unrecognized key/],
+    ["cargo-raw with an empty version probe", releaseConfig("{ build_type: cargo-raw, binary: app, targets: [x86_64-apple-darwin], version_probe_args: [] }"), /Too small/],
+    ["cargo-raw with a NUL version probe argument", releaseConfig(`{ build_type: cargo-raw, binary: app, targets: [x86_64-apple-darwin], version_probe_args: [${JSON.stringify("version\0json")}] }`), /NUL/],
+    ["cargo-raw with an oversized version probe argument list", releaseConfig(`{ build_type: cargo-raw, binary: app, targets: [x86_64-apple-darwin], version_probe_args: ${JSON.stringify(Array(17).fill("x"))} }`), /Too big/],
+    ["cargo-raw with an oversized version probe argument", releaseConfig(`{ build_type: cargo-raw, binary: app, targets: [x86_64-apple-darwin], version_probe_args: ${JSON.stringify(["x".repeat(1025)])} }`), /Too big/],
+    ["cargo-raw with oversized combined version probe arguments", releaseConfig(`{ build_type: cargo-raw, binary: app, targets: [x86_64-apple-darwin], version_probe_args: ${JSON.stringify(Array(5).fill("x".repeat(1024)))} }`), /4096 characters/],
+    ["cargo-raw metadata with a Linux musl target", releaseConfig("{ build_type: cargo-raw, binary: app, targets: [x86_64-unknown-linux-musl], version_probe_args: [version, --json] }"), /Apple and Linux GNU/],
     ["non-cargo build with target triples", releaseConfig("{ build_type: none, targets: [x86_64-unknown-linux-gnu] }"), /Unrecognized key/],
   ];
   test.each(rejects)("rejects %s", (_, yaml, message) => {
@@ -162,6 +168,11 @@ describe("repositoryEntry", () => {
   });
   test("keeps raw binary and all six supported targets", () => {
     const release = { build_type: "cargo-raw", binary: "herdr-linear-agent", targets: ["aarch64-apple-darwin", "x86_64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-musl", "x86_64-unknown-linux-musl"] } satisfies Release;
+    const parsed = parseConfig(releaseConfig(JSON.stringify(release)));
+    expect(repositoryEntry(parsed, "owner/repo")?.release).toEqual(release);
+  });
+  test("keeps the bounded native version probe for Apple and Linux GNU targets", () => {
+    const release = { build_type: "cargo-raw", binary: "app", targets: ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"], version_probe_args: ["version", "--json"] } satisfies Release;
     const parsed = parseConfig(releaseConfig(JSON.stringify(release)));
     expect(repositoryEntry(parsed, "owner/repo")?.release).toEqual(release);
   });

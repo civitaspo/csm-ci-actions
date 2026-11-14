@@ -31,7 +31,7 @@ export async function publishRelease(
     if (!input.terraform) throw new Rejection("Terraform publication requires the verified public key and source timestamp");
     local = await prepareAssets(input.directory, { ...plan.release, version: plan.version, ...input.terraform });
   } else {
-    local = await prepareAssets(input.directory, plan.release);
+    local = await prepareAssets(input.directory, plan.release, { version: plan.version, sourceRevision: plan.mergeSha });
   }
   assertSameAssets(expected, local);
   const repo = splitRepository(plan.repository);

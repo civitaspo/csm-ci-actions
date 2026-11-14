@@ -1,7 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { accessSync, chmodSync, constants, copyFileSync, lstatSync, mkdirSync, realpathSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { accessSync, chmodSync, constants, copyFileSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { z } from "zod";
 import { ensure } from "./ensure.ts";
+import { VersionProbeArgs } from "../lib/config.ts";
 
 export const RAW_TARGETS: Record<string, readonly [string, string]> = {
   "aarch64-apple-darwin": ["Mach-O 64-bit", "arm64"],
@@ -16,6 +19,99 @@ const SEMVER = String.raw`(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 
 const MAX_GLIBC = [2, 39, 0] as const;
+const MAX_PROBE_OUTPUT = 1024 * 1024;
+const PROBE_TIMEOUT_MS = 30_000;
+const METADATA_TARGETS = {
+  "aarch64-apple-darwin": { target: "macos-aarch64", floor: "minimum_os" },
+  "x86_64-apple-darwin": { target: "macos-x86_64", floor: "minimum_os" },
+  "aarch64-unknown-linux-gnu": { target: "linux-aarch64", floor: "minimum_libc" },
+  "x86_64-unknown-linux-gnu": { target: "linux-x86_64", floor: "minimum_libc" },
+} as const;
+const SEMVER_PATTERN = new RegExp(`^${SEMVER}$`, "u");
+const VersionJson = z.record(z.string(), z.unknown());
+const RawVerifierInput = z.tuple([z.string(), z.string(), z.string(), z.string(), z.string()]);
+const RawValidationInput = z.tuple([z.string(), z.string(), z.string()]);
+const RawArtifactManifestSchema = z.union([
+  z.strictObject({
+    version: z.string().regex(SEMVER_PATTERN),
+    target: z.enum(["macos-aarch64", "macos-x86_64"]),
+    rust_target: z.enum(["aarch64-apple-darwin", "x86_64-apple-darwin"]),
+    minimum_os: z.string().regex(/^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*))?$/u),
+    source_revision: z.string().regex(/^[0-9a-f]{40}$/u),
+    dirty: z.literal(false),
+    version_json: VersionJson,
+    sha256: z.string().regex(/^[0-9a-f]{64}$/u),
+  }),
+  z.strictObject({
+    version: z.string().regex(SEMVER_PATTERN),
+    target: z.enum(["linux-aarch64", "linux-x86_64"]),
+    rust_target: z.enum(["aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"]),
+    minimum_libc: z.string().regex(/^glibc (?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u),
+    source_revision: z.string().regex(/^[0-9a-f]{40}$/u),
+    dirty: z.literal(false),
+    version_json: VersionJson,
+    sha256: z.string().regex(/^[0-9a-f]{64}$/u),
+  }),
+]);
+export type RawArtifactManifest = z.infer<typeof RawArtifactManifestSchema>;
+
+function metadataTarget(target: string): (typeof METADATA_TARGETS)[keyof typeof METADATA_TARGETS] {
+  const value = Object.entries(METADATA_TARGETS).find(([rustTarget]) => rustTarget === target)?.[1];
+  ensure(value !== undefined, "version_probe_args supports Apple and Linux GNU targets only");
+  return value;
+}
+
+export function parseMinimumOs(loadCommands: string): string {
+  const commands = loadCommands.split(/(?=^Load command \d+\s*$)/mu);
+  for (const command of commands) {
+    if (/^\s*cmd LC_BUILD_VERSION\s*$/mu.test(command) && /^\s*platform MACOS\s*$/mu.test(command)) {
+      const minimum = /^\s*minos (\d+\.\d+(?:\.\d+)?)\s*$/mu.exec(command)?.[1];
+      if (minimum) return minimum;
+    }
+    if (/^\s*cmd LC_VERSION_MIN_MACOSX\s*$/mu.test(command)) {
+      const minimum = /^\s*version (\d+\.\d+(?:\.\d+)?)\s*$/mu.exec(command)?.[1];
+      if (minimum) return minimum;
+    }
+  }
+  throw new Error("cargo-raw could not read the macOS deployment target from the executable");
+}
+
+export function parseVersionJson(output: Buffer): Record<string, unknown> {
+  ensure(output.byteLength <= MAX_PROBE_OUTPUT, "cargo-raw version probe output exceeds 1 MiB");
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(output);
+  } catch {
+    throw new Error("cargo-raw version probe output is not valid UTF-8");
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    throw new Error("cargo-raw version probe output is not valid JSON");
+  }
+  const parsed = VersionJson.safeParse(value);
+  ensure(parsed.success, "cargo-raw version probe output must be a JSON object");
+  return parsed.data;
+}
+
+export function validateArtifactManifest(value: unknown, expected: {
+  target: string; version: string; sourceRevision: string; binarySha256: string;
+}): RawArtifactManifest {
+  const parsed = RawArtifactManifestSchema.safeParse(value);
+  ensure(parsed.success, "cargo-raw artifact manifest has an invalid shape");
+  const manifest = parsed.data;
+  const target = metadataTarget(expected.target);
+  ensure(manifest.rust_target === expected.target && manifest.target === target.target,
+    "cargo-raw artifact manifest target does not match the configured target");
+  ensure(manifest.version === expected.version, "cargo-raw artifact manifest version does not match the release plan");
+  ensure(manifest.source_revision === expected.sourceRevision && manifest.dirty === false,
+    "cargo-raw artifact manifest source does not match the clean release commit");
+  ensure(manifest.sha256 === expected.binarySha256, "cargo-raw artifact manifest digest does not match its binary");
+  ensure(target.floor === "minimum_os" ? "minimum_os" in manifest : "minimum_libc" in manifest,
+    "cargo-raw artifact manifest runtime floor does not match its target");
+  return manifest;
+}
 
 function glibcVersionNumber(version: string): readonly [number, number, number] | undefined {
   const match = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:\.(0|[1-9][0-9]*))?$/u.exec(version);
@@ -75,12 +171,23 @@ const readelf = (...args: string[]) => execFileSync("readelf", args, {
 
 export function verifyRaw(args: string[]): string | undefined {
   if (args.length === 4 && args[0] === "--validate") {
-    validateInputs(args[1]!, args[2]!, args[3]!);
+    const [target, binary, version] = RawValidationInput.parse(args.slice(1));
+    validateInputs(target, binary, version);
     return undefined;
   }
-  ensure(args.length === 5, "usage: release-build raw BINARY_PATH TARGET BINARY VERSION OUTPUT_DIRECTORY");
-  const [source, target, binary, version, destination] = args as [string, string, string, string, string];
+  ensure(args.length === 5 || args.length === 7, "usage: release-build raw BINARY_PATH TARGET BINARY VERSION OUTPUT_DIRECTORY [SOURCE_REVISION VERSION_PROBE_ARGS_JSON]");
+  const [source, target, binary, version, destination] = RawVerifierInput.parse(args.slice(0, 5));
   validateInputs(target, binary, version);
+  let sourceRevision: string | undefined;
+  let probeArgs: string[] | undefined;
+  if (args.length === 7) {
+    sourceRevision = z.string().parse(args.at(5));
+    ensure(/^[0-9a-f]{40}$/u.test(sourceRevision), "cargo-raw metadata requires a trusted 40-character source revision");
+    const parsedArgs: unknown = JSON.parse(z.string().parse(args.at(6)));
+    ensure(Array.isArray(parsedArgs), "cargo-raw version probe arguments must be a JSON array");
+    if (parsedArgs.length > 0) probeArgs = VersionProbeArgs.parse(parsedArgs);
+  }
+  if (probeArgs) metadataTarget(target);
   const path = realpathSync(resolve(source));
   let executable = false;
   try {
@@ -100,5 +207,45 @@ export function verifyRaw(args: string[]): string | undefined {
   const output = join(destination, `${binary}-${target}`);
   copyFileSync(path, output);
   chmodSync(output, 0o755);
+  if (probeArgs && sourceRevision) {
+    ensure(process.env.CSM_CI_SOURCE_REVISION === sourceRevision && process.env.CSM_CI_SOURCE_CLEAN === "true",
+      "cargo-raw metadata requires the validated clean release source marker");
+    const versionJson = parseVersionJson(runVersionProbe(path, probeArgs));
+    const targetMetadata = metadataTarget(target);
+    const floor = targetMetadata.floor === "minimum_os"
+      ? { minimum_os: parseMinimumOs(command("otool", "-l", "-v", path)) }
+      : { minimum_libc: measureMinimumLibc() };
+    const manifest = RawArtifactManifestSchema.parse({
+      version,
+      target: targetMetadata.target,
+      rust_target: target,
+      ...floor,
+      source_revision: sourceRevision,
+      dirty: false,
+      version_json: versionJson,
+      sha256: createHash("sha256").update(readFileSync(output)).digest("hex"),
+    });
+    writeFileSync(`${output}.artifact.json`, `${JSON.stringify(manifest, null, 2)}\n`, { flag: "wx" });
+  }
   return `verified ${target}: ${description}; ${reported}`;
+}
+
+export function runVersionProbe(path: string, args: string[], timeoutMs = PROBE_TIMEOUT_MS): Buffer {
+  let output: Buffer;
+  try {
+    output = execFileSync(path, args, { encoding: "buffer", timeout: timeoutMs, killSignal: "SIGKILL", maxBuffer: MAX_PROBE_OUTPUT + 1 });
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+      throw new Error("cargo-raw version probe output exceeds 1 MiB");
+    }
+    throw new Error("cargo-raw version probe failed or exceeded its 30-second limit");
+  }
+  ensure(output.byteLength <= MAX_PROBE_OUTPUT, "cargo-raw version probe output exceeds 1 MiB");
+  return output;
+}
+
+function measureMinimumLibc(): string {
+  const version = command("getconf", "GNU_LIBC_VERSION");
+  ensure(/^glibc \d+\.\d+$/u.test(version), "cargo-raw could not measure the GNU libc runtime floor");
+  return version;
 }

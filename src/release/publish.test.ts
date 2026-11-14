@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -72,6 +73,22 @@ describe("publishRelease", () => {
       expectedAssets: [], directory,
       terraform: { sourceDateEpoch: "1800000000", fingerprint: "A".repeat(40), publicKey: "fixture public key" },
     })).rejects.toThrow("Terraform assets must contain exactly one Registry manifest");
+    expect(fetch.calls).toEqual([]);
+  });
+  test("revalidates cargo-raw metadata against the release plan before any GitHub call", async () => {
+    directory = await mkdtemp(join(tmpdir(), "csm-cargo-raw-publish-"));
+    const binary = "release binary";
+    const binaryDigest = createHash("sha256").update(binary).digest("hex");
+    await writeFile(join(directory, "app-x86_64-apple-darwin"), binary);
+    await writeFile(join(directory, "app-x86_64-apple-darwin.artifact.json"), JSON.stringify({
+      version: "1.2.3", target: "macos-x86_64", rust_target: "x86_64-apple-darwin", minimum_os: "13.0",
+      source_revision: "f".repeat(40), dirty: false, version_json: { version: "1.2.3" }, sha256: binaryDigest,
+    }));
+    const fetch = fakeFetch([]);
+    await expect(publishRelease(github("t", fetch), {
+      plan: { ...plan, release: { build_type: "cargo-raw", binary: "app", targets: ["x86_64-apple-darwin"], version_probe_args: ["version", "--json"] } },
+      expectedAssets: [], directory,
+    })).rejects.toThrow("source does not match the clean release commit");
     expect(fetch.calls).toEqual([]);
   });
   test.each([
