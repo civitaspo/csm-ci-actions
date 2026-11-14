@@ -37589,11 +37589,33 @@ async function listWorkflowFiles(gh, owner, repo, ref) {
   return tree.tree.flatMap((entry) => entry.type === "blob" && (entry.mode === "100644" || entry.mode === "100755") && entry.sha && entry.path && isWorkflowFileName(entry.path) ? [{ path: entry.path, sha: entry.sha }] : []);
 }
 async function readFiles(gh, owner, repo, ref, files) {
-  const results = await Promise.all(files.map(async ({ path }) => [path, await readFileAtRef(gh, owner, repo, path, ref)]));
+  if (files.length === 0)
+    return new Map;
+  const { data: commit } = await gh.rest.repos.getCommit({ owner, repo, ref });
+  const rootTreeSha = commit.commit.tree.sha;
+  if (!rootTreeSha)
+    throw new Rejection("managed files commit has no Git tree SHA");
+  const treeCache = new Map;
+  const loadTree = (treeSha) => {
+    let response = treeCache.get(treeSha);
+    if (!response) {
+      response = gh.rest.git.getTree({ owner, repo, tree_sha: treeSha });
+      treeCache.set(treeSha, response);
+    }
+    return response;
+  };
+  const results = await Promise.all(files.map(async ({ path }) => [path, await readFileAtTree(gh, owner, repo, path, rootTreeSha, loadTree)]));
   return new Map(results);
 }
 async function readFileAtRef(gh, owner, repo, path, ref) {
   const entry = await findTreeEntry(gh, owner, repo, path, ref);
+  return readFileAtEntry(gh, owner, repo, path, entry);
+}
+async function readFileAtTree(gh, owner, repo, path, rootTreeSha, loadTree) {
+  const entry = await findTreeEntryAtTree(gh, owner, repo, path, rootTreeSha, loadTree);
+  return readFileAtEntry(gh, owner, repo, path, entry);
+}
+async function readFileAtEntry(gh, owner, repo, path, entry) {
   if (!entry)
     return { content: null, entry: null };
   const bytes = await readBlob(gh, owner, repo, path, entry.sha);
@@ -37616,12 +37638,16 @@ async function readBlob(gh, owner, repo, path, sha) {
 }
 async function findTreeEntry(gh, owner, repo, path, ref) {
   const { data: commit } = await gh.rest.repos.getCommit({ owner, repo, ref });
-  let treeSha = commit.commit.tree.sha;
-  if (!treeSha)
+  const rootTreeSha = commit.commit.tree.sha;
+  if (!rootTreeSha)
     throw new Rejection("managed files commit has no Git tree SHA");
+  return findTreeEntryAtTree(gh, owner, repo, path, rootTreeSha, (treeSha) => gh.rest.git.getTree({ owner, repo, tree_sha: treeSha }));
+}
+async function findTreeEntryAtTree(gh, owner, repo, path, rootTreeSha, loadTree) {
+  let treeSha = rootTreeSha;
   const segments = path.split("/");
   for (const [index, segment] of segments.entries()) {
-    const { data: tree } = await gh.rest.git.getTree({ owner, repo, tree_sha: treeSha });
+    const { data: tree } = await loadTree(treeSha);
     if (tree.truncated)
       throw new Rejection("managed files could not safely inspect a Git tree");
     const entry = tree.tree.find((candidate) => candidate.path === segment);

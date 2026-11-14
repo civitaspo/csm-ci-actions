@@ -55,6 +55,7 @@ function githubFixture(options: {
   missingMergeBase?: boolean;
   mergeBaseSha?: string;
   comparisonCalls?: { count: number };
+  readCounts?: { commits: Map<string, number>; trees: Map<string, number> };
   pulls?: Array<{ number: number; title: string; body: string | null; base: { ref: string }; head: { sha: string } }>;
   history?: Array<{ sha: string; parent: string; filename: string; previousFilename?: string }>;
 } = {}): GitHub {
@@ -88,11 +89,17 @@ function githubFixture(options: {
           if (options.targetMissing) throw Object.assign(new Error("Not Found"), { status: 404 });
           return { data: { object: { sha: targetSha } } };
         },
-        getTree: async ({ tree_sha }: { tree_sha: string }) => ({ data: { truncated: options.treeTruncated ?? false, tree: [options.funding && !tree_sha.startsWith("funding-tree") ? { path: ".github", type: "tree", mode: "040000", sha: `funding-tree-${tree_sha}` } : options.treeEntry ?? { path: options.funding ? "FUNDING.yml" : "managed.yml", type: "blob", mode: options.targetMode ?? "100644", sha: (tree_sha === defaultTreeSha || tree_sha === `funding-tree-${defaultTreeSha}`) ? blobSha : targetBlobSha }] } }),
+        getTree: async ({ tree_sha }: { tree_sha: string }) => {
+          if (options.readCounts) options.readCounts.trees.set(tree_sha, (options.readCounts.trees.get(tree_sha) ?? 0) + 1);
+          return { data: { truncated: options.treeTruncated ?? false, tree: [options.funding && !tree_sha.startsWith("funding-tree") ? { path: ".github", type: "tree", mode: "040000", sha: `funding-tree-${tree_sha}` } : options.treeEntry ?? { path: options.funding ? "FUNDING.yml" : "managed.yml", type: "blob", mode: options.targetMode ?? "100644", sha: (tree_sha === defaultTreeSha || tree_sha === `funding-tree-${defaultTreeSha}`) ? blobSha : targetBlobSha }] } };
+        },
         getBlob: async ({ file_sha }: { file_sha: string }) => ({ data: { encoding: options.blobEncoding ?? "base64", content: Buffer.from(file_sha === blobSha ? options.sourceContent ?? "old\n" : options.targetContent ?? "wanted\n").toString("base64") } }),
       },
       repos: {
-        getCommit: async ({ ref }: { ref: string }) => ({ data: commitFor(ref) }),
+        getCommit: async ({ ref }: { ref: string }) => {
+          if (options.readCounts) options.readCounts.commits.set(ref, (options.readCounts.commits.get(ref) ?? 0) + 1);
+          return { data: commitFor(ref) };
+        },
         compareCommitsWithBasehead: async ({ page }: { page?: number }) => {
           if (options.comparisonCalls) options.comparisonCalls.count++;
           if (page !== undefined && page > 2) throw new Error(`unexpected comparison page ${page}`);
@@ -119,6 +126,19 @@ describe("inspectManagedFiles", () => {
     expect(result.status).toBe("already-applied");
     expect(result.changedPaths).toEqual(["managed.yml"]);
     expect(result.targetSha).toBe(targetSha);
+  });
+
+  test("loads each pinned commit and shared tree once per readFiles batch", async () => {
+    const readCounts = { commits: new Map<string, number>(), trees: new Map<string, number>() };
+    await inspectManagedFiles(githubFixture({ readCounts }), {
+      ...input,
+      files: { "managed.yml": "wanted\n", "another.yml": "also wanted\n" },
+    });
+    expect(readCounts.commits.get(defaultSha)).toBe(1);
+    // History checks the target commit's GitHub ownership/signature and details before the file batch loads its pinned tree.
+    expect(readCounts.commits.get(targetSha)).toBe(3);
+    expect(readCounts.trees.get(defaultTreeSha)).toBe(1);
+    expect(readCounts.trees.get(treeSha)).toBe(1);
   });
 
   test("rebuilds a managed branch that is an ancestor of default even when its files match", async () => {
