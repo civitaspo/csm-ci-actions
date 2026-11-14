@@ -734,6 +734,56 @@ describe("mergeReservation", () => {
     expect(deploymentsFetch.calls).toContain("POST /repos/owner/server/deployments/77/statuses");
   });
 
+  test("reports a failed managed-tree verification after the squash merge", async () => {
+    const managed = {
+      version: 2,
+      kind: "managed-files",
+      repository_id: 123,
+      repository: "owner/repo",
+      pull_number: 12,
+      pull_node_id: "PR_node",
+      base_ref: "main",
+      managed_ref: "csm-ci/repo-settings",
+      accepted_base: "b".repeat(40),
+      accepted_head: sha,
+      configuration_sha: "c".repeat(40),
+      release_version: "v1.2.3",
+      release_sha: "d".repeat(40),
+      manifest_digest: "e".repeat(64),
+      idempotency_key: "f".repeat(64),
+      accepted_at: "2026-10-20T00:00:00.000Z",
+      expires_at: "2026-10-27T00:00:00.000Z",
+    };
+    const { ctx, record, deploymentsFetch, notifyFetch } = readyReservation({ payload: managed, labelExists: true });
+    ctx.attestManagedPull = async () => ({
+      repositoryId: managed.repository_id,
+      repository: managed.repository,
+      pullNumber: managed.pull_number,
+      pullNodeId: managed.pull_node_id,
+      baseRef: managed.base_ref,
+      baseSha: managed.accepted_base,
+      headSha: managed.accepted_head,
+      configSha: managed.configuration_sha,
+      releaseSha: managed.release_sha,
+      releaseVersion: managed.release_version,
+      manifestDigest: managed.manifest_digest,
+    });
+    ctx.managedReadiness = async () => ({ kind: "ready" });
+    ctx.verifyManagedMerge = async () => ({ matches: false, reason: "e2e/repo-settings-managed-drift.txt differs" });
+    const writeFetch = fakeFetch([
+      { method: "POST", path: "/graphql", body: { data: { disablePullRequestAutoMerge: { clientMutationId: null } } } },
+      { method: "PUT", path: `${P}/pulls/12/merge`, status: 200, body: { merged: true, sha: "c".repeat(40) } },
+    ]);
+    ctx.write = github("write", writeFetch);
+
+    await expect(mergeReservation(ctx, record, sha)).rejects.toThrow("merged, but managed files drifted: e2e/repo-settings-managed-drift.txt differs; run repo-settings again");
+
+    expect(writeFetch.calls).toContain(`PUT ${P}/pulls/12/merge`);
+    expect(deploymentsFetch.requests.some(({ body }) => body?.includes('"state":"failure"') && body.includes("reason=rejected") && body.includes("managed files drifted"))).toBe(true);
+    expect(notifyFetch.requests.some(({ body }) => body?.includes("managed files drifted") && body.includes("run repo-settings again"))).toBe(true);
+    expect(notifyFetch.calls).toContain(`DELETE ${P}/issues/12/labels/csm-ci%2Fautomerge`);
+  });
+
   test("fails HTTP 409 without retrying the protected merge write", async () => {
     const { ctx, record, deploymentsFetch, notifyFetch } = readyReservation({ labelExists: true });
     const writeFetch = fakeFetch([{ method: "PUT", path: `${P}/pulls/12/merge`, status: 409, body: { message: "Conflict" } }]);

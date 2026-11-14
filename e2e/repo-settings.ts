@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { GENERATED_HEADER, hasGeneratedHeader } from "../src/lib/generated-workflows.ts";
 import { resolveWorkflowRelease } from "../src/lib/workflow-release.ts";
@@ -221,7 +221,7 @@ export function enableManagedFileAutoCompletion(configText: string, driftPath: s
   return updated;
 }
 
-async function managedReservation(ctx: Ctx, pullNumber: number): Promise<{ id: number; payload: Record<string, unknown>; state: ManagedReservationState } | undefined> {
+async function managedReservations(ctx: Ctx, pullNumber: number): Promise<{ id: number; payload: Record<string, unknown>; state: ManagedReservationState }[]> {
   const data = await ctx.gh.graphql<{
     client: { databaseId: number };
     server: { deployments: { nodes: { databaseId: number; task: string; payload: unknown; creator: { __typename: string; databaseId: number } | null }[] } };
@@ -234,18 +234,19 @@ async function managedReservation(ctx: Ctx, pullNumber: number): Promise<{ id: n
       !("repository_id" in payload) || payload.repository_id !== data.client.databaseId || !("pull_number" in payload) || payload.pull_number !== pullNumber) return [];
     return [{ deployment, payload: payload as Record<string, unknown> }];
   });
+  return Promise.all(matches.map(async ({ deployment, payload }) => {
+    const statuses = await ctx.gh.paginate(ctx.gh.rest.repos.listDeploymentStatuses, { ...splitRepository(SERVER), deployment_id: deployment.databaseId, per_page: 100 });
+    const terminal = statuses.filter((status) => status.creator?.id === SERVER_BOT_ID && status.creator.type === "Bot" && ["success", "failure", "inactive"].includes(status.state))
+      .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at) || Number(right.id) - Number(left.id))[0];
+    const state: ManagedReservationState = terminal?.state === "success" ? "success" : terminal?.state === "failure" ? "failure" : terminal?.state === "inactive" ? "inactive" : "active";
+    return { id: deployment.databaseId, payload, state };
+  }));
+}
+
+async function managedReservation(ctx: Ctx, pullNumber: number): Promise<{ id: number; payload: Record<string, unknown>; state: ManagedReservationState } | undefined> {
+  const matches = await managedReservations(ctx, pullNumber);
   if (matches.length > 1) throw new Error(`multiple managed-file reservations found for pull request #${pullNumber}`);
-  if (matches.length === 0) return undefined;
-  const match = matches[0]!;
-  const statuses = await ctx.gh.paginate(ctx.gh.rest.repos.listDeploymentStatuses, { ...splitRepository(SERVER), deployment_id: match.deployment.databaseId, per_page: 100 });
-  const terminal = statuses.filter((status) => status.creator?.id === SERVER_BOT_ID && status.creator.type === "Bot" && ["success", "failure", "inactive"].includes(status.state))
-    .sort((left, right) => Date.parse(left.created_at) - Date.parse(right.created_at) || Number(left.id) - Number(right.id))[0];
-  const state: ManagedReservationState = terminal?.state === "success" ? "success" : terminal?.state === "failure" ? "failure" : terminal?.state === "inactive" ? "inactive" : "active";
-  return {
-    id: match.deployment.databaseId,
-    payload: match.payload,
-    state,
-  };
+  return matches[0];
 }
 
 async function createManagedMergeGate(ctx: Ctx): Promise<() => Promise<void>> {
@@ -588,7 +589,7 @@ export const repoSettings: Scenario[] = [
         steps: [{
           operation: "repo-settings",
           outcome: "permitted",
-          expected: "With auto_merge_managed_files enabled, the validated managed PR receives a head-bound Approver App review, passes policy and required checks, and merges through a managed reservation without changing rulesets",
+          expected: "With auto_merge_managed_files enabled, a base change invalidates the old reservation, reconciliation rebuilds the managed PR from the new default head, and the freshly approved PR merges through csm-ci without changing rulesets",
         }],
         identity: [
           "PR author and effective generated commit identity: testing-csm-ci-server[bot] (ID 347400474).",
@@ -654,8 +655,7 @@ export const repoSettings: Scenario[] = [
         return enableManagedFileAutoCompletion(text, driftPath);
       }, async () => withCleanup(async () => {
         releaseManagedMergeGate = await createManagedMergeGate(ctx);
-        // This path starts at the desired bytes but is absent from the PR diff. The main-only
-        // pending check blocks GitHub's merge API so a base-only edit is ordered before merge.
+        // The required check keeps the PR open until its first reservation is observable.
         await writeDriftFile("managed by csm-ci e2e\n");
         const initial = await dispatchReconciliation(ctx, CLIENT, "dispatch", undefined, { targets: "managed-files", createdRulesetIds, expectedConclusion: "failure" });
         assert(initial.stepConclusions.get("Apply managed files") === "success", `managed-files stage did not complete (${initial.url})`);
@@ -697,13 +697,29 @@ export const repoSettings: Scenario[] = [
         assert(!heldPull.merged, "managed pull request merged despite the pending main-branch gate");
 
         await writeDriftFile("drift introduced after the managed reservation was accepted\n");
-        const held = await until("managed reservation waiting after base drift", async () => {
-          const current = await managedReservation(ctx, observedPull!.number);
-          return current?.id === reservation.id && current.state === "active" ? current : undefined;
+        const { data: driftedBase } = await ctx.gh.rest.git.getRef({ ...splitRepository(CLIENT), ref: "heads/main" });
+        const reconciled = await dispatchReconciliation(ctx, CLIENT, "dispatch", undefined, { targets: "managed-files", createdRulesetIds, expectedConclusion: "failure" });
+        assert(reconciled.stepConclusions.get("Apply managed files") === "success", `managed-files retry did not complete after base drift (${reconciled.url})`);
+        const replacement = await until("old reservation invalidated and a fresh reservation accepted", async () => {
+          const current = await managedReservations(ctx, observedPull!.number);
+          const prior = current.find((item) => item.id === reservation.id);
+          const next = current.find((item) => item.id !== reservation.id && item.state === "active");
+          return prior?.state === "inactive" && next ? { prior, next } : undefined;
         });
-        assert(held.id === reservation.id, "base drift changed the active managed reservation");
-        const { data: driftedPull } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: observedPull.number });
-        assert(!driftedPull.merged, "managed pull request merged before the post-reservation drift was written");
+        assert(replacement.prior.state === "inactive", "base drift did not invalidate the prior managed reservation");
+        assert(replacement.next.payload.accepted_base === driftedBase.object.sha, "replacement reservation does not pin the updated default-branch head");
+        const { data: refreshedPull } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: observedPull.number });
+        assert(!refreshedPull.merged && refreshedPull.head.sha !== observedPull.headSha, "reconciliation did not update the managed pull request from the new base");
+        assert(replacement.next.payload.accepted_head === refreshedPull.head.sha, "replacement reservation does not pin the reconciled PR head");
+        await until("head-bound Approver App review for the reconciled head", async () => {
+          const reviews = await ctx.gh.paginate(ctx.gh.rest.pulls.listReviews, { ...splitRepository(CLIENT), pull_number: observedPull!.number, per_page: 100 });
+          return reviews.some((review) => review.user?.id === 347401524 && review.state === "APPROVED" && review.commit_id === refreshedPull.head.sha) ? true : undefined;
+        });
+        const refreshedPolicy = await until("successful policy check for reconciled managed PR head", async () => {
+          const checks = await ctx.gh.paginate(ctx.gh.rest.checks.listForRef, { ...splitRepository(CLIENT), ref: refreshedPull.head.sha, per_page: 100 });
+          return checks.find((check) => check.name === "csm-ci/policy" && check.external_id === refreshedPull.head.sha && check.status === "completed");
+        });
+        assert(refreshedPolicy.conclusion === "success" && Number(refreshedPolicy.app?.id) === 5455185, "reconciled managed PR policy check did not succeed under the Server App");
         await releaseManagedMergeGate();
 
         const sweep = await dispatch(ctx, SERVER, "csm-ci-automerge.yml");
@@ -713,55 +729,10 @@ export const repoSettings: Scenario[] = [
           return current.merged ? current : undefined;
         });
         assert(merged.merge_commit_sha, "managed pull request has no squash merge SHA");
-        const mergedDrift = await readFileAtRef(ctx.gh, driftAddress.owner, driftAddress.repo, driftPath, merged.merge_commit_sha);
-        assert(mergedDrift.content === "drift introduced after the managed reservation was accepted\n", "the base-only managed drift was not preserved by the first merge");
-        const driftKey = createHash("sha256").update(`${CLIENT.toLowerCase()}#${merged.merge_commit_sha}`).digest("hex");
-        const dispatchTitle = `csm-ci-repo-settings ${CLIENT} ${driftKey}`;
-        const driftRun = await until("server-token workflow_dispatch for merged managed-file drift", async () => {
-          const { data } = await ctx.gh.rest.actions.listWorkflowRuns({ ...splitRepository(SERVER), workflow_id: "csm-ci-repo-settings.yml", event: "workflow_dispatch", per_page: 100 });
-          const matches = data.workflow_runs.filter((run) => run.display_title === dispatchTitle);
-          assert(matches.length <= 1, `multiple repo-settings runs share the deterministic drift key ${driftKey}`);
-          return matches[0];
-        });
-        const authoritativeDriftRun = await until("completed authoritative drift recovery workflow run", async () => {
-          const current = await ctx.gh.rest.actions.getWorkflowRun({ ...splitRepository(SERVER), run_id: driftRun.id });
-          return current.data.status === "completed" ? current : undefined;
-        });
-        const runPath = authoritativeDriftRun.data.path.split("@")[0];
-        assert(authoritativeDriftRun.data.event === "workflow_dispatch" && runPath === ".github/workflows/csm-ci-repo-settings.yml", "drift recovery did not run the repo-settings caller workflow via workflow_dispatch");
-        assert(authoritativeDriftRun.data.head_branch === "main" && Date.parse(authoritativeDriftRun.data.created_at) >= Date.parse(merged.merged_at ?? ""), "drift recovery run has the wrong ref or predates the merge");
-        assert(authoritativeDriftRun.data.actor?.id === 41898282 && authoritativeDriftRun.data.actor?.login === "github-actions[bot]", "drift recovery was not dispatched by GITHUB_TOKEN's GitHub Actions bot identity");
-        assert(authoritativeDriftRun.data.conclusion === "success", `drift recovery caller failed (${authoritativeDriftRun.data.html_url})`);
-        ctx.urls.push(authoritativeDriftRun.data.html_url);
-        const repairPull = await until("reconciliation PR for detected merged managed-file drift", async () => {
-          const pulls = await openManagedPull(ctx.gh);
-          if (pulls.length !== 1 || pulls[0]?.number === observedPull!.number) return undefined;
-          return pulls[0];
-        });
-        const { data: repairInfo } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: repairPull.number });
-        const repairFiles = await ctx.gh.paginate(ctx.gh.rest.pulls.listFiles, { ...splitRepository(CLIENT), pull_number: repairPull.number, per_page: 100 });
-        assert(repairFiles.some((file) => file.filename === driftPath), `drift recovery run did not propose the missing managed bytes (${authoritativeDriftRun.data.html_url})`);
-        await until("head-bound approval for the drift repair PR", async () => {
-          const reviews = await ctx.gh.paginate(ctx.gh.rest.pulls.listReviews, { ...splitRepository(CLIENT), pull_number: repairPull.number, per_page: 100 });
-          return reviews.some((review) => review.user?.id === 347401524 && review.state === "APPROVED" && review.commit_id === repairInfo.head.sha) ? true : undefined;
-        });
-        const repairReservation = await until("reservation for the drift repair PR", async () => managedReservation(ctx, repairPull.number));
-        assert(repairReservation.payload.accepted_head === repairInfo.head.sha, "drift repair reservation is not pinned to the repair PR head");
-        const repairSweep = await dispatch(ctx, SERVER, "csm-ci-automerge.yml");
-        assert(repairSweep.conclusion === "success", `drift repair reservation sweep concluded ${repairSweep.conclusion} (${repairSweep.html_url})`);
-        const repaired = await until("managed drift repair merge", async () => {
-          const { data: current } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: repairPull.number });
-          return current.merged ? current : undefined;
-        });
-        assert(repaired.merge_commit_sha, "drift repair pull request has no merge commit SHA");
-        await until(`successful managed reservation ${repairReservation.id}`, async () => {
-          const current = await managedReservation(ctx, repairPull.number);
-          return current?.id === repairReservation.id && current.state === "success" ? true : undefined;
-        });
         const mergedContent = await readFileAtRef(ctx.gh, splitRepository(CLIENT).owner, splitRepository(CLIENT).repo, "e2e/repo-settings-managed.txt", merged.merge_commit_sha);
         assert(mergedContent.content === "managed by csm-ci e2e\n", "merged commit does not contain the expected managed bytes");
-        const repairedContent = await readFileAtRef(ctx.gh, driftAddress.owner, driftAddress.repo, driftPath, repaired.merge_commit_sha);
-        assert(repairedContent.content === "managed by csm-ci e2e\n", "drift repair merge did not restore the approved managed bytes");
+        const mergedDrift = await readFileAtRef(ctx.gh, driftAddress.owner, driftAddress.repo, driftPath, merged.merge_commit_sha);
+        assert(mergedDrift.content === "managed by csm-ci e2e\n", "the replacement managed merge did not restore the desired bytes after base drift");
         assert(await managedBranchHead(ctx.gh, CLIENT) === undefined, "the managed branch remains after its pull request merged");
         const after = await snapshotRepository(ctx.gh, CLIENT, "observed");
         assert(isDeepStrictEqual(normalizeRuleSets(after.rulesets), normalizeRuleSets(snapshot.rulesets)), "automatic managed completion changed repository rulesets or bypass actors");

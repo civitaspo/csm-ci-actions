@@ -1,11 +1,11 @@
 import * as core from "@actions/core";
-import { createHash } from "node:crypto";
 import { createReservationStatus, findReservationsForPull, listReservations } from "../lib/automerge-github.ts";
 import { terminalDescription } from "../lib/automerge.ts";
 import { github, loadCurrentServerConfig, splitRepository } from "../lib/github.ts";
 import { deriveManagedPullAttestation } from "../lib/managed-pull-context.ts";
 import { ReleasedRevision } from "../lib/generated-workflows.ts";
-import { managedDriftDispatchState, verifyManagedMergeTree } from "../lib/managed-pull.ts";
+import { verifyManagedMergeTree } from "../lib/managed-pull.ts";
+import { reconcileManagedDrift } from "./managed-drift.ts";
 import { summarizeReservation } from "../lib/automerge-summary.ts";
 import { syncAutomergeDisplay } from "../lib/automerge-display.ts";
 import { evaluateMergeReadiness, evaluateReservation, mergeReservation, type MergeContext } from "../lib/merge.ts";
@@ -186,67 +186,15 @@ async function main(): Promise<void> {
         const { owner, repo } = splitRepository(serverRepository);
         const { data: serverInfo } = await configReader.rest.repos.get({ owner, repo });
         if (!serverInfo.default_branch) throw new Error("server default branch is unavailable");
-        const readDispatchState = async (notBefore?: Date) => {
-          const runs = await configReader.paginate(configReader.rest.actions.listWorkflowRuns, {
-            owner,
-            repo,
-            workflow_id: "csm-ci-repo-settings.yml",
-            event: "workflow_dispatch",
-            per_page: 100,
-          });
-          return managedDriftDispatchState({
-            runs: runs.map((run) => ({
-              displayTitle: run.display_title,
-              headBranch: run.head_branch,
-              event: run.event,
-              status: run.status ?? "",
-              conclusion: run.conclusion ?? null,
-              actorId: run.actor?.id == null ? null : Number(run.actor.id),
-              actorLogin: run.actor?.login ?? null,
-              createdAt: run.created_at,
-            })),
-            repository: reservation.repository,
-            mergeCommit,
-            defaultBranch: serverInfo.default_branch,
-            ...(notBefore ? { notBefore } : {}),
-          });
-        };
-        const dispatchState = await readDispatchState();
-        if (dispatchState === "already-running" || dispatchState === "already-succeeded") {
-          const detail = dispatchState === "already-succeeded" ? "already completed successfully" : "is already queued or running";
-          return { ...verification, reason: `${verification.reason ?? "merged tree differs from the accepted managed manifest"}; managed-files reconciliation ${detail}` };
-        }
-        const driftKey = createHash("sha256").update(`${reservation.repository.toLowerCase()}#${mergeCommit}`).digest("hex");
-        const dispatchStartedAt = new Date();
-        try {
-          await configReader.rest.actions.createWorkflowDispatch({
-            owner,
-            repo,
-            workflow_id: "csm-ci-repo-settings.yml",
-            ref: serverInfo.default_branch,
-            inputs: { repository: reservation.repository.toLowerCase(), targets: "managed-files", "managed-drift-key": driftKey },
-          });
-        } catch (dispatchError) {
-          let lastReadError: unknown;
-          for (let attempt = 0; attempt < 3; attempt++) {
-            if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 500));
-            try {
-              const recovered = await readDispatchState(dispatchStartedAt);
-              if (recovered === "already-running" || recovered === "already-succeeded") {
-                return { ...verification, reason: `${verification.reason ?? "merged tree differs from the accepted managed manifest"}; reconciliation run was found after an ambiguous dispatch response` };
-              }
-              if (recovered === "previous-failed") {
-                return { ...verification, reason: `${verification.reason ?? "merged tree differs from the accepted managed manifest"}; reconciliation run was created but failed after an ambiguous dispatch response` };
-              }
-            } catch (error) {
-              lastReadError = error;
-            }
-          }
-          const writeMessage = dispatchError instanceof Error ? dispatchError.message : String(dispatchError);
-          const readMessage = lastReadError instanceof Error ? `; run lookup also failed: ${lastReadError.message}` : "; no matching run appeared in bounded recovery lookup";
-          return { ...verification, reason: `${verification.reason ?? "merged tree differs from the accepted managed manifest"}; dispatch response was ambiguous and no retry was attempted: ${writeMessage}${readMessage}` };
-        }
-        return { ...verification, reason: `${verification.reason ?? "merged tree differs from the accepted managed manifest"}; managed-files reconciliation dispatched` };
+        const reason = await reconcileManagedDrift({
+          configReader,
+          serverRepository,
+          defaultBranch: serverInfo.default_branch,
+          repository: reservation.repository,
+          mergeCommit,
+          ...(verification.reason ? { reason: verification.reason } : {}),
+        });
+        return { ...verification, reason };
       } catch (error) {
         const dispatchError = error instanceof Error ? error.message : String(error);
         return { ...verification, reason: `${verification.reason ?? "merged tree differs from the accepted managed manifest"}; managed-files reconciliation dispatch failed: ${dispatchError}` };
