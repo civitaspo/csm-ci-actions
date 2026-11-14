@@ -193,6 +193,31 @@ async function recentManagedPulls(ctx: Ctx, since: Date): Promise<ManagedComplet
   }));
 }
 
+export function enableManagedFileAutoCompletion(configText: string, driftPath: string): string {
+  let updated = configText;
+  const flagLines = [...updated.matchAll(/^  auto_merge_managed_files: ([^\n]+)$/gmu)];
+  assert(flagLines.length <= 1, "trusted Server fixture has duplicate auto_merge_managed_files fields");
+  if (flagLines.length === 1) {
+    assert(flagLines[0]![1] === "true" || flagLines[0]![1] === "false", "trusted Server fixture has a non-boolean auto_merge_managed_files value");
+    updated = updated.replace(/^  auto_merge_managed_files: (?:true|false)$/mu, "  auto_merge_managed_files: true");
+  } else {
+    assert(/^repo_settings:\s*$/mu.test(updated), "trusted Server fixture has no repo_settings section");
+    updated = updated.replace(/^repo_settings:\s*$/mu, "repo_settings:\n  auto_merge_managed_files: true");
+  }
+
+  const escapedPath = driftPath.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const driftMapping = [...updated.matchAll(new RegExp(`^    ${escapedPath}: ([^\\n]+)$`, "gmu"))];
+  assert(driftMapping.length <= 1, `trusted Server fixture has duplicate ${driftPath} mappings`);
+  if (driftMapping.length === 1) {
+    assert(driftMapping[0]![1] === "managed-files/repo-settings-managed.txt", `trusted Server fixture maps ${driftPath} to an unexpected source`);
+  } else {
+    const sourceMapping = "    e2e/repo-settings-managed.txt: managed-files/repo-settings-managed.txt";
+    assert(updated.split(sourceMapping).length === 2, "trusted Server fixture has no unique managed-file source mapping");
+    updated = updated.replace(sourceMapping, `${sourceMapping}\n    ${driftPath}: managed-files/repo-settings-managed.txt`);
+  }
+  return updated;
+}
+
 async function managedReservation(ctx: Ctx, pullNumber: number): Promise<{ id: number; payload: Record<string, unknown>; success: boolean } | undefined> {
   const data = await ctx.gh.graphql<{
     client: { databaseId: number };
@@ -564,12 +589,7 @@ export const repoSettings: Scenario[] = [
       let observedPull: ManagedCompletionPull | undefined;
       let completed = false;
       await withServerConfig(ctx, (text) => {
-        const changed = text
-          .replace("repo_settings:\n", "repo_settings:\n  auto_merge_managed_files: true\n")
-          .replace("    e2e/repo-settings-managed.txt: managed-files/repo-settings-managed.txt\n", "    e2e/repo-settings-managed.txt: managed-files/repo-settings-managed.txt\n    e2e/repo-settings-managed-drift.txt: managed-files/repo-settings-managed.txt\n");
-        assert(changed !== text, "could not enable managed-file automatic completion in the trusted server fixture");
-        assert(changed.includes(`    ${driftPath}: managed-files/repo-settings-managed.txt\n`), "could not configure the second managed-file path");
-        return changed;
+        return enableManagedFileAutoCompletion(text, driftPath);
       }, async () => withCleanup(async () => {
         // This path starts at the desired bytes but is absent from the PR diff. A base-only edit
         // after reservation acceptance exposes verifiers that inspect changed paths only.
