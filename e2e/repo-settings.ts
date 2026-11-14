@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { GENERATED_HEADER, hasGeneratedHeader } from "../src/lib/generated-workflows.ts";
 import { resolveWorkflowRelease } from "../src/lib/workflow-release.ts";
 import { MANAGED_FILES_TITLE, readFileAtRef } from "../src/lib/managed-files.ts";
@@ -152,9 +153,9 @@ export async function restoreRepository(gh: GitHub, repository: string, snapshot
   await attempt(async () => { restored = await snapshotRepository(gh, repository, "restored"); });
   if (failures.length > 0) throw new AggregateError(failures, `restoring ${repository} failed in ${failures.length} step(s)`);
   assert(restored, `could not read restored repository state for ${repository}`);
-  assert(JSON.stringify(restored.settings) === JSON.stringify(snapshot.settings), `repository settings were not restored for ${repository}`);
+  assert(isDeepStrictEqual(restored.settings, snapshot.settings), `repository settings were not restored for ${repository}`);
   assert(restored.immutableReleases === snapshot.immutableReleases, `immutable releases were not restored for ${repository}`);
-  assert(JSON.stringify(normalizeRuleSets(restored.rulesets)) === JSON.stringify(normalizeRuleSets(snapshot.rulesets)), `rulesets were not restored for ${repository}`);
+  assert(isDeepStrictEqual(normalizeRuleSets(restored.rulesets), normalizeRuleSets(snapshot.rulesets)), `rulesets were not restored for ${repository}`);
 }
 
 function normalizeRuleSets(rulesets: RuleSet[]): Omit<RuleSet, "id" | "source_type" | "updated_at">[] {
@@ -275,7 +276,7 @@ async function createManagedMergeGate(ctx: Ctx): Promise<() => Promise<void>> {
   const verifyOwnedGate = async (): Promise<void> => {
     const { data } = await ctx.gh.rest.repos.getRepoRuleset({ ...address, ruleset_id: created.data.id });
     assert(data.id === created.data.id && data.name === name && data.target === "branch" && data.enforcement === "active", `owned managed-merge gate ${created.data.id} changed identity or enforcement`);
-    assert(JSON.stringify(data.conditions) === JSON.stringify(conditions), `owned managed-merge gate ${created.data.id} changed its target`);
+    assert(isDeepStrictEqual(data.conditions, conditions), `owned managed-merge gate ${created.data.id} changed its target`);
     assert(Array.isArray(data.bypass_actors) && data.bypass_actors.length === 1 && data.bypass_actors[0]?.actor_id === 5 && data.bypass_actors[0]?.actor_type === "RepositoryRole" && data.bypass_actors[0]?.bypass_mode === "always", `owned managed-merge gate ${created.data.id} changed its owner-only bypass`);
     const required = data.rules?.find((rule) => rule.type === "required_status_checks");
     const requiredChecks = required?.parameters?.required_status_checks;
@@ -763,7 +764,7 @@ export const repoSettings: Scenario[] = [
         assert(repairedContent.content === "managed by csm-ci e2e\n", "drift repair merge did not restore the approved managed bytes");
         assert(await managedBranchHead(ctx.gh, CLIENT) === undefined, "the managed branch remains after its pull request merged");
         const after = await snapshotRepository(ctx.gh, CLIENT, "observed");
-        assert(JSON.stringify(normalizeRuleSets(after.rulesets)) === JSON.stringify(normalizeRuleSets(snapshot.rulesets)), "automatic managed completion changed repository rulesets or bypass actors");
+        assert(isDeepStrictEqual(normalizeRuleSets(after.rulesets), normalizeRuleSets(snapshot.rulesets)), "automatic managed completion changed repository rulesets or bypass actors");
         completed = true;
         await annotatePr(ctx.gh, CLIENT, observedPull.number, ctx.run, prCase(ctx, "fixture"));
       }, [async () => {
@@ -1017,9 +1018,9 @@ export const repoSettings: Scenario[] = [
         assert(normal.stepConclusions.get("Apply repository settings") === "skipped", "normal dispatch applied repository settings before rejecting the caller (" + normal.url + ")");
         assert(await managedBranchHead(ctx.gh, SERVER) === bootstrapHead, "normal dispatch changed the managed branch after caller rejection (" + normal.url + ")");
         const after = await snapshotRepository(ctx.gh, SERVER, "observed");
-        assert(JSON.stringify(after.settings) === JSON.stringify(bootstrapSnapshot.settings)
+        assert(isDeepStrictEqual(after.settings, bootstrapSnapshot.settings)
           && after.immutableReleases === bootstrapSnapshot.immutableReleases
-          && JSON.stringify(normalizeRuleSets(after.rulesets)) === JSON.stringify(normalizeRuleSets(bootstrapSnapshot.rulesets)),
+          && isDeepStrictEqual(normalizeRuleSets(after.rulesets), normalizeRuleSets(bootstrapSnapshot.rulesets)),
         "targets managed-files or rejected normal dispatch changed server administration state (" + normal.url + ")");
       }, [
         () => cleanupManagedState(ctx, undefined, undefined, SERVER),
