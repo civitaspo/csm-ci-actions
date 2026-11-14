@@ -106,6 +106,7 @@ docs/, e2e/
 - **Server-owned branches** (`release/next`, `csm-ci/repo-settings`)
   - Every commit after the merge base must be server-made and within range.
   - A new commit is built on a temporary branch at the head of the default branch, and the owned branch is moved to it in one leased update, so the branch never equals its base and its open PR stays open.
+  - The planned [managed-file automatic completion](repo-settings.md#automatic-completion-planned) also requires the server to recompute and verify the complete desired change before approval and merge. A Server Bot commit or owned branch alone does not authorize automatic completion.
 - **Automerge display branch** (`csm-ci/automerge`)
   - This branch contains signed, empty commits used only as refs for server automerge reservation Deployments. Its commit subject names the validated client pull request; its body carries a diagnostic correlation marker.
   - These commits are not pull request commits and are excluded from the Server Bot commit trust rule above. Their text, signatures, refs, and markers never establish reservation authority or merge eligibility.

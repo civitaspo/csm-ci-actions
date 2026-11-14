@@ -4,6 +4,8 @@ Reusable client callers declare and map only `CSM_CI_CLIENT_APP_PRIVATE_KEY`. Se
 
 approve gives a pull request the approval that the repository's ruleset requires. The approval comes from the approver App, never from a person's token. The server decides from facts it reads itself, so the client only says which pull request or comment to look at.
 
+The planned [managed-file automatic completion](repo-settings.md#automatic-completion-planned) permits automatic approval of a sensitive managed-file pull request only after the server independently verifies its complete desired state. The approver App still writes a real review for the pinned head. Until that feature is deployed, the existing approval paths apply.
+
 ## Triggers
 
 | Event in the client repository | Request | Server path |
