@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { GENERATED_HEADER, hasGeneratedHeader } from "../src/lib/generated-workflows.ts";
 import { resolveWorkflowRelease } from "../src/lib/workflow-release.ts";
 import { MANAGED_FILES_TITLE, readFileAtRef } from "../src/lib/managed-files.ts";
@@ -53,6 +53,7 @@ type RuleSetSnapshot = Omit<RuleSet, "id" | "source_type">;
 type RepoSnapshot = { settings: SettingsSnapshot; rulesets: RuleSet[]; immutableReleases: boolean };
 type ManagedPull = { number: number; headSha: string };
 type ManagedCompletionPull = ManagedPull & { authorId: number | bigint | undefined; headRef: string; baseRef: string };
+type ManagedReservationState = "active" | "success" | "failure" | "inactive";
 
 const RuleSetSummarySchema = z.object({ id: z.number().int().positive(), name: z.string(), source_type: z.string().optional() }).passthrough();
 const RuleSetDetailsSchema = z.object({
@@ -219,7 +220,7 @@ export function enableManagedFileAutoCompletion(configText: string, driftPath: s
   return updated;
 }
 
-async function managedReservation(ctx: Ctx, pullNumber: number): Promise<{ id: number; payload: Record<string, unknown>; success: boolean } | undefined> {
+async function managedReservation(ctx: Ctx, pullNumber: number): Promise<{ id: number; payload: Record<string, unknown>; state: ManagedReservationState } | undefined> {
   const data = await ctx.gh.graphql<{
     client: { databaseId: number };
     server: { deployments: { nodes: { databaseId: number; task: string; payload: unknown; creator: { __typename: string; databaseId: number } | null }[] } };
@@ -238,10 +239,67 @@ async function managedReservation(ctx: Ctx, pullNumber: number): Promise<{ id: n
   const statuses = await ctx.gh.paginate(ctx.gh.rest.repos.listDeploymentStatuses, { ...splitRepository(SERVER), deployment_id: match.deployment.databaseId, per_page: 100 });
   const terminal = statuses.filter((status) => status.creator?.id === SERVER_BOT_ID && status.creator.type === "Bot" && ["success", "failure", "inactive"].includes(status.state))
     .sort((left, right) => Date.parse(left.created_at) - Date.parse(right.created_at) || Number(left.id) - Number(right.id))[0];
+  const state: ManagedReservationState = terminal?.state === "success" ? "success" : terminal?.state === "failure" ? "failure" : terminal?.state === "inactive" ? "inactive" : "active";
   return {
     id: match.deployment.databaseId,
     payload: match.payload,
-    success: terminal?.state === "success",
+    state,
+  };
+}
+
+async function createManagedMergeGate(ctx: Ctx): Promise<() => Promise<void>> {
+  const address = splitRepository(CLIENT);
+  const name = `csm-ci-e2e-managed-${randomUUID()}`;
+  const context = `${name}/hold`;
+  const conditions = { ref_name: { include: ["refs/heads/main"], exclude: [] } };
+  const rules = [{ type: "required_status_checks", parameters: {
+    do_not_enforce_on_create: false,
+    strict_required_status_checks_policy: false,
+    required_status_checks: [{ context }],
+  } }] satisfies NonNullable<RulesetUpdate["rules"]>;
+  // The owner token writes the base drift directly; the Server App is an Integration,
+  // not a repository-role member, so it still cannot bypass this merge gate.
+  const bypassActors = [{ actor_id: 5, actor_type: "RepositoryRole", bypass_mode: "always" }] satisfies NonNullable<RulesetUpdate["bypass_actors"]>;
+  const before = await ctx.gh.paginate("GET /repos/{owner}/{repo}/rulesets", { ...address, per_page: 100 });
+  assert(!before.some((entry) => typeof entry === "object" && entry !== null && "name" in entry && entry.name === name), `a ruleset named ${name} already exists`);
+  const created = await ctx.gh.rest.repos.createRepoRuleset({
+    ...address,
+    name,
+    target: "branch",
+    enforcement: "active",
+    conditions,
+    rules,
+    bypass_actors: bypassActors,
+  });
+  let released = false;
+  const verifyOwnedGate = async (): Promise<void> => {
+    const { data } = await ctx.gh.rest.repos.getRepoRuleset({ ...address, ruleset_id: created.data.id });
+    assert(data.id === created.data.id && data.name === name && data.target === "branch" && data.enforcement === "active", `owned managed-merge gate ${created.data.id} changed identity or enforcement`);
+    assert(JSON.stringify(data.conditions) === JSON.stringify(conditions), `owned managed-merge gate ${created.data.id} changed its target`);
+    assert(Array.isArray(data.bypass_actors) && data.bypass_actors.length === 1 && data.bypass_actors[0]?.actor_id === 5 && data.bypass_actors[0]?.actor_type === "RepositoryRole" && data.bypass_actors[0]?.bypass_mode === "always", `owned managed-merge gate ${created.data.id} changed its owner-only bypass`);
+    const required = data.rules?.find((rule) => rule.type === "required_status_checks");
+    const requiredChecks = required?.parameters?.required_status_checks;
+    assert(Array.isArray(requiredChecks) && requiredChecks.length === 1 && requiredChecks[0]?.context === context, `owned managed-merge gate ${created.data.id} changed its required check`);
+  };
+  try {
+    await verifyOwnedGate();
+    const after = await ctx.gh.paginate("GET /repos/{owner}/{repo}/rulesets", { ...address, per_page: 100 });
+    const ids = new Set(after.flatMap((entry) => typeof entry === "object" && entry !== null && "id" in entry && typeof entry.id === "number" ? [entry.id] : []));
+    assert(before.every((entry) => typeof entry === "object" && entry !== null && "id" in entry && typeof entry.id === "number" && ids.has(entry.id)), "creating the managed-merge gate removed an existing repository ruleset");
+  } catch (error) {
+    try {
+      await verifyOwnedGate();
+      await ctx.gh.rest.repos.deleteRepoRuleset({ ...address, ruleset_id: created.data.id });
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], `managed merge gate ${created.data.id} verification failed and safe cleanup could not be completed`);
+    }
+    throw error;
+  }
+  return async () => {
+    if (released) return;
+    await verifyOwnedGate();
+    await ctx.gh.rest.repos.deleteRepoRuleset({ ...address, ruleset_id: created.data.id });
+    released = true;
   };
 }
 
@@ -589,14 +647,16 @@ export const repoSettings: Scenario[] = [
       const startedAt = new Date(Date.now() - 2_000);
       const drainManagedWorkflows = onceAsync(() => drainWorkflowRuns(ctx.gh, startedAt, { timeoutMs: 30 * 60_000 }));
       let observedPull: ManagedCompletionPull | undefined;
+      let releaseManagedMergeGate: (() => Promise<void>) | undefined;
       let completed = false;
       await withServerConfig(ctx, (text) => {
         return enableManagedFileAutoCompletion(text, driftPath);
       }, async () => withCleanup(async () => {
-        // This path starts at the desired bytes but is absent from the PR diff. A base-only edit
-        // after reservation acceptance exposes verifiers that inspect changed paths only.
+        releaseManagedMergeGate = await createManagedMergeGate(ctx);
+        // This path starts at the desired bytes but is absent from the PR diff. The main-only
+        // pending check blocks GitHub's merge API so a base-only edit is ordered before merge.
         await writeDriftFile("managed by csm-ci e2e\n");
-        const initial = await dispatchReconciliation(ctx, CLIENT, "dispatch", undefined, { targets: "managed-files", createdRulesetIds });
+        const initial = await dispatchReconciliation(ctx, CLIENT, "dispatch", undefined, { targets: "managed-files", createdRulesetIds, expectedConclusion: "failure" });
         assert(initial.stepConclusions.get("Apply managed files") === "success", `managed-files stage did not complete (${initial.url})`);
         observedPull = await until("automatic managed-files pull request", async () => {
           const pulls = await recentManagedPulls(ctx, startedAt);
@@ -627,12 +687,23 @@ export const repoSettings: Scenario[] = [
         assert(policy.conclusion === "success" && Number(policy.app?.id) === 5455185, "managed PR policy check did not succeed under the Server App");
 
         const reservation = await until("managed-file reservation", async () => managedReservation(ctx, observedPull!.number));
+        assert(reservation.state === "active", "managed reservation did not remain active behind the pending main-branch gate");
         assert(reservation.payload.accepted_head === observedPull.headSha, "managed reservation is not pinned to the observed PR head");
         assert(reservation.payload.repository === CLIENT && reservation.payload.base_ref === "main" && reservation.payload.managed_ref === BRANCH, "managed reservation has the wrong repository or refs");
         const { data: serverMain } = await ctx.gh.rest.git.getRef({ ...splitRepository(SERVER), ref: "heads/main" });
         assert(reservation.payload.configuration_sha === serverMain.object.sha, "managed reservation does not pin the enabled Server configuration revision");
+        const { data: heldPull } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: observedPull.number });
+        assert(!heldPull.merged, "managed pull request merged despite the pending main-branch gate");
 
         await writeDriftFile("drift introduced after the managed reservation was accepted\n");
+        const held = await until("managed reservation waiting after base drift", async () => {
+          const current = await managedReservation(ctx, observedPull!.number);
+          return current?.id === reservation.id && current.state === "active" ? current : undefined;
+        });
+        assert(held.id === reservation.id, "base drift changed the active managed reservation");
+        const { data: driftedPull } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: observedPull.number });
+        assert(!driftedPull.merged, "managed pull request merged before the post-reservation drift was written");
+        await releaseManagedMergeGate();
 
         const sweep = await dispatch(ctx, SERVER, "csm-ci-automerge.yml");
         assert(sweep.conclusion === "success", `managed reservation sweep concluded ${sweep.conclusion} (${sweep.html_url})`);
@@ -684,7 +755,7 @@ export const repoSettings: Scenario[] = [
         assert(repaired.merge_commit_sha, "drift repair pull request has no merge commit SHA");
         await until(`successful managed reservation ${repairReservation.id}`, async () => {
           const current = await managedReservation(ctx, repairPull.number);
-          return current?.id === repairReservation.id && current.success ? true : undefined;
+          return current?.id === repairReservation.id && current.state === "success" ? true : undefined;
         });
         const mergedContent = await readFileAtRef(ctx.gh, splitRepository(CLIENT).owner, splitRepository(CLIENT).repo, "e2e/repo-settings-managed.txt", merged.merge_commit_sha);
         assert(mergedContent.content === "managed by csm-ci e2e\n", "merged commit does not contain the expected managed bytes");
@@ -711,6 +782,7 @@ export const repoSettings: Scenario[] = [
             }
           },
           restoreDriftFile,
+          async () => { if (releaseManagedMergeGate) await releaseManagedMergeGate(); },
           () => restoreRepository(ctx.gh, CLIENT, snapshot, createdRulesetIds),
         ]) {
           try { await cleanup(); } catch (error) { failures.push(error); }
