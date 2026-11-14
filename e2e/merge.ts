@@ -79,10 +79,19 @@ function terminalStatus(record: AutomergeRecord): AutomergeRecord["statuses"]["n
 async function assertReservation(ctx: Parameters<Scenario["run"]>[0], pr: Pr, expected: "QUEUED" | "SUCCESS" | "INACTIVE"): Promise<AutomergeRecord> {
   const record = await awaitReservation(ctx, pr);
   assert(record.creator?.__typename === "Bot" && record.creator.databaseId === SERVER_BOT_ID, `deployment ${record.databaseId} was not created by the Server bot`);
-  const terminal = terminalStatus(record);
-  if (expected === "QUEUED") assert(!terminal, `reservation for #${pr.number} unexpectedly ended as ${terminal?.state}`);
-  else assert(terminal?.state === expected, `reservation for #${pr.number} ended as ${terminal?.state ?? "active"}, expected ${expected}`);
-  return record;
+  if (expected === "QUEUED") {
+    const terminal = terminalStatus(record);
+    assert(!terminal, `reservation for #${pr.number} unexpectedly ended as ${terminal?.state}`);
+    return record;
+  }
+  return until(`reservation for #${pr.number} to reach ${expected}`, async () => {
+    const current = (await reservations(ctx, pr)).find((item) => item.databaseId === record.databaseId);
+    if (!current) return undefined;
+    const terminal = terminalStatus(current);
+    if (!terminal) return undefined;
+    assert(terminal.state === expected, `reservation for #${pr.number} ended as ${terminal.state}, expected ${expected}`);
+    return current;
+  }, 2 * 60_000);
 }
 
 async function assertClientDisplay(ctx: Parameters<Scenario["run"]>[0], pr: Pr, record: AutomergeRecord, expected: "queued" | "success" | "inactive"): Promise<void> {
