@@ -105,6 +105,7 @@ const RepoSettings = z.preprocess((input, ctx) => {
   }
   return input;
 }, z.strictObject({
+  auto_merge_managed_files: z.boolean().default(false),
   sponsorships: Sponsorships.optional(),
   settings: z.strictObject({
     delete_branch_on_merge: z.boolean().optional(),

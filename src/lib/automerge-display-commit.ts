@@ -37,7 +37,8 @@ async function readCommit(server: GitHub, repository: string, oid: string): Prom
 }
 
 function owned(commit: z.infer<typeof Commit>, serverBotId: number): boolean {
-  return commit.author?.user?.databaseId === serverBotId && commit.signature?.isValid === true && commit.signature.wasSignedByGitHub && commit.changedFilesIfAvailable === 0 && commit.parents.nodes.length === 1 && /^csm-ci: automerge [A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[1-9][0-9]*$/u.test(commit.messageHeadline) && commit.messageBody.startsWith(`${DISPLAY_IDENTITY}\n`);
+  const validIdentity = commit.messageBody.startsWith(`${DISPLAY_IDENTITY}\n`) || commit.messageBody.startsWith("csm-ci:automerge-display:managed-files:v2\n");
+  return commit.author?.user?.databaseId === serverBotId && commit.signature?.isValid === true && commit.signature.wasSignedByGitHub && commit.changedFilesIfAvailable === 0 && commit.parents.nodes.length === 1 && /^csm-ci: automerge [A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[1-9][0-9]*$/u.test(commit.messageHeadline) && validIdentity;
 }
 
 export async function createAutomergeDisplayCommit(args: { server: GitHub; serverRepository: string; defaultBranch: string; serverBotId: number; payload: ReservationPayload }): Promise<string> {
@@ -45,7 +46,9 @@ export async function createAutomergeDisplayCommit(args: { server: GitHub; serve
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(payload.repository)) throw new Error("display commit repository name is invalid");
   const headline = `csm-ci: automerge ${payload.repository}#${payload.pull_number}`;
   if (headline.length > 255) throw new Error("display commit subject is too long");
-  const body = `${DISPLAY_IDENTITY}\nrepository_id=${payload.repository_id}\ncommand_comment_id=${payload.command_comment_id}`;
+  const body = payload.version === 1
+    ? `${DISPLAY_IDENTITY}\nrepository_id=${payload.repository_id}\ncommand_comment_id=${payload.command_comment_id}`
+    : `csm-ci:automerge-display:managed-files:v2\nrepository_id=${payload.repository_id}\nidempotency_key=${payload.idempotency_key}`;
   let head = await readHead(server, serverRepository);
   let bootstrapped = false;
   if (!head) {

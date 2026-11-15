@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type DeploymentStatus, ReservationPayloadSchema, type ReservationPayload, reservationState, truncateDeploymentDescription } from "./automerge.ts";
+import { type DeploymentStatus, ReservationPayloadSchema, type HumanBotReservationPayload, type ManagedReservationPayload, type ReservationPayload, reservationState, terminalDescription, truncateDeploymentDescription } from "./automerge.ts";
 import { type GitHub, isNetworkFailure, splitRepository } from "./github.ts";
 
 const ENVIRONMENT = "csm-ci-automerge";
@@ -31,7 +31,8 @@ export type ReservationRecord = {
 };
 
 type ListArgs = { server: GitHub; serverRepository: string; serverBotId: number; now: Date; limit?: number };
-type CreateArgs = { server: GitHub; serverRepository: string; defaultBranch: string; displayCommit?: string; serverBotId: number; payload: ReservationPayload };
+type CreateArgs = { server: GitHub; serverRepository: string; defaultBranch: string; displayCommit?: string; serverBotId: number; payload: HumanBotReservationPayload };
+type CreateManagedArgs = Omit<CreateArgs, "payload"> & { payload: ManagedReservationPayload; serverRunUrl: string; pullUrl: string };
 
 const DEPLOYMENTS_QUERY = `query($owner:String!,$name:String!,$cursor:String){repository(owner:$owner,name:$name){deployments(environments:["${ENVIRONMENT}"],first:100,after:$cursor,orderBy:{field:CREATED_AT,direction:DESC}){pageInfo{hasNextPage endCursor}nodes{id databaseId task payload createdAt creator{__typename ... on Bot{databaseId}} statuses(first:100){pageInfo{hasNextPage}nodes{id state description createdAt creator{__typename ... on Bot{databaseId}}}}}}}}`;
 
@@ -75,7 +76,7 @@ export async function getReservation(args: { server: GitHub; serverRepository: s
 export async function createReservation(args: CreateArgs): Promise<ReservationRecord> {
   const find = () => findReservationsForPull({ server: args.server, serverRepository: args.serverRepository, serverBotId: args.serverBotId, repositoryId: args.payload.repository_id, pullNumber: args.payload.pull_number, now: new Date() });
   const existing = await find();
-  const replay = existing.find((r) => r.payload.command_comment_id === args.payload.command_comment_id);
+  const replay = existing.find((r) => r.payload.version === 1 && r.payload.command_comment_id === args.payload.command_comment_id);
   if (replay) return replay;
   const { owner, repo } = splitRepository(args.serverRepository);
   try {
@@ -85,8 +86,45 @@ export async function createReservation(args: CreateArgs): Promise<ReservationRe
     return { deploymentId: created.id, nodeId: created.node_id, createdAt: created.created_at, payload: args.payload, statuses: [], state: { kind: "active" } };
   } catch (error) {
     if (!ambiguousWrite(error)) throw error;
-    const created = (await find()).find((r) => r.payload.command_comment_id === args.payload.command_comment_id);
+    const created = (await find()).find((r) => r.payload.version === 1 && r.payload.command_comment_id === args.payload.command_comment_id);
     if (created) return created;
+    throw error;
+  }
+}
+
+/** Creates or reuses the reservation identified by its deterministic managed-file key. */
+export async function createManagedReservation(args: CreateManagedArgs): Promise<ReservationRecord> {
+  const find = () => findReservationsForPull({ server: args.server, serverRepository: args.serverRepository, serverBotId: args.serverBotId, repositoryId: args.payload.repository_id, pullNumber: args.payload.pull_number, now: new Date() });
+  const existing = await find();
+  // A human/bot reservation excludes managed acceptance even if a matching managed
+  // deployment also exists (for example after a partially recovered write).
+  const activeHumanBot = existing.find((r) => r.state.kind === "active" && r.payload.version === 1);
+  if (activeHumanBot) {
+    throw new Error(`pull request #${args.payload.pull_number} already has an active human or bot merge reservation`);
+  }
+  const sameKey = existing.filter((r) => r.payload.version === 2 && r.payload.idempotency_key === args.payload.idempotency_key);
+  if (sameKey.length > 1) throw new Error("multiple managed-file reservations match the idempotency key");
+  // Reuse only an active reservation. Once cancelled, expired, or otherwise
+  // terminal, the same desired state may be accepted again by a later reconcile.
+  if (sameKey[0]?.state.kind === "active") return sameKey[0];
+  for (const stale of existing.filter((r) => r.state.kind === "active" && r.payload.version === 2)) {
+    await createReservationStatus({ server: args.server, serverRepository: args.serverRepository, serverBotId: args.serverBotId, deploymentId: stale.deploymentId, serverRunUrl: args.serverRunUrl, pullUrl: args.pullUrl, state: "inactive", description: terminalDescription("invalidated", "managed-file provenance changed") });
+  }
+
+  const { owner, repo } = splitRepository(args.serverRepository);
+  try {
+    const { data } = await args.server.rest.repos.createDeployment({ owner, repo, ref: args.displayCommit ?? args.defaultBranch, task: TASK, environment: ENVIRONMENT, auto_merge: false, required_contexts: [], production_environment: false, transient_environment: false, description: `${args.payload.repository}#${args.payload.pull_number}`, payload: args.payload });
+    const created = CreatedDeployment.parse(data);
+    if (created.task !== TASK || created.creator?.type !== "Bot" || created.creator.id !== args.serverBotId) throw new Error("created deployment identity does not match csm-ci automerge");
+    return { deploymentId: created.id, nodeId: created.node_id, createdAt: created.created_at, payload: args.payload, statuses: [], state: { kind: "active" } };
+  } catch (error) {
+    if (!ambiguousWrite(error)) throw error;
+    // Old terminal records can share the stable key after a later reconcile. A
+    // newly accepted reservation has no terminal status, so recover only the
+    // unique active match instead of mistaking history for the lost write.
+    const recovered = (await find()).filter((r) => r.state.kind === "active" && r.payload.version === 2 && r.payload.idempotency_key === args.payload.idempotency_key);
+    if (recovered.length === 1) return recovered[0]!;
+    if (recovered.length > 1) throw new Error("multiple managed-file reservations match the idempotency key");
     throw error;
   }
 }

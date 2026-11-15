@@ -43,7 +43,7 @@ export type ManagedFilesResult = { status: "applied" | "already-applied"; commit
 type ManagedPullRequest = { number: number; title: string; body: string | null; base: { ref: string }; head: { sha: string } };
 
 type GitTreeEntry = { path?: string; type?: string; mode?: string; sha?: string };
-type FileValue = { content: string | null };
+type FileValue = { content: string | null; entry: GitTreeEntry | null };
 
 export function validateManagedFiles(files: Readonly<Record<string, string>>): ManagedFile[] {
   const entries = Object.entries(files).map(([path, content]) => ({ path, content }));
@@ -122,7 +122,7 @@ export async function inspectManagedFiles(gh: GitHub, input: ManagedFilesInput):
     pullRequest: null,
   };
   const targetSha = await branchHead(gh, owner, repo);
-  let targetHistoryLength: number | undefined;
+  let targetHistoryStartsAtDefault = false;
   if (targetSha) {
     const history = await loadServerOwnedHistory(gh, {
       owner,
@@ -132,7 +132,7 @@ export async function inspectManagedFiles(gh: GitHub, input: ManagedFilesInput):
       serverBotId: input.serverBotId,
       messages: DEFAULT_BRANCH_MESSAGES,
     });
-    targetHistoryLength = history.length;
+    targetHistoryStartsAtDefault = history[0]?.parentSha === defaultSha;
     const allowed = new Set([...files.map(({ path }) => path), ...deletions]);
     for (const commit of history) {
       for (const change of commit.files) {
@@ -146,8 +146,11 @@ export async function inspectManagedFiles(gh: GitHub, input: ManagedFilesInput):
   const inspectedFiles = [...files, ...deletions.map((path) => ({ path, content: "" }))];
   const targetValues = targetSha ? await readFiles(gh, owner, repo, targetSha, inspectedFiles) : new Map<string, FileValue>();
   const targetMatches = targetSha !== null && files.every(({ path, content }) => targetValues.get(path)?.content === content) && deletions.every((path) => targetValues.get(path)?.content === null);
-  const targetIsAncestorOfDefault = targetSha !== null && targetSha !== defaultSha && targetHistoryLength === 0;
-  const branchNeedsWrite = !targetMatches || targetIsAncestorOfDefault;
+  // A branch can still match the desired files while being based on an older
+  // default-branch commit. Rebuild it so the eventual PR starts at today's
+  // default branch and its final managed-pull attestation can validate it.
+  const targetUsesCurrentDefault = targetSha === defaultSha || targetHistoryStartsAtDefault;
+  const branchNeedsWrite = !targetMatches || (targetSha !== null && !targetUsesCurrentDefault);
   const pullRequest = await findPullRequest(gh, input.repository, input.defaultBranch, targetSha);
   const requiresPullRequestUpdate = !pullRequest || pullRequest.title !== MANAGED_FILES_TITLE || pullRequest.body !== pullBody;
   const status = branchNeedsWrite || requiresPullRequestUpdate ? "ready" : "already-applied";
@@ -185,6 +188,12 @@ async function generatedDeletions(gh: GitHub, input: { owner: string; repo: stri
   return deletions.sort();
 }
 
+/** Returns generated workflow paths owned at a pinned base but absent from the supplied generated set. */
+export async function generatedManagedDeletionsAtRef(gh: GitHub, input: { repository: string; baseSha: string; generated: GeneratedWorkflows; additional: Readonly<Record<string, string>> }): Promise<string[]> {
+  const { owner, repo } = splitRepository(input.repository);
+  return generatedDeletions(gh, { owner, repo, defaultSha: input.baseSha, generated: input.generated, additional: input.additional });
+}
+
 async function listWorkflowFiles(gh: GitHub, owner: string, repo: string, ref: string): Promise<{ path: string; sha: string }[]> {
   const { data: commit } = await gh.rest.repos.getCommit({ owner, repo, ref });
   let treeSha = commit.commit.tree.sha;
@@ -202,15 +211,37 @@ async function listWorkflowFiles(gh: GitHub, owner: string, repo: string, ref: s
 }
 
 async function readFiles(gh: GitHub, owner: string, repo: string, ref: string, files: readonly ManagedFile[]): Promise<Map<string, FileValue>> {
-  const results = await Promise.all(files.map(async ({ path }) => [path, await readFileAtRef(gh, owner, repo, path, ref)] as const));
+  if (files.length === 0) return new Map();
+  const { data: commit } = await gh.rest.repos.getCommit({ owner, repo, ref });
+  const rootTreeSha = commit.commit.tree.sha;
+  if (!rootTreeSha) throw new Rejection("managed files commit has no Git tree SHA");
+  const treeCache = new Map<string, ReturnType<typeof gh.rest.git.getTree>>();
+  const loadTree = (treeSha: string) => {
+    let response = treeCache.get(treeSha);
+    if (!response) {
+      response = gh.rest.git.getTree({ owner, repo, tree_sha: treeSha });
+      treeCache.set(treeSha, response);
+    }
+    return response;
+  };
+  const results = await Promise.all(files.map(async ({ path }) => [path, await readFileAtTree(gh, owner, repo, path, rootTreeSha, loadTree)] as const));
   return new Map(results);
 }
 
 export async function readFileAtRef(gh: GitHub, owner: string, repo: string, path: string, ref: string): Promise<FileValue> {
   const entry = await findTreeEntry(gh, owner, repo, path, ref);
-  if (!entry) return { content: null };
+  return readFileAtEntry(gh, owner, repo, path, entry);
+}
+
+async function readFileAtTree(gh: GitHub, owner: string, repo: string, path: string, rootTreeSha: string, loadTree: (treeSha: string) => ReturnType<typeof gh.rest.git.getTree>): Promise<FileValue> {
+  const entry = await findTreeEntryAtTree(gh, owner, repo, path, rootTreeSha, loadTree);
+  return readFileAtEntry(gh, owner, repo, path, entry);
+}
+
+async function readFileAtEntry(gh: GitHub, owner: string, repo: string, path: string, entry: GitTreeEntry | null): Promise<FileValue> {
+  if (!entry) return { content: null, entry: null };
   const bytes = await readBlob(gh, owner, repo, path, entry.sha!);
-  try { return { content: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes) }; }
+  try { return { content: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes), entry }; }
   catch { throw new Rejection(`managed file ${JSON.stringify(path)} is not UTF-8`); }
 }
 
@@ -225,11 +256,16 @@ async function readBlob(gh: GitHub, owner: string, repo: string, path: string, s
 
 export async function findTreeEntry(gh: GitHub, owner: string, repo: string, path: string, ref: string): Promise<GitTreeEntry | null> {
   const { data: commit } = await gh.rest.repos.getCommit({ owner, repo, ref });
-  let treeSha = commit.commit.tree.sha;
-  if (!treeSha) throw new Rejection("managed files commit has no Git tree SHA");
+  const rootTreeSha = commit.commit.tree.sha;
+  if (!rootTreeSha) throw new Rejection("managed files commit has no Git tree SHA");
+  return findTreeEntryAtTree(gh, owner, repo, path, rootTreeSha, (treeSha) => gh.rest.git.getTree({ owner, repo, tree_sha: treeSha }));
+}
+
+async function findTreeEntryAtTree(gh: GitHub, owner: string, repo: string, path: string, rootTreeSha: string, loadTree: (treeSha: string) => ReturnType<typeof gh.rest.git.getTree>): Promise<GitTreeEntry | null> {
+  let treeSha = rootTreeSha;
   const segments = path.split("/");
   for (const [index, segment] of segments.entries()) {
-    const { data: tree } = await gh.rest.git.getTree({ owner, repo, tree_sha: treeSha });
+    const { data: tree } = await loadTree(treeSha);
     if (tree.truncated) throw new Rejection("managed files could not safely inspect a Git tree");
     const entry = tree.tree.find((candidate) => candidate.path === segment);
     if (!entry) return null;

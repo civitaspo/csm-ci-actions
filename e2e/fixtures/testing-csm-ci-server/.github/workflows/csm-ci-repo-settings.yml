@@ -1,5 +1,5 @@
 name: csm-ci repo-settings e2e
-run-name: csm-ci-repo-settings ${{ inputs.correlation }}
+run-name: csm-ci-repo-settings ${{ inputs.correlation || inputs.repository }}${{ inputs.managed-drift-key && format(' {0}', inputs.managed-drift-key) || '' }}
 
 on:
   workflow_dispatch:
@@ -10,8 +10,9 @@ on:
         type: string
       event-mode:
         description: Exercise the schedule or dispatch reconciliation branch.
-        required: true
+        required: false
         type: choice
+        default: dispatch
         options:
           - schedule
           - dispatch
@@ -20,6 +21,10 @@ on:
         required: false
         type: string
         default: all
+      managed-drift-key:
+        description: Deterministic key used to correlate automatic drift re-sync dispatches.
+        required: false
+        type: string
       correlation:
         description: Unique e2e run identifier.
         required: false
@@ -48,6 +53,7 @@ jobs:
       CSM_CI_SERVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
       CSM_CI_APPROVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_APPROVER_APP_PRIVATE_KEY }}
     permissions:
+      actions: write
       contents: read
   schedule:
     if: inputs.event-mode == 'schedule'
@@ -63,4 +69,5 @@ jobs:
       CSM_CI_SERVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
       CSM_CI_APPROVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_APPROVER_APP_PRIVATE_KEY }}
     permissions:
+      actions: write
       contents: read

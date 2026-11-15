@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { parse } from "yaml";
 import { github } from "./github.ts";
-import { resolveWorkflowRelease, validateWorkflowContract } from "./workflow-release.ts";
+import { resolveWorkflowRelease, validateWorkflowContract, verifyWorkflowReleaseRevision } from "./workflow-release.ts";
 import { STANDARD_CALLERS } from "./generated-workflows.ts";
 import { fakeFetch } from "./testing.ts";
 
@@ -59,6 +59,23 @@ test.each([
 ])("rejects %s tag target", async (_name, target) => {
   const fetch = fakeFetch([{ method: "GET", path: "/repos/civitaspo/csm-ci-actions/releases/latest", body: metadata }, { method: "GET", path: "/repos/civitaspo/csm-ci-actions/git/ref/tags%2Fv1.2.3", body: { object: target } }]);
   await expect(resolveWorkflowRelease(github("test", fetch), [])).rejects.toThrow("standard workflows release tag must resolve to a full commit SHA");
+});
+
+test("verifies the pinned stable release version and SHA as one trusted revision", async () => {
+  const fetch = fakeFetch([
+    { method: "GET", path: "/repos/civitaspo/csm-ci-actions/releases/tags/v1.2.3", body: metadata },
+    { method: "GET", path: "/repos/civitaspo/csm-ci-actions/git/ref/tags%2Fv1.2.3", body: { object: { type: "commit", sha: tag } } },
+  ]);
+  await expect(verifyWorkflowReleaseRevision(github("test", fetch), { version: "v1.2.3", sha: tag }, [])).resolves.toEqual({ version: "v1.2.3", sha: tag });
+  expect(fetch.calls).toHaveLength(2);
+});
+
+test("rejects a pinned release version paired with another SHA", async () => {
+  const fetch = fakeFetch([
+    { method: "GET", path: "/repos/civitaspo/csm-ci-actions/releases/tags/v1.2.3", body: metadata },
+    { method: "GET", path: "/repos/civitaspo/csm-ci-actions/git/ref/tags%2Fv1.2.3", body: { object: { type: "commit", sha: tag } } },
+  ]);
+  await expect(verifyWorkflowReleaseRevision(github("test", fetch), { version: "v1.2.3", sha }, [])).rejects.toThrow("pinned standard workflow release version and SHA do not match");
 });
 
 test.each([404, 403, 500])("propagates release lookup failure %s without fallback", async (status) => {

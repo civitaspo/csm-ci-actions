@@ -125,7 +125,8 @@ export async function dispatch(ctx: Ctx, repository: string, workflow: string, i
     if (correlation) return findRecentRunByTitle(pages(), since, `${workflow.replace(/\.yml$/, "")} ${correlation}`);
     return (await recentItems(pages(), since))[0];
   });
-  return waitRun(ctx, repository, run.id, workflow === "csm-ci-automerge.yml" ? 30 * 60_000 : TIMEOUT_MS);
+  const timeoutMs = workflow === "csm-ci-automerge.yml" || workflow === "csm-ci-repo-settings.yml" ? 30 * 60_000 : TIMEOUT_MS;
+  return waitRun(ctx, repository, run.id, timeoutMs);
 }
 
 export async function waitRun(ctx: Ctx, repository: string, id: number, timeoutMs = TIMEOUT_MS): Promise<Run> {
@@ -381,7 +382,7 @@ export async function openPr(ctx: Ctx, options: { intent: PrIntent; kind: "signe
   return owned;
 }
 
-export async function withServerConfig<T>(ctx: Ctx, edit: (text: string) => string, run: () => Promise<T>): Promise<T> {
+export async function withServerConfig<T>(ctx: Ctx, edit: (text: string) => string, run: () => Promise<T>, beforeRestore?: () => Promise<void>): Promise<T> {
   const repository = splitRepository(SERVER);
   const read = async () => {
     const { data: head } = await ctx.gh.rest.git.getRef({ ...repository, ref: "heads/main" });
@@ -406,6 +407,7 @@ export async function withServerConfig<T>(ctx: Ctx, edit: (text: string) => stri
     pendingSha = undefined;
     return run();
   }, [async () => {
+    await beforeRestore?.();
     const latest = await read();
     if (latest.text === changed || (latest.text === original.text && pendingSha)) {
       await write(pendingSha ?? latest.sha, original.text, "Restore e2e server fixture");

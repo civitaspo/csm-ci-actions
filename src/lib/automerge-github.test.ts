@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { github } from "./github.ts";
-import { AUTOMERGE_ENVIRONMENT, AUTOMERGE_TASK, createReservation, createReservationStatus, findReservationsForPull, listReservations } from "./automerge-github.ts";
+import { AUTOMERGE_ENVIRONMENT, AUTOMERGE_TASK, createManagedReservation, createReservation, createReservationStatus, findReservationsForPull, listReservations } from "./automerge-github.ts";
 
 const serverRepository = "owner/server";
 const serverBotId = 3000;
@@ -19,6 +19,25 @@ const payload = {
   accepted_at: "2026-10-29T00:00:00.000Z",
   expires_at: "2026-11-05T00:00:00.000Z",
 };
+const managedPayload = {
+  version: 2 as const,
+  kind: "managed-files" as const,
+  repository_id: 4000,
+  repository: "owner/client",
+  pull_number: 12,
+  pull_node_id: "PR_node_12",
+  base_ref: "main",
+  managed_ref: "csm-ci/repo-settings" as const,
+  accepted_base: "9".repeat(40),
+  accepted_head: "a".repeat(40),
+  configuration_sha: "b".repeat(40),
+  release_version: "v1.2.3",
+  release_sha: "c".repeat(40),
+  manifest_digest: "d".repeat(64),
+  idempotency_key: "e".repeat(64),
+  accepted_at: "2026-10-29T00:00:00.000Z",
+  expires_at: "2026-11-05T00:00:00.000Z",
+};
 
 function deployment(id: number, createdAt: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -33,7 +52,7 @@ function deployment(id: number, createdAt: string, overrides: Record<string, unk
   };
 }
 
-function harness(options: { malformedDeploymentOneStatus?: boolean } = {}) {
+function harness(options: { malformedDeploymentOneStatus?: boolean; duplicateRecovery?: boolean; createdDeployment?: { task?: string; creator?: { id: number; type: string } } } = {}) {
   const deployments = [
     deployment(1, "2026-10-15T00:00:00.000Z", { payload: JSON.stringify(JSON.stringify(payload)), statuses: { nodes: [
       { id: "STATUS_1", state: "QUEUED", description: "waiting", createdAt: "2026-10-29T00:00:01.000Z", creator: { __typename: "Bot", databaseId: serverBotId } },
@@ -68,13 +87,14 @@ function harness(options: { malformedDeploymentOneStatus?: boolean } = {}) {
       restWrites.push({ path, body });
       const createdAt = new Date().toISOString();
       deployments.unshift(deployment(10, createdAt, { payload: body.payload }));
+      if (options.duplicateRecovery) deployments.unshift(deployment(11, createdAt, { payload: body.payload }));
       if (loseDeploymentResponse) {
         loseDeploymentResponse = false;
         return answer({ message: "upstream timeout" }, 503);
       }
-      return answer({ id: 10, node_id: "DEP_10", task: AUTOMERGE_TASK, created_at: createdAt, creator: { id: serverBotId, type: "Bot" } }, 201);
+      return answer({ id: 10, node_id: "DEP_10", task: options.createdDeployment?.task ?? AUTOMERGE_TASK, created_at: createdAt, creator: options.createdDeployment?.creator ?? { id: serverBotId, type: "Bot" } }, 201);
     }
-    if (path === "/repos/owner/server/deployments/10/statuses" && method === "POST") {
+    if (/^\/repos\/owner\/server\/deployments\/\d+\/statuses$/.test(path) && method === "POST") {
       const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
       restWrites.push({ path, body });
       statuses.push({ id: 30, ...body, created_at: "2026-10-29T00:00:00.000Z", creator: { id: serverBotId, type: "Bot" } });
@@ -193,4 +213,83 @@ test("writes status with auto_inactive false and recovers a lost response from S
   await createReservationStatus({ server: h.server, serverRepository, serverBotId, deploymentId: 10, serverRunUrl: "https://github.com/owner/server/actions/runs/1", pullUrl: "https://github.com/owner/client/pull/12", state: "queued", description: "waiting for approval" });
   expect(h.restWrites.filter((write) => write.path.endsWith("/statuses"))).toHaveLength(1);
   expect(h.restWrites[0]?.body).toMatchObject({ state: "queued", auto_inactive: false, log_url: "https://github.com/owner/server/actions/runs/1", environment_url: "https://github.com/owner/client/pull/12" });
+});
+
+test("creates a managed reservation with its deterministic idempotency key in the payload", async () => {
+  const h = harness();
+  const result = await createManagedReservation({ server: h.server, serverRepository, defaultBranch: "main", serverBotId, payload: managedPayload, serverRunUrl: "https://github.com/owner/server/actions/runs/2", pullUrl: "https://github.com/owner/client/pull/12" });
+  expect(result).toMatchObject({ deploymentId: 10, payload: managedPayload });
+  expect(h.restWrites[0]?.body).toMatchObject({ payload: managedPayload, task: AUTOMERGE_TASK, environment: AUTOMERGE_ENVIRONMENT });
+});
+
+test("recovers a lost managed deployment response by exact idempotency key without a duplicate write", async () => {
+  const h = harness();
+  h.loseDeploymentResponse();
+  await expect(createManagedReservation({ server: h.server, serverRepository, defaultBranch: "main", serverBotId, payload: managedPayload, serverRunUrl: "https://github.com/owner/server/actions/runs/2", pullUrl: "https://github.com/owner/client/pull/12" })).resolves.toMatchObject({ deploymentId: 10, payload: managedPayload });
+  expect(h.restWrites.filter((write) => write.path === "/repos/owner/server/deployments")).toHaveLength(1);
+});
+
+test("rejects ambiguous recovery when a lost response leaves multiple active same-key records", async () => {
+  const h = harness({ duplicateRecovery: true });
+  h.deployments.unshift(deployment(20, new Date().toISOString(), { payload: { ...managedPayload, idempotency_key: "f".repeat(64) }, statuses: { nodes: [
+    { id: "STATUS_20", state: "INACTIVE", description: "old", createdAt: new Date().toISOString(), creator: { __typename: "Bot", databaseId: serverBotId } },
+  ], pageInfo: { hasNextPage: false } } }));
+  h.loseDeploymentResponse();
+  await expect(createManagedReservation({ server: h.server, serverRepository, defaultBranch: "main", serverBotId, payload: managedPayload, serverRunUrl: "https://github.com/owner/server/actions/runs/2", pullUrl: "https://github.com/owner/client/pull/12" })).rejects.toThrow("multiple managed-file reservations match the idempotency key");
+  expect(h.restWrites.filter((write) => write.path === "/repos/owner/server/deployments")).toHaveLength(1);
+});
+
+test("rejects a newly created deployment with the wrong creator identity", async () => {
+  const h = harness({ createdDeployment: { creator: { id: 9999, type: "Bot" } } });
+  await expect(createManagedReservation({ server: h.server, serverRepository, defaultBranch: "main", serverBotId, payload: managedPayload, serverRunUrl: "https://github.com/owner/server/actions/runs/2", pullUrl: "https://github.com/owner/client/pull/12" })).rejects.toThrow("created deployment identity does not match csm-ci automerge");
+  expect(h.restWrites.filter((write) => write.path === "/repos/owner/server/deployments")).toHaveLength(1);
+});
+
+test("reuses an active managed reservation with the same idempotency key", async () => {
+  const h = harness();
+  h.deployments.unshift(deployment(20, new Date().toISOString(), { payload: managedPayload, statuses: { nodes: [
+    { id: "STATUS_20", state: "QUEUED", description: "accepted", createdAt: new Date().toISOString(), creator: { __typename: "Bot", databaseId: serverBotId } },
+  ], pageInfo: { hasNextPage: false } } }));
+  await expect(createManagedReservation({ server: h.server, serverRepository, defaultBranch: "main", serverBotId, payload: managedPayload, serverRunUrl: "https://github.com/owner/server/actions/runs/2", pullUrl: "https://github.com/owner/client/pull/12" })).resolves.toMatchObject({ deploymentId: 20 });
+  expect(h.restWrites.filter((write) => write.path === "/repos/owner/server/deployments")).toHaveLength(0);
+});
+
+test("rejects multiple existing managed reservations with the same idempotency key", async () => {
+  const h = harness();
+  for (const id of [20, 21]) h.deployments.unshift(deployment(id, new Date().toISOString(), { payload: managedPayload }));
+  await expect(createManagedReservation({ server: h.server, serverRepository, defaultBranch: "main", serverBotId, payload: managedPayload, serverRunUrl: "https://github.com/owner/server/actions/runs/2", pullUrl: "https://github.com/owner/client/pull/12" })).rejects.toThrow("multiple managed-file reservations match the idempotency key");
+  expect(h.restWrites).toHaveLength(0);
+});
+
+test("creates a new reservation when a same-key reservation is terminal", async () => {
+  const h = harness();
+  h.deployments.unshift(deployment(20, new Date().toISOString(), { payload: managedPayload, statuses: { nodes: [
+    { id: "STATUS_20", state: "INACTIVE", description: "cancelled", createdAt: new Date().toISOString(), creator: { __typename: "Bot", databaseId: serverBotId } },
+  ], pageInfo: { hasNextPage: false } } }));
+  await expect(createManagedReservation({ server: h.server, serverRepository, defaultBranch: "main", serverBotId, payload: managedPayload, serverRunUrl: "https://github.com/owner/server/actions/runs/2", pullUrl: "https://github.com/owner/client/pull/12" })).resolves.toMatchObject({ deploymentId: 10 });
+  expect(h.restWrites.filter((write) => write.path === "/repos/owner/server/deployments")).toHaveLength(1);
+});
+
+test("active human or bot reservation takes precedence over a same-key managed replay", async () => {
+  const h = harness();
+  h.deployments.unshift(
+    deployment(20, new Date().toISOString(), { payload: managedPayload, statuses: { nodes: [
+      { id: "STATUS_20", state: "QUEUED", description: "accepted", createdAt: new Date().toISOString(), creator: { __typename: "Bot", databaseId: serverBotId } },
+    ], pageInfo: { hasNextPage: false } } }),
+    deployment(21, new Date().toISOString(), { payload, statuses: { nodes: [], pageInfo: { hasNextPage: false } } }),
+  );
+  await expect(createManagedReservation({ server: h.server, serverRepository, defaultBranch: "main", serverBotId, payload: managedPayload, serverRunUrl: "https://github.com/owner/server/actions/runs/2", pullUrl: "https://github.com/owner/client/pull/12" })).rejects.toThrow("already has an active human or bot merge reservation");
+  expect(h.restWrites).toHaveLength(0);
+});
+
+test("invalidates an older active managed reservation before creating a new revision", async () => {
+  const h = harness();
+  const stalePayload = { ...managedPayload, idempotency_key: "f".repeat(64), configuration_sha: "f".repeat(40) };
+  h.deployments.unshift(deployment(20, new Date().toISOString(), { payload: stalePayload }));
+  await createManagedReservation({ server: h.server, serverRepository, defaultBranch: "main", serverBotId, payload: managedPayload, serverRunUrl: "https://github.com/owner/server/actions/runs/2", pullUrl: "https://github.com/owner/client/pull/12" });
+  expect(h.restWrites[0]).toMatchObject({
+    path: "/repos/owner/server/deployments/20/statuses",
+    body: { state: "inactive", description: "csm-ci:automerge:reason=invalidated| managed-file provenance changed" },
+  });
+  expect(h.restWrites[1]?.path).toBe("/repos/owner/server/deployments");
 });

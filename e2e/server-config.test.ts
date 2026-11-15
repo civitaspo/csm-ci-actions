@@ -62,4 +62,12 @@ describe("temporary server configuration cleanup", () => {
     await withServerConfig(ctx, () => changed, async () => {});
     expect(fetch.requests.filter((request) => request.method === "PUT")).toHaveLength(1);
   });
+
+  test("does not restore the server configuration when the downstream workflow drain fails", async () => {
+    const { ctx, fetch } = fixture();
+    await expect(withServerConfig(ctx, () => changed, async () => { throw new Error("scenario failed"); }, async () => {
+      throw new Error("workflow drain failed; retaining test state");
+    })).rejects.toThrow("scenario failed; workflow drain failed; retaining test state");
+    expect(fetch.requests.filter((request) => request.method === "PUT")).toHaveLength(1);
+  });
 });

@@ -2,7 +2,7 @@ name: csm-ci repository settings
 description: Discover configured repositories and reconcile settings, rulesets, and managed files.
 inputs:
   mode:
-    description: validate-targets, validate-target, discover, preflight, inspect, apply, managed-inspect, or managed-apply.
+    description: validate-targets, validate-target, discover, preflight, inspect, apply, managed-inspect, managed-apply, managed-preflight, managed-approve, or managed-accept.
     required: true
   github-token:
     description: GITHUB_TOKEN with contents:read on the server repository to read the pinned config.
@@ -10,7 +10,7 @@ inputs:
   discovery-token:
     description: Server App token used only to list repositories in its installation.
   read-token:
-    description: Target-scoped Server App token with contents and pull_requests read.
+    description: Target-scoped Server App token with contents and pull_requests read; managed-approve also needs checks:write.
   admin-token:
     description: Target-scoped Server App token with administration:write. Inspection reads rulesets with it because GitHub hides bypass actors from read-only callers.
   contents-token:
@@ -34,6 +34,12 @@ inputs:
     description: Trusted discovery JSON containing the validated stable version and full SHA.
   approver-app-slug:
     description: App slug returned by the official create-github-app-token action.
+  approver-token:
+    description: Target-scoped Approver App token used only by managed-approve.
+  deployments-token:
+    description: Server App token with deployments:write on the server repository used only by managed-accept.
+  pull-number:
+    description: Pull request number for managed-preflight, managed-approve, or managed-accept.
 outputs:
   workflow-release:
     description: Stable release revision resolved and validated once for all targets.
@@ -65,6 +71,8 @@ outputs:
     description: true when a dispatch would create controlled-merges or make it active, which requires the preflight.
   has-changes:
     description: Whether this target needs settings or managed-file changes.
+  pull-request:
+    description: Existing or created managed-file pull request number, if any.
   requires-workflows-write:
     description: true when managed files include workflow paths or the managed branch is reset, which require workflows:write.
   changed-paths:
@@ -77,6 +85,16 @@ outputs:
     description: true when the target is the server repository.
   result:
     description: JSON result for an apply operation, or the managed-file inspection state.
+  authorized:
+    description: Whether managed-preflight authorized an Approver token mint.
+  head:
+    description: Pull request head pinned by managed-preflight or managed-approve.
+  approved-head:
+    description: Pull request head pinned by managed-approve.
+  reason:
+    description: Managed-preflight rejection reason when authorized is false.
+  deployment-id:
+    description: Managed reservation deployment ID created or reused by managed-accept.
 runs:
   using: node24
   main: ../../../dist/server-repo-settings.js

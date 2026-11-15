@@ -2,6 +2,10 @@ import * as core from "@actions/core";
 import { createReservationStatus, findReservationsForPull, listReservations } from "../lib/automerge-github.ts";
 import { terminalDescription } from "../lib/automerge.ts";
 import { github, loadCurrentServerConfig, splitRepository } from "../lib/github.ts";
+import { deriveManagedPullAttestation } from "../lib/managed-pull-context.ts";
+import { ReleasedRevision } from "../lib/generated-workflows.ts";
+import { verifyManagedMergeTree } from "../lib/managed-pull.ts";
+import { reconcileManagedDrift } from "./managed-drift.ts";
 import { summarizeReservation } from "../lib/automerge-summary.ts";
 import { syncAutomergeDisplay } from "../lib/automerge-display.ts";
 import { evaluateReservation, mergeReservation, type MergeContext } from "../lib/merge.ts";
@@ -135,6 +139,66 @@ async function main(): Promise<void> {
     notify: github(core.getInput("notification-token", { required: true })),
     ...(mode === "merge" ? { write: github(core.getInput("write-token", { required: true })) } : {}),
     reloadConfig: () => loadCurrentServerConfig(configReader, serverRepository, configPath),
+    attestManagedPull: async ({ repository, pullNumber, reservation }) => {
+      const { owner, repo } = splitRepository(serverRepository);
+      const { data: serverInfo } = await configReader.rest.repos.get({ owner, repo });
+      if (!serverInfo.default_branch) throw new Error("server default branch is unavailable for managed-pull validation");
+      const { data: defaultRef } = await configReader.rest.git.getRef({ owner, repo, ref: `heads/${serverInfo.default_branch}` });
+      return deriveManagedPullAttestation({
+        source: configReader,
+        target: server,
+        serverRepository,
+        configSha: defaultRef.object.sha,
+        configPath,
+        workflowRelease: ReleasedRevision.parse({ version: reservation.release_version, sha: reservation.release_sha }),
+        repository,
+        pullNumber,
+      });
+    },
+    managedPolicySource: async ({ reservation }) => {
+      const serverInfo = await configReader.rest.repos.get(splitRepository(serverRepository));
+      if (!serverInfo.data.default_branch) throw new Error("server default branch is unavailable for managed policy validation");
+      const defaultRef = await configReader.rest.git.getRef({ ...splitRepository(serverRepository), ref: `heads/${serverInfo.data.default_branch}` });
+      return {
+        source: configReader,
+        serverRepository,
+        configSha: defaultRef.data.object.sha,
+        configPath,
+        workflowRelease: ReleasedRevision.parse({ version: reservation.release_version, sha: reservation.release_sha }),
+      };
+    },
+    verifyManagedMerge: async ({ repository: targetRepository, mergeCommit, reservation }) => {
+      if (targetRepository.toLowerCase() !== reservation.repository.toLowerCase()) {
+        return { matches: false, reason: "managed merge target identity changed; reconciliation was not dispatched" };
+      }
+      const verification = await verifyManagedMergeTree({
+        source: configReader,
+        target: server,
+        serverRepository,
+        serverBotId: ctx.config.apps.server_bot_id,
+        configPath,
+        reservation,
+        mergeCommit,
+      });
+      if (verification.matches) return verification;
+      try {
+        const { owner, repo } = splitRepository(serverRepository);
+        const { data: serverInfo } = await configReader.rest.repos.get({ owner, repo });
+        if (!serverInfo.default_branch) throw new Error("server default branch is unavailable");
+        const reason = await reconcileManagedDrift({
+          configReader,
+          serverRepository,
+          defaultBranch: serverInfo.default_branch,
+          repository: reservation.repository,
+          mergeCommit,
+          ...(verification.reason ? { reason: verification.reason } : {}),
+        });
+        return { ...verification, reason };
+      } catch (error) {
+        const dispatchError = error instanceof Error ? error.message : String(error);
+        return { ...verification, reason: `${verification.reason ?? "merged tree differs from the accepted managed manifest"}; managed-files reconciliation dispatch failed: ${dispatchError}` };
+      }
+    },
     now: () => new Date(),
   };
   const summarize = async (state: string): Promise<void> => {

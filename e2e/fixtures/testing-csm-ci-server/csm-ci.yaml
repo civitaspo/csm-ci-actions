@@ -39,6 +39,7 @@ repositories:
     release: { build_type: none }
   - { name: civitaspo/testing-csm-ci-server, ops: [], sensitive_paths: { paths: ["**"], exempt: [] }, merge: { allow_bot_requests: false } }
 repo_settings:
+  auto_merge_managed_files: false
   settings:
     delete_branch_on_merge: true
     allow_auto_merge: true

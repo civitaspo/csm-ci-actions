@@ -6,6 +6,7 @@ const base = "a".repeat(40);
 const first = "b".repeat(40);
 const second = "c".repeat(40);
 const payload = { version: 1 as const, repository_id: 42, repository: "owner/client", pull_number: 12, pull_node_id: "PR_12", base_ref: "main", merger: { id: 5, login: "operator", type: "User" as const }, mode: "human" as const, command_comment_id: 90, accepted_head: base, accepted_at: "2026-10-29T00:00:00.000Z", expires_at: "2026-11-05T00:00:00.000Z" };
+const managedPayload = { version: 2 as const, kind: "managed-files" as const, repository_id: 42, repository: "owner/client", pull_number: 12, pull_node_id: "PR_node", base_ref: "main", managed_ref: "csm-ci/repo-settings" as const, accepted_base: "9".repeat(40), accepted_head: base, configuration_sha: "d".repeat(40), release_version: "v1.2.3", release_sha: "e".repeat(40), manifest_digest: "f".repeat(64), idempotency_key: "1".repeat(64), accepted_at: "2026-10-29T00:00:00.000Z", expires_at: "2026-11-05T00:00:00.000Z" };
 
 function harness(options: { initial?: string; prior?: Record<string, unknown>; created?: Record<string, unknown>; conflicts?: number; failOnce?: boolean; baseComparison?: "identical" | "ahead" } = {}) {
   let head = options.initial;
@@ -45,6 +46,15 @@ test("bootstraps and creates a signed empty display commit against the observed 
   expect(h.requests).toHaveLength(1);
   expect(h.requests[0]?.expectedHeadOid).toBe(base);
   expect(h.requests[0]?.message).toEqual({ headline: "csm-ci: automerge owner/client#12", body: "csm-ci:automerge-display:v1\nrepository_id=42\ncommand_comment_id=90" });
+});
+
+test("creates a managed reservation display commit without inventing a command comment", async () => {
+  const h = harness({ created: { messageBody: `csm-ci:automerge-display:managed-files:v2\nrepository_id=42\nidempotency_key=${managedPayload.idempotency_key}` } });
+  expect(await createAutomergeDisplayCommit({ server: h.server, serverRepository: "owner/server", defaultBranch: "main", serverBotId: 3000, payload: managedPayload })).toBe(second);
+  expect(h.requests[0]?.message).toEqual({
+    headline: "csm-ci: automerge owner/client#12",
+    body: `csm-ci:automerge-display:managed-files:v2\nrepository_id=42\nidempotency_key=${managedPayload.idempotency_key}`,
+  });
 });
 
 test("retries a concurrent branch update without overwriting it", async () => {

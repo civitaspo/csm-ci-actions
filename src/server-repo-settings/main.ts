@@ -7,6 +7,8 @@ import { applyRepoSettings, discoverRepoSettingsTargets, inspectRepoSettings, in
 import { github, loadConfig, splitRepository } from "../lib/github.ts";
 import { formatRepoSettingsSelection, repoSettingsEventMode, repoSettingsSelection, selectsAdministration, validateRepoSettingsContext, validateRepoSettingsStage, type RepoSettingsSelection } from "./context.ts";
 import type { RepoSettingsAdminTargets } from "../lib/repo-settings.ts";
+import { fetchPull, preflightManagedApproval, runApprove } from "../lib/approve.ts";
+import { acceptManagedPull } from "../lib/managed-accept.ts";
 
 function env(name: string): string {
   const value = process.env[name];
@@ -101,6 +103,53 @@ async function main(): Promise<void> {
     core.setOutput("result", JSON.stringify(result));
     return;
   }
+  if (["managed-preflight", "managed-approve", "managed-accept"].includes(mode)) {
+    const pullNumber = positivePullNumber(input("pull-number", true));
+    const workflowRelease = ReleasedRevision.parse(JSON.parse(input("workflow-release", true)));
+    const managedSource = { source: configGH, serverRepository, configSha: env("GITHUB_SHA"), configPath, workflowRelease };
+    if (mode === "managed-preflight" || mode === "managed-approve") {
+      const pull = await fetchPull(readGH, target.name, pullNumber);
+      if (mode === "managed-preflight") {
+        try {
+          const result = await preflightManagedApproval({ server: readGH, config, repository: target.name, managedSource }, pull);
+          core.setOutput("authorized", "true");
+          core.setOutput("head", result.head);
+        } catch (error) {
+          if (!(error instanceof Error) || error.name !== "Rejection") throw error;
+          core.setOutput("authorized", "false");
+          core.setOutput("head", "");
+          core.setOutput("reason", error.message);
+          core.info(`managed preflight declined: ${error.message}`);
+        }
+        return;
+      }
+      const outcome = await runApprove({
+        server: readGH,
+        approver: github(input("approver-token", true)),
+        config,
+        repository: target.name,
+        managedSource,
+        serverRun: { serverUrl: env("GITHUB_SERVER_URL"), repository: serverRepository, id: env("GITHUB_RUN_ID"), attempt: env("GITHUB_RUN_ATTEMPT") },
+        now: () => new Date(),
+      }, { pull_number: pullNumber });
+      core.setOutput("result", outcome.result);
+      core.setOutput("head", outcome.head);
+      core.setOutput("approved-head", outcome.head);
+      return;
+    }
+    const result = await acceptManagedPull({
+      server: readGH,
+      deployments: github(input("deployments-token", true)),
+      config,
+      repository: target.name,
+      managedSource,
+      now: () => new Date(),
+      serverRunUrl: `${env("GITHUB_SERVER_URL")}/${serverRepository}/actions/runs/${env("GITHUB_RUN_ID")}/attempts/${env("GITHUB_RUN_ATTEMPT")}`,
+      pullUrl: `${env("GITHUB_SERVER_URL")}/${target.name}/pull/${pullNumber}`,
+    }, pullNumber);
+    core.setOutput("deployment-id", String(result.deploymentId));
+    return;
+  }
   if (mode === "managed-inspect" || mode === "managed-apply") {
     const { data: repo } = await readGH.rest.repos.get(address);
     const files = await loadAdditionalManagedFiles(configGH, { repository: serverRepository, sha: env("GITHUB_SHA"), settings: config.repo_settings });
@@ -112,10 +161,12 @@ async function main(): Promise<void> {
       core.setOutput("requires-workflows-write", String(result.requiresWorkflowsWrite));
       core.setOutput("changed-paths", JSON.stringify(result.changedPaths));
       core.setOutput("has-changes", String(result.status === "ready"));
+      core.setOutput("pull-request", result.pullRequest === null ? "" : String(result.pullRequest));
       return;
     }
     const result = await applyManagedFiles(readGH, { repository: target.name, defaultBranch: repo.default_branch, serverBotId: config.apps.server_bot_id, generated, files, writeToken: input("contents-token", true) });
     core.setOutput("result", JSON.stringify(result));
+    core.setOutput("pull-request", result.pullRequest === undefined ? "" : String(result.pullRequest));
     return;
   }
   throw new Error(`unknown repo-settings mode ${mode}`);
@@ -123,3 +174,9 @@ async function main(): Promise<void> {
 
 
 main().catch((error: unknown) => core.setFailed(error instanceof Error ? error.message : String(error)));
+
+function positivePullNumber(value: string): number {
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || number <= 0) throw new Error("pull-number must be a positive integer");
+  return number;
+}

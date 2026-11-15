@@ -144,3 +144,58 @@ test("one trusted discovery revision reaches both targets and managed stages", a
   expect(adapter.match(/await resolveWorkflowRelease\(/gu)).toHaveLength(1);
   expect(adapter.indexOf("await resolveWorkflowRelease(")).toBeLessThan(adapter.indexOf('if (mode === "managed-inspect" ||'));
 });
+
+test("managed pull requests pass through serialized approval, acceptance, and evaluation lanes", () => {
+  const jobs = record(target.jobs);
+  const reconcile = record(jobs.reconcile);
+  const reconcileOutputs = record(reconcile.outputs);
+  expect(reconcileOutputs["managed-pull-number"]).toContain("steps.managed-apply.outputs.pull-request");
+  expect(reconcileOutputs["managed-pull-number"]).toContain("steps.managed-inspect.outputs.pull-request");
+
+  expect(jobs["managed-preflight"]).not.toHaveProperty("concurrency");
+  const approve = record(jobs["managed-approve"]);
+  const approveConcurrency = record(approve.concurrency);
+  expect(approveConcurrency.group).toContain("csm-ci-pull-request-");
+  expect(approveConcurrency.group).toContain("#${{ needs.reconcile.outputs.managed-pull-number }}");
+  expect(approve.needs).toEqual(["reconcile", "managed-preflight"]);
+  expect(record(approve.outputs)["approval-result"]).toBe("${{ steps.approve.outputs.result }}");
+  const approveSteps = approve.steps as Record<string, unknown>[];
+  const preflightIndex = approveSteps.findIndex((step: { id?: string }) => step.id === "preflight");
+  const policyTokenIndex = approveSteps.findIndex((step: { id?: string }) => step.id === "policy-token");
+  const approverTokenIndex = approveSteps.findIndex((step: { id?: string }) => step.id === "approver-token");
+  expect(preflightIndex).toBeGreaterThan(-1);
+  expect(preflightIndex).toBeLessThan(policyTokenIndex);
+  expect(preflightIndex).toBeLessThan(approverTokenIndex);
+  for (const id of ["policy-token", "approver-token"]) {
+    expect(approveSteps.find((step: { id?: string }) => step.id === id)?.if).toContain("steps.preflight.outputs.authorized == 'true'");
+  }
+
+  const accept = record(jobs["managed-accept"]);
+  expect(accept.if).toContain("needs.managed-approve.outputs.approval-result");
+  expect(record(accept.concurrency).group).toContain("csm-ci-merge-");
+  expect(record(accept.outputs)["deployment-id"]).toContain("steps.accept.outputs.deployment-id");
+  const evaluate = record(jobs["managed-evaluate"]);
+  expect(evaluate.needs).toEqual(["reconcile", "managed-accept"]);
+  expect(record(evaluate.with)["deployment-id"]).toBe("${{ needs.managed-accept.outputs.deployment-id }}");
+});
+
+test("workflow-dispatch capability is propagated to managed re-sync entry points", () => {
+  const callers = record(record(outer.jobs));
+  for (const name of ["clients", "server"]) {
+    expect(record(record(callers[name]).permissions)["actions"]).toBe("write");
+  }
+  expect(record(record(record(target.jobs)["managed-evaluate"]).permissions)["actions"]).toBe("write");
+
+  const evaluator = parse(readFileSync(".github/workflows/server-automerge-evaluate.yml", "utf8")) as Record<string, unknown>;
+  expect(record(record(record(evaluator.jobs).evaluate).permissions)["actions"]).toBe("write");
+  const server = parse(readFileSync(".github/workflows/server.yml", "utf8")) as Record<string, unknown>;
+  expect(record(record(record(server.jobs).automerge).permissions)["actions"]).toBe("write");
+  const sweep = parse(readFileSync(".github/workflows/server-automerge.yml", "utf8")) as Record<string, unknown>;
+  expect(record(record(record(sweep.jobs).evaluate).permissions)["actions"]).toBe("write");
+  expect(record(record(record(sweep.jobs).repair).permissions)["actions"]).toBe("write");
+
+  const caller = parse(readFileSync("e2e/fixtures/testing-csm-ci-server/.github/workflows/csm-ci-repo-settings.yml", "utf8")) as Record<string, unknown>;
+  const callerInputs = record(record(record(caller.on).workflow_dispatch).inputs);
+  expect(callerInputs["managed-drift-key"]).toEqual(expect.objectContaining({ required: false, type: "string" }));
+  expect(caller["run-name"]).toContain("inputs.managed-drift-key");
+});

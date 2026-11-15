@@ -32,6 +32,19 @@ var __toESM = (mod, isNodeMode, target) => {
   return to;
 };
 var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
+var __returnValue = (v) => v;
+function __exportSetter(name, newValue) {
+  this[name] = __returnValue.bind(null, newValue);
+}
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, {
+      get: all[name],
+      enumerable: true,
+      configurable: true,
+      set: __exportSetter.bind(all, name)
+    });
+};
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // node_modules/undici/lib/core/symbols.js
@@ -26047,6 +26060,19 @@ var require_picomatch2 = __commonJS(function(exports, module) {
   module.exports = picomatch;
 });
 
+// node_modules/zod/v4/classic/iso.js
+var exports_iso = {};
+__export(exports_iso, {
+  ZodISODate: () => ZodISODate,
+  ZodISODateTime: () => ZodISODateTime,
+  ZodISODuration: () => ZodISODuration,
+  ZodISOTime: () => ZodISOTime,
+  date: () => date2,
+  datetime: () => datetime2,
+  duration: () => duration2,
+  time: () => time2
+});
+
 // node_modules/@actions/core/lib/command.js
 import * as os from "os";
 
@@ -27277,6 +27303,9 @@ function constantCatch(value) {
 
 // node_modules/zod/v4/core/core.js
 var _a;
+var NEVER = /* @__PURE__ */ Object.freeze({
+  status: "aborted"
+});
 var _zodDesc = { value: undefined, enumerable: false };
 var _E = "captureStackTrace" in Error ? Error : null;
 function newError(Definition) {
@@ -32629,6 +32658,19 @@ function preprocess(fn, schema) {
     out: schema
   });
 }
+// node_modules/zod/v4/classic/iso.js
+function datetime2(params) {
+  return _isoDateTime(ZodISODateTime, params);
+}
+function date2(params) {
+  return _isoDate(ZodISODate, params);
+}
+function time2(params) {
+  return _isoTime(ZodISOTime, params);
+}
+function duration2(params) {
+  return _isoDuration(ZodISODuration, params);
+}
 // src/lib/config.ts
 var import_picomatch = __toESM(require_picomatch2(), 1);
 
@@ -32728,6 +32770,7 @@ var RepoSettings = preprocess((input, ctx) => {
   }
   return input;
 }, strictObject({
+  auto_merge_managed_files: boolean2().default(false),
   sponsorships: Sponsorships.optional(),
   settings: strictObject({
     delete_branch_on_merge: boolean2().optional(),
@@ -32975,6 +33018,36 @@ async function resolveWorkflowRelease(gh, callers) {
   if (!target.success)
     throw new Rejection("standard workflows release tag must resolve to a full commit SHA");
   const revision = ReleasedRevision.parse({ version: release.data.tag_name, sha: target.data.sha });
+  await validateReleasedRevision(gh, revision, callers);
+  return revision;
+}
+async function verifyWorkflowReleaseRevision(gh, revision, callers) {
+  const { data } = await gh.rest.repos.getReleaseByTag({ ...address, tag: revision.version });
+  const release = ReleaseMetadata.safeParse(data);
+  if (!release.success || release.data.tag_name !== revision.version)
+    throw new Rejection("pinned standard workflow release is not a published stable release");
+  const { data: ref } = await gh.rest.git.getRef({ ...address, ref: `tags/${revision.version}` });
+  let target = ObjectReference.safeParse(ref.object);
+  const seen = new Set;
+  for (let depth = 0;; depth++) {
+    if (!target.success)
+      throw new Rejection("standard workflows release tag must resolve to a full commit SHA");
+    if (target.data.type === "commit")
+      break;
+    if (depth >= 8)
+      throw new Rejection("standard workflows release tag chain exceeds eight tags");
+    if (seen.has(target.data.sha))
+      throw new Rejection("standard workflows release tag chain contains a cycle");
+    seen.add(target.data.sha);
+    const { data: tag } = await gh.rest.git.getTag({ ...address, tag_sha: target.data.sha });
+    target = ObjectReference.safeParse(tag.object);
+  }
+  if (!target.success || target.data.sha !== revision.sha)
+    throw new Rejection("pinned standard workflow release version and SHA do not match");
+  await validateReleasedRevision(gh, revision, callers);
+  return revision;
+}
+async function validateReleasedRevision(gh, revision, callers) {
   const read = (path) => readReleasedFile(gh, path, revision.sha);
   if (callers.length > 0) {
     const lock = $parse(await read(".github/workflows/actions.lock"));
@@ -32987,7 +33060,6 @@ async function resolveWorkflowRelease(gh, callers) {
       }
     }
   }
-  return revision;
 }
 async function readReleasedFile(gh, path, sha) {
   const { data } = await gh.rest.repos.getContent({ ...address, path, ref: sha });
@@ -33421,7 +33493,7 @@ function expand(template, context) {
     return template.replace(/\/$/, "");
   }
 }
-function parse3(options) {
+function parse4(options) {
   let method = options.method.toUpperCase();
   let url = (options.url || "/").replace(/:([a-z]\w+)/g, "{$1}");
   let headers = Object.assign({}, options.headers);
@@ -33476,7 +33548,7 @@ function parse3(options) {
   return Object.assign({ method, url, headers }, typeof body !== "undefined" ? { body } : null, options.request ? { request: options.request } : null);
 }
 function endpointWithDefaults(defaults, route, options) {
-  return parse3(merge2(defaults, route, options));
+  return parse4(merge2(defaults, route, options));
 }
 function withDefaults(oldDefaults, newDefaults) {
   const DEFAULTS2 = merge2(oldDefaults, newDefaults);
@@ -33485,7 +33557,7 @@ function withDefaults(oldDefaults, newDefaults) {
     DEFAULTS: DEFAULTS2,
     defaults: withDefaults.bind(null, DEFAULTS2),
     merge: merge2.bind(null, DEFAULTS2),
-    parse: parse3
+    parse: parse4
   });
 }
 var endpoint = withDefaults(null, DEFAULTS);
@@ -33535,7 +33607,7 @@ var NullObject = /* @__PURE__ */ (() => {
   C.prototype = Object.create(null);
   return C;
 })();
-function parse4(header, options) {
+function parse5(header, options) {
   const stopFlags = SEMI_FLAG | (options?.comma === true ? COMMA_FLAG : 0);
   const len = header.length;
   let valueStart = options?.start ?? 0;
@@ -34166,7 +34238,7 @@ async function getResponseData(response) {
   if (!contentType) {
     return response.text().catch(noop);
   }
-  const mimetype = parse4(contentType);
+  const mimetype = parse5(contentType);
   if (isJSONResponse(mimetype)) {
     let text = "";
     try {
@@ -37436,7 +37508,7 @@ Standard client workflows: ${generated.release.version} (${generated.release.sha
       pullRequest: null
     };
   const targetSha = await branchHead(gh, owner, repo);
-  let targetHistoryLength;
+  let targetHistoryStartsAtDefault = false;
   if (targetSha) {
     const history = await loadServerOwnedHistory(gh, {
       owner,
@@ -37446,7 +37518,7 @@ Standard client workflows: ${generated.release.version} (${generated.release.sha
       serverBotId: input.serverBotId,
       messages: DEFAULT_BRANCH_MESSAGES
     });
-    targetHistoryLength = history.length;
+    targetHistoryStartsAtDefault = history[0]?.parentSha === defaultSha;
     const allowed = new Set([...files.map(({ path }) => path), ...deletions]);
     for (const commit of history) {
       for (const change of commit.files) {
@@ -37461,8 +37533,8 @@ Standard client workflows: ${generated.release.version} (${generated.release.sha
   const inspectedFiles = [...files, ...deletions.map((path) => ({ path, content: "" }))];
   const targetValues = targetSha ? await readFiles(gh, owner, repo, targetSha, inspectedFiles) : new Map;
   const targetMatches = targetSha !== null && files.every(({ path, content }) => targetValues.get(path)?.content === content) && deletions.every((path) => targetValues.get(path)?.content === null);
-  const targetIsAncestorOfDefault = targetSha !== null && targetSha !== defaultSha && targetHistoryLength === 0;
-  const branchNeedsWrite = !targetMatches || targetIsAncestorOfDefault;
+  const targetUsesCurrentDefault = targetSha === defaultSha || targetHistoryStartsAtDefault;
+  const branchNeedsWrite = !targetMatches || targetSha !== null && !targetUsesCurrentDefault;
   const pullRequest = await findPullRequest(gh, input.repository, input.defaultBranch, targetSha);
   const requiresPullRequestUpdate = !pullRequest || pullRequest.title !== MANAGED_FILES_TITLE || pullRequest.body !== pullBody;
   const status = branchNeedsWrite || requiresPullRequestUpdate ? "ready" : "already-applied";
@@ -37517,16 +37589,38 @@ async function listWorkflowFiles(gh, owner, repo, ref) {
   return tree.tree.flatMap((entry) => entry.type === "blob" && (entry.mode === "100644" || entry.mode === "100755") && entry.sha && entry.path && isWorkflowFileName(entry.path) ? [{ path: entry.path, sha: entry.sha }] : []);
 }
 async function readFiles(gh, owner, repo, ref, files) {
-  const results = await Promise.all(files.map(async ({ path }) => [path, await readFileAtRef(gh, owner, repo, path, ref)]));
+  if (files.length === 0)
+    return new Map;
+  const { data: commit } = await gh.rest.repos.getCommit({ owner, repo, ref });
+  const rootTreeSha = commit.commit.tree.sha;
+  if (!rootTreeSha)
+    throw new Rejection("managed files commit has no Git tree SHA");
+  const treeCache = new Map;
+  const loadTree = (treeSha) => {
+    let response = treeCache.get(treeSha);
+    if (!response) {
+      response = gh.rest.git.getTree({ owner, repo, tree_sha: treeSha });
+      treeCache.set(treeSha, response);
+    }
+    return response;
+  };
+  const results = await Promise.all(files.map(async ({ path }) => [path, await readFileAtTree(gh, owner, repo, path, rootTreeSha, loadTree)]));
   return new Map(results);
 }
 async function readFileAtRef(gh, owner, repo, path, ref) {
   const entry = await findTreeEntry(gh, owner, repo, path, ref);
+  return readFileAtEntry(gh, owner, repo, path, entry);
+}
+async function readFileAtTree(gh, owner, repo, path, rootTreeSha, loadTree) {
+  const entry = await findTreeEntryAtTree(gh, owner, repo, path, rootTreeSha, loadTree);
+  return readFileAtEntry(gh, owner, repo, path, entry);
+}
+async function readFileAtEntry(gh, owner, repo, path, entry) {
   if (!entry)
-    return { content: null };
+    return { content: null, entry: null };
   const bytes = await readBlob(gh, owner, repo, path, entry.sha);
   try {
-    return { content: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes) };
+    return { content: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes), entry };
   } catch {
     throw new Rejection(`managed file ${JSON.stringify(path)} is not UTF-8`);
   }
@@ -37544,12 +37638,16 @@ async function readBlob(gh, owner, repo, path, sha) {
 }
 async function findTreeEntry(gh, owner, repo, path, ref) {
   const { data: commit } = await gh.rest.repos.getCommit({ owner, repo, ref });
-  let treeSha = commit.commit.tree.sha;
-  if (!treeSha)
+  const rootTreeSha = commit.commit.tree.sha;
+  if (!rootTreeSha)
     throw new Rejection("managed files commit has no Git tree SHA");
+  return findTreeEntryAtTree(gh, owner, repo, path, rootTreeSha, (treeSha) => gh.rest.git.getTree({ owner, repo, tree_sha: treeSha }));
+}
+async function findTreeEntryAtTree(gh, owner, repo, path, rootTreeSha, loadTree) {
+  let treeSha = rootTreeSha;
   const segments = path.split("/");
   for (const [index, segment] of segments.entries()) {
-    const { data: tree } = await gh.rest.git.getTree({ owner, repo, tree_sha: treeSha });
+    const { data: tree } = await loadTree(treeSha);
     if (tree.truncated)
       throw new Rejection("managed files could not safely inspect a Git tree");
     const entry = tree.tree.find((candidate) => candidate.path === segment);
@@ -38128,6 +38226,1322 @@ function validateRepoSettingsStage(stage, selection) {
     throw new Error(`repo-settings stage ${stage} is unavailable for targets ${formatRepoSettingsSelection(selection)}`);
 }
 
+// src/lib/command.ts
+var COMMAND_TTL_MS = 60 * 60000;
+function parseCommand(body) {
+  const text = body.trim();
+  if (text === "/approve")
+    return { name: "approve" };
+  if (text === "/merge")
+    return { name: "merge" };
+  if (text === "/merge cancel")
+    return { name: "merge-cancel" };
+  if (text === "/recheck")
+    return { name: "recheck" };
+  return;
+}
+function validateComment(c, repository, pullNumber, now) {
+  if (!c.issueUrl.toLowerCase().endsWith(`/repos/${repository.toLowerCase()}/issues/${pullNumber}`)) {
+    throw new Rejection(`comment ${c.id} is not on ${repository}#${pullNumber}`);
+  }
+  const command = parseCommand(c.body);
+  if (!command)
+    throw new Rejection(`comment ${c.id} is not exactly /approve, /merge, /merge cancel or /recheck`);
+  if (command.name === "recheck")
+    return command;
+  if (c.lastEditedAt !== null || c.createdAt !== c.updatedAt)
+    throw new Rejection(`comment ${c.id} was edited after it was posted`);
+  const age = now.getTime() - new Date(c.createdAt).getTime();
+  if (!(age >= 0 && age <= COMMAND_TTL_MS))
+    throw new Rejection(`comment ${c.id} is older than 60 minutes`);
+  return command;
+}
+function requirePrincipal(user, allowed, role) {
+  const match = user && user.type === "User" ? allowed.find((p) => p.id === user.id) : undefined;
+  if (!match)
+    throw new Rejection(`${user?.login ?? "a deleted user"} is not one of the ${role}`);
+  return match;
+}
+function checkPullState(p, options = {}) {
+  if (p.state !== "open")
+    throw new Rejection(`#${p.number} is ${p.state}`);
+  if (p.draft && !options.allowDraft)
+    throw new Rejection(`#${p.number} is a draft`);
+  if (p.headRepository?.toLowerCase() !== p.baseRepository.toLowerCase())
+    throw new Rejection(`#${p.number} comes from a fork`);
+  if (p.baseRef !== p.defaultBranch && !options.integrationBranches?.includes(p.baseRef)) {
+    throw new Rejection(`#${p.number} targets ${p.baseRef}, not the default branch ${p.defaultBranch} or a configured integration branch`);
+  }
+}
+
+// src/lib/notify.ts
+function marker(op, id) {
+  return `<!-- csm-ci:${op}:${id} -->`;
+}
+function hasServerMarker(comments, text, serverBotId) {
+  return comments.some((c) => Number(c.user?.id) === serverBotId && (c.body ?? "").includes(text));
+}
+async function postResult(gh, repository, issueNumber, markerText, body) {
+  await gh.rest.issues.createComment({ ...splitRepository(repository), issue_number: issueNumber, body: `${markerText}
+${body}` });
+}
+function escapeHtml(text) {
+  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
+}
+function receiptFooter(input) {
+  const { repository, pullNumber, commentId, head, serverRun, mergeCommit } = input;
+  const link = (url, label) => `<a href="${escapeHtml(url)}">${escapeHtml(label)}</a>`;
+  const repoUrl = `${serverRun.serverUrl}/${repository}`;
+  const links = [
+    link(`${repoUrl}/pull/${pullNumber}#issuecomment-${commentId}`, "Request"),
+    link(`${repoUrl}/commit/${head}`, `Head ${head.slice(0, 7)}`),
+    ...mergeCommit ? [link(`${repoUrl}/commit/${mergeCommit}`, `Squash commit ${mergeCommit.slice(0, 7)}`)] : [],
+    link(`${serverRun.serverUrl}/${serverRun.repository}/actions/runs/${serverRun.id}/attempts/${serverRun.attempt}`, `Server run ${serverRun.id}, attempt ${serverRun.attempt}`)
+  ];
+  return `<sub>${links.join(" · ")}</sub>`;
+}
+
+// src/lib/policies/signed-commits.ts
+function signedCommits(_, { trust }) {
+  return [...trust.problems, ...trust.commits.filter((c) => !c.signed).map((c) => `${c.sha} is not signed and verified`)];
+}
+
+// src/lib/policies/sensitive-paths.ts
+var import_picomatch2 = __toESM(require_picomatch2(), 1);
+
+// src/lib/github-comment.ts
+async function fetchComment(gh, repository, commentId) {
+  const { data: comment } = await gh.rest.issues.getComment({ ...splitRepository(repository), comment_id: commentId });
+  if (!comment.node_id)
+    throw new Rejection(`cannot verify the edit history of comment ${commentId}`);
+  const { node } = await gh.graphql("query($id: ID!) { node(id: $id) { ... on IssueComment { databaseId lastEditedAt } } }", { id: comment.node_id });
+  if (!node || node.databaseId !== Number(comment.id) || !(node.lastEditedAt === null || typeof node.lastEditedAt === "string")) {
+    throw new Rejection(`cannot verify the edit history of comment ${commentId}`);
+  }
+  return {
+    id: Number(comment.id),
+    body: comment.body ?? "",
+    issueUrl: comment.issue_url,
+    createdAt: comment.created_at,
+    updatedAt: comment.updated_at,
+    lastEditedAt: node.lastEditedAt,
+    user: comment.user ? { id: Number(comment.user.id), login: comment.user.login, type: comment.user.type } : null
+  };
+}
+
+// src/lib/policies/sensitive-paths.ts
+var MARKER = /<!-- csm-ci:approve:command:(\d+) -->/g;
+var MAX_FILES = 3000;
+async function sensitivePaths(policy, ctx) {
+  const { owner, repo } = splitRepository(ctx.repository);
+  const files = await ctx.gh.paginate(ctx.gh.rest.pulls.listFiles, { owner, repo, pull_number: ctx.pullNumber, per_page: 100 });
+  if (files.length >= MAX_FILES)
+    return [`pull request changes ${MAX_FILES} or more files; sensitive-paths cannot verify every file`];
+  const match = import_picomatch2.default(policy.paths, { dot: true });
+  const changed = files.filter((f) => match(f.filename) || f.previous_filename !== undefined && match(f.previous_filename));
+  if (changed.length === 0)
+    return [];
+  const exempt = policy.exempt.some((p) => p.id === ctx.authorId) && ctx.trust.commits.length > 0 && ctx.trust.commits.every((c) => c.identity.kind === "user" && c.identity.principal.id === ctx.authorId);
+  if (exempt)
+    return [];
+  const commandApproval = ctx.commandApproval;
+  if (commandApproval?.head === ctx.head && ctx.config.trust.approvers.some((p) => p.id === commandApproval.authorId))
+    return [];
+  const reviews = await ctx.gh.paginate(ctx.gh.rest.pulls.listReviews, { owner, repo, pull_number: ctx.pullNumber, per_page: 100 });
+  const candidates = reviews.filter((r) => Number(r.user?.id) === ctx.config.approver.id && r.state === "APPROVED" && r.commit_id === ctx.head);
+  for (const review of candidates) {
+    const body = review.body ?? "";
+    const markers = [...body.matchAll(MARKER)];
+    for (const marker of markers) {
+      const commentId = Number(marker[1]);
+      try {
+        const comment = await fetchComment(ctx.gh, ctx.repository, commentId);
+        const belongsToPull = comment.issueUrl.toLowerCase() === `https://api.github.com/repos/${owner}/${repo}/issues/${ctx.pullNumber}`;
+        if (comment.body !== "/approve" || !belongsToPull || comment.user?.type !== "User" || !ctx.config.trust.approvers.some((p) => p.id === comment.user?.id) || comment.createdAt !== comment.updatedAt || comment.lastEditedAt !== null)
+          continue;
+        return [];
+      } catch (error) {
+        if (typeof error === "object" && error !== null && "status" in error && error.status === 404)
+          continue;
+        if (error instanceof Rejection)
+          continue;
+        throw error;
+      }
+    }
+  }
+  const paths = changed.slice(0, 20).map((f) => f.previous_filename ? `${f.filename} (previously ${f.previous_filename})` : f.filename);
+  const more = changed.length > paths.length ? ` and ${changed.length - paths.length} more` : "";
+  return [`sensitive paths need a trusted approver's /approve: ${paths.join(", ")}${more}`];
+}
+
+// src/lib/policies/trusted-committers.ts
+function trustedCommitters(_, { trust }) {
+  return [
+    ...trust.problems,
+    ...trust.commits.flatMap((c) => {
+      if (c.identity.kind === "unknown")
+        return [`${c.sha}: ${c.identity.reason}`];
+      if (c.identity.kind === "user" && !c.trusted)
+        return [`${c.sha} is by ${c.identity.principal.login}, not a trusted committer`];
+      return [];
+    })
+  ];
+}
+
+// src/lib/policies/index.ts
+var EVALUATORS = {
+  "signed-commits": signedCommits,
+  "trusted-committers": trustedCommitters,
+  "sensitive-paths": sensitivePaths
+};
+async function evaluatePolicies(policies, ctx) {
+  return Promise.all(policies.map(async (policy) => {
+    const evaluate = EVALUATORS[policy.type];
+    const problems = await evaluate(policy, ctx);
+    return { type: policy.type, ok: problems.length === 0, problems };
+  }));
+}
+
+// src/lib/trust.ts
+var MAX_COMMITS = 250;
+var WEB_FLOW = "web-flow";
+function identityOf(c, config) {
+  if (!c.verified)
+    return { kind: "unknown", reason: "commit is not signed, so its author cannot be verified" };
+  if (c.committer?.login !== WEB_FLOW) {
+    const who = c.committer ?? c.author;
+    return who ? { kind: "user", principal: who } : { kind: "unknown", reason: "commit has neither a GitHub committer nor a GitHub author" };
+  }
+  const web = c.web;
+  if (!web?.signedByGitHub || !web.signatureValid)
+    return { kind: "unknown", reason: "web-flow commit is not signed by GitHub" };
+  if (!c.author)
+    return { kind: "unknown", reason: "web-flow commit has no GitHub author" };
+  if (c.author.id === config.apps.server_bot_id)
+    return { kind: "server" };
+  if (!web.committedViaWeb)
+    return { kind: "unknown", reason: "web-flow commit was not committed via the web" };
+  if (web.authorLogin !== c.author.login)
+    return { kind: "unknown", reason: "web-flow commit author differs between REST and GraphQL" };
+  return { kind: "user", principal: c.author };
+}
+function isTrusted(identity, committers) {
+  if (identity.kind === "server")
+    return true;
+  if (identity.kind === "unknown")
+    return false;
+  return committers.some((p) => p.id === identity.principal.id);
+}
+function evaluateTrust(commits, head, config) {
+  const problems = [];
+  if (commits.length === 0)
+    problems.push("pull request has no commits");
+  if (commits.length >= MAX_COMMITS)
+    problems.push(`pull request has ${MAX_COMMITS} or more commits; GitHub cannot list them all`);
+  const last = commits.at(-1);
+  if (last && last.sha !== head)
+    problems.push(`last listed commit ${last.sha} is not the pinned head ${head}`);
+  const verdicts = commits.map((c) => {
+    const identity = identityOf(c, config);
+    return { sha: c.sha, signed: c.verified, identity, trusted: isTrusted(identity, config.trust.committers) };
+  });
+  return { head, commits: verdicts, problems };
+}
+function account(user) {
+  return user ? { id: Number(user.id), login: user.login } : null;
+}
+var WEB_QUERY_FIELDS = "committedViaWeb signature { isValid wasSignedByGitHub } author { user { login } }";
+async function fetchCommitFacts(gh, repository, pullNumber) {
+  const { owner, repo } = splitRepository(repository);
+  const rest = await gh.paginate(gh.rest.pulls.listCommits, { owner, repo, pull_number: pullNumber, per_page: 100 });
+  const facts = rest.map((c) => ({
+    sha: c.sha,
+    verified: c.commit.verification?.verified === true,
+    author: account(c.author),
+    committer: account(c.committer)
+  }));
+  const web = facts.filter((c) => c.committer?.login === WEB_FLOW);
+  if (web.length === 0)
+    return facts;
+  if (!web.every((c) => /^[0-9a-f]{40}$/.test(c.sha)))
+    throw new Error("commit sha from the API is not 40 hex characters");
+  const aliases = web.map((c, i) => `c${i}: object(oid: "${c.sha}") { ... on Commit { ${WEB_QUERY_FIELDS} } }`).join(`
+`);
+  const data = await gh.graphql(`query($owner: String!, $repo: String!) { repository(owner: $owner, name: $repo) { ${aliases} } }`, { owner, repo });
+  web.forEach((c, i) => {
+    const node = data.repository[`c${i}`];
+    c.web = {
+      committedViaWeb: node?.committedViaWeb === true,
+      signatureValid: node?.signature?.isValid === true,
+      signedByGitHub: node?.signature?.wasSignedByGitHub === true,
+      authorLogin: node?.author?.user?.login ?? null
+    };
+  });
+  return facts;
+}
+
+// src/lib/policy-report.ts
+import { createHash } from "node:crypto";
+var POLICY_FAILURE_MARKER = "<!-- csm-ci:policy-failure -->";
+var stateSchema = object({ node: object({
+  id: string2(),
+  databaseId: number2(),
+  body: string2(),
+  isMinimized: boolean2(),
+  minimizedReason: string2().nullable(),
+  author: object({ __typename: literal("Bot"), databaseId: number2() }),
+  issue: object({ number: number2(), repository: object({ nameWithOwner: string2() }) })
+}) });
+function escapeDetail(text, limit) {
+  let result = "";
+  for (const char of text) {
+    const encoded = /[\u0000-\u001f\u007f-\u009f]/.test(char) ? " " : /[\\`*_\[\]~!@|()#]/.test(char) ? `&#${char.codePointAt(0)};` : escapeHtml(char);
+    if (result.length + encoded.length > limit)
+      return `${result}… [truncated; see server run for full details]`;
+    result += encoded;
+  }
+  return result;
+}
+function policyFailureContent(results) {
+  const failures = [...new Set(results.filter((r) => !r.ok).map((r) => r.type))];
+  const rows = failures.map((type) => {
+    const details = results.filter((r) => !r.ok && r.type === type).flatMap((r) => r.problems).join("; ");
+    return `- ${type}: <code>${escapeDetail(details, Math.floor(5700 / Math.max(failures.length, 1)) - 100)}</code>`;
+  });
+  const guidance = failures.includes("sensitive-paths") ? "For sensitive changes, obtain the required trusted approver's `/approve` evidence for this head. " : "";
+  return `csm-ci: Policy check failed.
+
+${rows.join(`
+`)}
+
+Fix the reported violations. ${guidance}Trust restrictions must pass; approval cannot bypass them. Use \`/recheck\` after correcting the cause or a temporary issue.`;
+}
+function reportBody(ctx, content) {
+  const fingerprint = createHash("sha256").update(`${ctx.head}
+${content}`).digest("hex");
+  const prefix = `${POLICY_FAILURE_MARKER}
+<!-- csm-ci:policy-failure-content:${fingerprint} -->
+${content}`;
+  const { serverRun: run } = ctx;
+  const link = (url, label) => `<a href="${escapeHtml(url)}">${escapeHtml(label)}</a>`;
+  const repoUrl = `${run.serverUrl}/${ctx.repository}`;
+  const runUrl = `${run.serverUrl}/${run.repository}/actions/runs/${run.id}`;
+  const request = `${ctx.repository}/${ctx.pullNumber}${ctx.requestCommentId ? `/${ctx.requestCommentId}` : ""}`;
+  const footer = [
+    escapeHtml(`Request ${ctx.requestKind ?? "policy-check"} ${request}`),
+    ...ctx.requestCommentId ? [link(`${repoUrl}/pull/${ctx.pullNumber}#issuecomment-${ctx.requestCommentId}`, "Command")] : [],
+    link(`${repoUrl}/commit/${ctx.head}`, `Head ${ctx.head.slice(0, 7)}`),
+    link(runUrl, `Server run ${run.id}`),
+    link(`${runUrl}/attempts/${run.attempt}`, `Attempt ${run.attempt}`)
+  ];
+  return { prefix, body: `${prefix}
+
+<sub>${footer.join(" · ")}</sub>` };
+}
+async function current(ctx) {
+  const { data: pull } = await ctx.server.rest.pulls.get({ ...splitRepository(ctx.repository), pull_number: ctx.pullNumber });
+  return pull.state === "open" && pull.head.sha === ctx.head;
+}
+function owned(ctx, comment) {
+  return Number(comment.user?.id) === ctx.serverBotId && comment.user?.type === "Bot" && (comment.body ?? "").startsWith(`${POLICY_FAILURE_MARKER}
+`);
+}
+async function readReport(ctx, id) {
+  const { data: comment } = await ctx.server.rest.issues.getComment({ ...splitRepository(ctx.repository), comment_id: id });
+  const issueUrl = `https://api.github.com/repos/${ctx.repository}/issues/${ctx.pullNumber}`;
+  if (!owned(ctx, comment) || comment.issue_url.toLowerCase() !== issueUrl.toLowerCase() || !comment.node_id || Number(comment.id) !== id)
+    throw new Error(`cannot verify policy report ${id} ownership`);
+  const response = await ctx.server.graphql("query($id: ID!) { node(id: $id) { ... on IssueComment { id databaseId body isMinimized minimizedReason author { __typename ... on Bot { databaseId } } issue { number repository { nameWithOwner } } } } }", { id: comment.node_id });
+  const parsed = stateSchema.safeParse(response);
+  if (!parsed.success)
+    throw new Error(`cannot verify policy report ${id} node identity`);
+  const { node } = parsed.data;
+  if (node.id !== comment.node_id || node.databaseId !== id || node.author.databaseId !== ctx.serverBotId || node.issue.number !== ctx.pullNumber || node.issue.repository.nameWithOwner.toLowerCase() !== ctx.repository.toLowerCase() || node.body !== comment.body)
+    throw new Error(`cannot verify policy report ${id} node identity`);
+  return node;
+}
+async function publishPolicyReport(ctx, results) {
+  const list = () => ctx.server.paginate(ctx.server.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: ctx.pullNumber, per_page: 100 });
+  let comments = await list();
+  const passing = results.every((r) => r.ok);
+  const report = reportBody(ctx, policyFailureContent(results));
+  const active = async () => {
+    for (const comment of comments.filter((c) => owned(ctx, c))) {
+      const node = await readReport(ctx, Number(comment.id));
+      if (!node.isMinimized && node.body.startsWith(`${report.prefix}
+
+<sub>`))
+        return node.databaseId;
+    }
+    return;
+  };
+  let retained = passing ? undefined : await active();
+  if (!passing && retained === undefined) {
+    if (!await current(ctx))
+      return;
+    try {
+      const { data: created } = await ctx.server.rest.issues.createComment({ ...splitRepository(ctx.repository), issue_number: ctx.pullNumber, body: report.body });
+      retained = Number(created.id);
+    } catch (error) {
+      const status = typeof error === "object" && error !== null && "status" in error ? error.status : undefined;
+      if (!isNetworkFailure(error) && !(error instanceof Error && error.name === "TimeoutError") && status !== 502 && status !== 503 && status !== 504)
+        throw error;
+      comments = await list();
+      retained = await active();
+      if (retained === undefined)
+        throw error;
+    }
+  }
+  for (const comment of comments.filter((c) => owned(ctx, c) && Number(c.id) !== retained)) {
+    const node = await readReport(ctx, Number(comment.id));
+    const classifier = passing ? "RESOLVED" : "OUTDATED";
+    if (node.isMinimized && node.minimizedReason?.toUpperCase() === classifier)
+      continue;
+    if (!await current(ctx))
+      return;
+    const response = await ctx.server.graphql("mutation($id: ID!, $classifier: ReportedContentClassifiers!) { minimizeComment(input: {subjectId: $id, classifier: $classifier}) { minimizedComment { isMinimized minimizedReason } } }", { id: node.id, classifier });
+    const result = object({ minimizeComment: object({ minimizedComment: object({ isMinimized: literal(true), minimizedReason: string2() }) }) }).safeParse(response);
+    if (!result.success || result.data.minimizeComment.minimizedComment.minimizedReason.toUpperCase() !== classifier)
+      throw new Error(`policy report ${node.databaseId} was not minimized as ${classifier}`);
+  }
+}
+
+// src/lib/managed-pull.ts
+import { createHash as createHash2 } from "node:crypto";
+var MANAGED_REF = "csm-ci/repo-settings";
+var SHA2 = /^[0-9a-f]{40}$/u;
+async function attestManagedPull(gh, expectation) {
+  const repository = normalizeRepository(expectation.repository);
+  if (!Number.isSafeInteger(expectation.repositoryId) || expectation.repositoryId <= 0)
+    reject("managed pull repository identity is invalid");
+  if (!Number.isSafeInteger(expectation.pullNumber) || expectation.pullNumber <= 0 || !expectation.pullNodeId)
+    reject("managed pull identity is invalid");
+  for (const [name, sha] of [["base", expectation.defaultSha], ["head", expectation.headSha], ["configuration", expectation.configSha], ["release", expectation.releaseSha]]) {
+    if (!SHA2.test(sha))
+      reject(`managed pull ${name} SHA is invalid`);
+  }
+  if (expectation.inspection.repository.toLowerCase() !== repository || expectation.inspection.defaultBranch !== expectation.defaultBranch || expectation.inspection.defaultSha !== expectation.defaultSha || expectation.inspection.targetSha !== expectation.headSha)
+    reject("managed pull does not match the inspected managed-files state");
+  const desired = desiredChanges(expectation.inspection);
+  const initial = await readPullState(gh, expectation, repository);
+  const history = await loadServerOwnedHistory(gh, {
+    ...splitRepository(repository),
+    baseSha: expectation.defaultSha,
+    headSha: expectation.headSha,
+    serverBotId: expectation.serverBotId,
+    messages: { incomplete: "managed pull commit list is incomplete", untrusted: "managed pull contains a commit not made by the server", changesIncomplete: "managed pull change list is incomplete", nonLinear: "managed pull contains a merge or root commit" }
+  });
+  if (history.length === 0 || history[0]?.parentSha !== expectation.defaultSha)
+    reject("managed pull history does not start at the current default branch");
+  const allowed = new Set(desired.map(({ path }) => path));
+  for (const commit of history) {
+    for (const change of commit.files) {
+      if (!allowed.has(change.filename) || change.previous_filename && !allowed.has(change.previous_filename))
+        reject(`managed pull history changed an unexpected path ${JSON.stringify(change.previous_filename ?? change.filename)}`);
+    }
+  }
+  const { owner, repo } = splitRepository(repository);
+  const changed = await gh.paginate(gh.rest.pulls.listFiles, { owner, repo, pull_number: expectation.pullNumber, per_page: 100 });
+  const actualPaths = changed.map((file) => file.filename).sort();
+  const expectedPaths = desired.map(({ path }) => path).sort();
+  if (actualPaths.length !== expectedPaths.length || actualPaths.some((path, index) => path !== expectedPaths[index]) || changed.some((file) => file.status === "renamed" || file.previous_filename))
+    reject("managed pull diff does not exactly match the managed manifest");
+  for (const entry of desired) {
+    const current = await readFileAtRef(gh, owner, repo, entry.path, expectation.headSha);
+    if (entry.content === null ? current.content !== null || current.entry !== null : current.content !== entry.content || current.entry?.mode !== "100644")
+      reject(`managed pull content or mode differs from the managed manifest at ${JSON.stringify(entry.path)}`);
+  }
+  const final = await readPullState(gh, expectation, repository);
+  if (JSON.stringify(initial) !== JSON.stringify(final))
+    reject("managed pull state changed during validation");
+  return {
+    repositoryId: expectation.repositoryId,
+    repository,
+    pullNumber: expectation.pullNumber,
+    pullNodeId: expectation.pullNodeId,
+    baseRef: expectation.defaultBranch,
+    baseSha: expectation.defaultSha,
+    headSha: expectation.headSha,
+    configSha: expectation.configSha,
+    releaseSha: expectation.releaseSha,
+    releaseVersion: expectation.releaseVersion,
+    manifestDigest: managedManifestDigest(allDesiredChanges(expectation.inspection))
+  };
+}
+function desiredChanges(inspection) {
+  const deletions = inspection.deletions ?? [];
+  const changes = [
+    ...inspection.files.filter(({ path }) => inspection.changedPaths.includes(path)),
+    ...deletions.map((path) => ({ path, content: null }))
+  ];
+  const paths = changes.map(({ path }) => path);
+  if (new Set(paths).size !== paths.length || paths.some((path) => !inspection.changedPaths.includes(path)))
+    reject("managed pull inspection has an invalid change manifest");
+  if (inspection.changedPaths.length !== paths.length || inspection.changedPaths.some((path) => !paths.includes(path)))
+    reject("managed pull inspection has an incomplete change manifest");
+  return changes.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+}
+function allDesiredChanges(inspection) {
+  return [...inspection.files, ...(inspection.deletions ?? []).map((path) => ({ path, content: null }))];
+}
+function managedManifestDigest(changes) {
+  const hash = createHash2("sha256");
+  for (const { path, content } of [...changes].sort((a, b) => a.path.localeCompare(b.path))) {
+    const pathBytes = Buffer.from(path, "utf8");
+    const contentBytes = content === null ? null : Buffer.from(content, "utf8");
+    hash.update(contentBytes === null ? "D" : "F");
+    hash.update(String(pathBytes.length));
+    hash.update(":");
+    hash.update(pathBytes);
+    if (contentBytes) {
+      hash.update(String(contentBytes.length));
+      hash.update(":");
+      hash.update(contentBytes);
+    }
+  }
+  return hash.digest("hex");
+}
+async function readPullState(gh, expected, repository) {
+  const { owner, repo } = splitRepository(repository);
+  const [pulls, { data: currentPull }, { data: defaultRef }, { data: headRef }] = await Promise.all([
+    gh.paginate(gh.rest.pulls.list, { owner, repo, state: "open", head: `${owner}:${MANAGED_REF}`, per_page: 100 }),
+    gh.rest.pulls.get({ owner, repo, pull_number: expected.pullNumber }),
+    gh.rest.git.getRef({ owner, repo, ref: `heads/${expected.defaultBranch}` }),
+    gh.rest.git.getRef({ owner, repo, ref: `heads/${MANAGED_REF}` })
+  ]);
+  const pull = currentPull;
+  if (pulls.length !== 1 || pulls[0]?.number !== expected.pullNumber)
+    reject("managed pull branch does not have exactly one open pull request");
+  if (pull.state !== "open" || pull.merged || pull.draft || pull.node_id !== expected.pullNodeId || pull.number !== expected.pullNumber)
+    reject("managed pull identity or state changed");
+  if (pull.base.repo?.id !== expected.repositoryId || pull.head.repo?.id !== expected.repositoryId || pull.base.repo?.full_name?.toLowerCase() !== repository || pull.head.repo?.full_name?.toLowerCase() !== repository)
+    reject("managed pull repository identity changed");
+  if (pull.base.ref !== expected.defaultBranch || pull.base.repo?.default_branch !== expected.defaultBranch || pull.head.ref !== MANAGED_REF)
+    reject("managed pull base or head ref changed");
+  if (pull.head.sha !== expected.headSha || headRef.object.sha !== expected.headSha || defaultRef.object.sha !== expected.defaultSha)
+    reject("managed pull base or head moved");
+  return JSON.stringify({ repositoryId: pull.base.repo.id, pullNumber: pull.number, pullNodeId: pull.node_id, baseRef: pull.base.ref, baseSha: defaultRef.object.sha, headRef: pull.head.ref, headSha: pull.head.sha, draft: pull.draft });
+}
+function normalizeRepository(value) {
+  if (!/^[^/\s]+\/[^/\s]+$/u.test(value))
+    reject("managed pull repository is invalid");
+  return value.toLowerCase();
+}
+function reject(message) {
+  throw new Rejection(message);
+}
+
+// src/lib/automerge.ts
+var HumanBotReservationPayloadSchema = strictObject({
+  version: literal(1),
+  repository_id: number2().int().positive(),
+  repository: string2().regex(/^[^/]+\/[^/]+$/),
+  pull_number: number2().int().positive(),
+  pull_node_id: string2().min(1),
+  base_ref: string2().min(1),
+  merger: strictObject({ id: number2().int().positive(), login: string2().min(1), type: _enum(["User", "Bot"]) }),
+  mode: _enum(["human", "bot"]),
+  command_comment_id: number2().int().positive(),
+  accepted_head: string2().regex(/^[0-9a-f]{40}$/),
+  accepted_at: exports_iso.datetime(),
+  expires_at: exports_iso.datetime()
+}).refine((payload) => Date.parse(payload.expires_at) === Date.parse(payload.accepted_at) + 7 * 24 * 60 * 60 * 1000, {
+  message: "expires_at must be exactly seven days after accepted_at",
+  path: ["expires_at"]
+}).refine((payload) => payload.mode === "bot" === (payload.merger.type === "Bot"), {
+  message: "mode must match the merger type",
+  path: ["mode"]
+});
+var ManagedReservationPayloadSchema = strictObject({
+  version: literal(2),
+  kind: literal("managed-files"),
+  repository_id: number2().int().positive(),
+  repository: string2().regex(/^[^/]+\/[^/]+$/),
+  pull_number: number2().int().positive(),
+  pull_node_id: string2().min(1),
+  base_ref: string2().min(1),
+  managed_ref: literal("csm-ci/repo-settings"),
+  accepted_base: string2().regex(/^[0-9a-f]{40}$/),
+  accepted_head: string2().regex(/^[0-9a-f]{40}$/),
+  configuration_sha: string2().regex(/^[0-9a-f]{40}$/),
+  release_version: string2().regex(/^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/),
+  release_sha: string2().regex(/^[0-9a-f]{40}$/),
+  manifest_digest: string2().regex(/^[0-9a-f]{64}$/),
+  idempotency_key: string2().regex(/^[0-9a-f]{64}$/),
+  accepted_at: exports_iso.datetime(),
+  expires_at: exports_iso.datetime()
+}).refine((payload) => Date.parse(payload.expires_at) > Date.parse(payload.accepted_at), {
+  message: "expires_at must be after accepted_at",
+  path: ["expires_at"]
+});
+var ReservationPayloadSchema = unknown().transform((value, ctx) => {
+  const parsed = typeof value === "object" && value !== null && "version" in value && value.version === 2 ? ManagedReservationPayloadSchema.safeParse(value) : HumanBotReservationPayloadSchema.safeParse(value);
+  if (!parsed.success) {
+    for (const issue of parsed.error.issues)
+      ctx.addIssue({ code: "custom", message: issue.message, path: issue.path });
+    return NEVER;
+  }
+  return parsed.data;
+});
+var terminalReasonPrefix = "csm-ci:automerge:reason=";
+var terminalReasons = ["external-merge", "closed", "expired", "invalidated", "rejected", "merged", "cancelled", "other"];
+function terminalReason(description) {
+  const match = description?.match(/^csm-ci:automerge:reason=([a-z-]+)\|/);
+  return terminalReasons.find((reason) => reason === match?.[1]) ?? "other";
+}
+function terminalDescription(reason, description) {
+  return `${terminalReasonPrefix}${reason}| ${description}`;
+}
+function reservationState(args) {
+  const statuses = args.statuses.filter((status) => status.creator.type === "Bot" && status.creator.databaseId === args.serverBotId);
+  const terminal = statuses.filter((status) => status.state === "success" || status.state === "failure" || status.state === "inactive").sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id - b.id)[0];
+  if (terminal)
+    return { kind: "terminal", state: terminal.state, at: terminal.createdAt, description: terminal.description, reason: terminalReason(terminal.description) };
+  const latestQueued = statuses.filter((status) => status.state === "queued").sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.id - a.id)[0];
+  return latestQueued?.description ? { kind: "active", waitingReason: latestQueued.description } : { kind: "active" };
+}
+function truncateDeploymentDescription(description) {
+  const characters = Array.from(description);
+  return characters.length <= 140 ? description : `${characters.slice(0, 139).join("")}…`;
+}
+
+// src/lib/automerge-github.ts
+var ENVIRONMENT = "csm-ci-automerge";
+var TASK = "csm-ci:automerge";
+var LOOKBACK_MS = 14 * 24 * 60 * 60 * 1000;
+var Creator = object({ __typename: string2(), databaseId: number2().int().positive().optional() }).nullable();
+var DeploymentNode = object({
+  id: string2().min(1),
+  databaseId: number2().int().positive(),
+  task: string2(),
+  payload: unknown(),
+  createdAt: exports_iso.datetime(),
+  creator: Creator,
+  statuses: unknown()
+});
+var DeploymentPage = object({ repository: object({ deployments: object({ nodes: array(DeploymentNode), pageInfo: object({ hasNextPage: boolean2(), endCursor: string2().nullable() }) }) }) });
+var GraphStatus = object({ id: string2().min(1), state: string2(), description: string2().nullable(), createdAt: exports_iso.datetime(), creator: Creator });
+var GraphStatuses = object({ nodes: array(GraphStatus), pageInfo: object({ hasNextPage: boolean2() }) });
+var RestStatus = object({
+  id: number2().int().positive(),
+  state: string2(),
+  description: string2().nullable(),
+  created_at: exports_iso.datetime(),
+  log_url: string2().nullable().optional(),
+  environment_url: string2().nullable().optional(),
+  creator: object({ id: number2().int().positive(), type: string2() }).nullable()
+});
+var CreatedDeployment = object({ id: number2().int().positive(), node_id: string2().min(1), task: string2(), created_at: exports_iso.datetime(), creator: object({ id: number2().int().positive(), type: string2() }).nullable() });
+var DEPLOYMENTS_QUERY = `query($owner:String!,$name:String!,$cursor:String){repository(owner:$owner,name:$name){deployments(environments:["${ENVIRONMENT}"],first:100,after:$cursor,orderBy:{field:CREATED_AT,direction:DESC}){pageInfo{hasNextPage endCursor}nodes{id databaseId task payload createdAt creator{__typename ... on Bot{databaseId}} statuses(first:100){pageInfo{hasNextPage}nodes{id state description createdAt creator{__typename ... on Bot{databaseId}}}}}}}}`;
+async function listReservations(args) {
+  const { owner, repo } = splitRepository(args.serverRepository);
+  const cutoff = args.now.getTime() - LOOKBACK_MS;
+  const nodes = [];
+  let cursor = null;
+  const seen = new Set;
+  do {
+    const response = await args.server.graphql(DEPLOYMENTS_QUERY, { owner, name: repo, cursor });
+    const page = DeploymentPage.parse(response).repository.deployments;
+    for (const node of page.nodes) {
+      if (Date.parse(node.createdAt) < cutoff)
+        return withStatuses(args, nodes);
+      nodes.push(node);
+    }
+    if (!page.pageInfo.hasNextPage)
+      break;
+    cursor = page.pageInfo.endCursor;
+    if (!cursor || seen.has(cursor))
+      throw new Error("GitHub returned a repeated deployment cursor");
+    seen.add(cursor);
+  } while (true);
+  return withStatuses(args, nodes);
+}
+async function findReservationsForPull(args) {
+  const { repositoryId, pullNumber, ...listArgs } = args;
+  return (await listReservations(listArgs)).filter((r) => r.payload.repository_id === repositoryId && r.payload.pull_number === pullNumber);
+}
+async function createManagedReservation(args) {
+  const find = () => findReservationsForPull({ server: args.server, serverRepository: args.serverRepository, serverBotId: args.serverBotId, repositoryId: args.payload.repository_id, pullNumber: args.payload.pull_number, now: new Date });
+  const existing = await find();
+  const activeHumanBot = existing.find((r) => r.state.kind === "active" && r.payload.version === 1);
+  if (activeHumanBot) {
+    throw new Error(`pull request #${args.payload.pull_number} already has an active human or bot merge reservation`);
+  }
+  const sameKey = existing.filter((r) => r.payload.version === 2 && r.payload.idempotency_key === args.payload.idempotency_key);
+  if (sameKey.length > 1)
+    throw new Error("multiple managed-file reservations match the idempotency key");
+  if (sameKey[0]?.state.kind === "active")
+    return sameKey[0];
+  for (const stale of existing.filter((r) => r.state.kind === "active" && r.payload.version === 2)) {
+    await createReservationStatus({ server: args.server, serverRepository: args.serverRepository, serverBotId: args.serverBotId, deploymentId: stale.deploymentId, serverRunUrl: args.serverRunUrl, pullUrl: args.pullUrl, state: "inactive", description: terminalDescription("invalidated", "managed-file provenance changed") });
+  }
+  const { owner, repo } = splitRepository(args.serverRepository);
+  try {
+    const { data } = await args.server.rest.repos.createDeployment({ owner, repo, ref: args.displayCommit ?? args.defaultBranch, task: TASK, environment: ENVIRONMENT, auto_merge: false, required_contexts: [], production_environment: false, transient_environment: false, description: `${args.payload.repository}#${args.payload.pull_number}`, payload: args.payload });
+    const created = CreatedDeployment.parse(data);
+    if (created.task !== TASK || created.creator?.type !== "Bot" || created.creator.id !== args.serverBotId)
+      throw new Error("created deployment identity does not match csm-ci automerge");
+    return { deploymentId: created.id, nodeId: created.node_id, createdAt: created.created_at, payload: args.payload, statuses: [], state: { kind: "active" } };
+  } catch (error) {
+    if (!ambiguousWrite(error))
+      throw error;
+    const recovered = (await find()).filter((r) => r.state.kind === "active" && r.payload.version === 2 && r.payload.idempotency_key === args.payload.idempotency_key);
+    if (recovered.length === 1)
+      return recovered[0];
+    if (recovered.length > 1)
+      throw new Error("multiple managed-file reservations match the idempotency key");
+    throw error;
+  }
+}
+async function createReservationStatus(args) {
+  const { owner, repo } = splitRepository(args.serverRepository);
+  const body = { owner, repo, deployment_id: args.deploymentId, state: args.state, description: truncateDeploymentDescription(args.description), log_url: args.serverRunUrl, environment_url: args.pullUrl, auto_inactive: false };
+  try {
+    await args.server.rest.repos.createDeploymentStatus(body);
+  } catch (error) {
+    if (!ambiguousWrite(error))
+      throw error;
+    const raw = await args.server.paginate(args.server.rest.repos.listDeploymentStatuses, { owner, repo, deployment_id: args.deploymentId, per_page: 100 });
+    if (raw.some((value) => {
+      const status = RestStatus.safeParse(value);
+      return status.success && status.data.state === args.state && status.data.description === body.description && status.data.creator?.type === "Bot" && status.data.creator.id === args.serverBotId && status.data.log_url === body.log_url && status.data.environment_url === body.environment_url;
+    }))
+      return;
+    throw error;
+  }
+}
+async function withStatuses(args, nodes) {
+  const records = [];
+  for (const node of nodes) {
+    if (node.task !== TASK || node.creator?.__typename !== "Bot" || node.creator.databaseId !== args.serverBotId)
+      continue;
+    const payload = parsePayload(node.payload);
+    if (!payload.success) {
+      console.warn(`ignoring automerge deployment ${node.databaseId} with invalid payload`);
+      continue;
+    }
+    records.push({ record: { deploymentId: node.databaseId, nodeId: node.id, createdAt: node.createdAt, payload: payload.data, statuses: [], state: { kind: "active" } }, statuses: node.statuses });
+  }
+  const selected = args.limit === undefined ? records : records.slice(0, args.limit);
+  const { owner, repo } = splitRepository(args.serverRepository);
+  for (const { record, statuses } of selected) {
+    const parsed = GraphStatuses.safeParse(statuses);
+    if (!parsed.success)
+      throw new Error(`GitHub returned an invalid deployment status for deployment ${record.deploymentId}`);
+    const trusted = parsed.data.nodes.filter((s) => s.creator?.__typename === "Bot" && s.creator.databaseId === args.serverBotId);
+    const timestamps = new Set(trusted.map((s) => Date.parse(s.createdAt)));
+    if (parsed.data.pageInfo.hasNextPage || timestamps.size !== trusted.length) {
+      const raw = await args.server.paginate(args.server.rest.repos.listDeploymentStatuses, { owner, repo, deployment_id: record.deploymentId, per_page: 100 });
+      record.statuses = raw.map((value) => {
+        const status = RestStatus.safeParse(value);
+        if (!status.success)
+          throw new Error(`GitHub returned an invalid deployment status for deployment ${record.deploymentId}`);
+        return mapStatus(status.data);
+      });
+    } else {
+      record.statuses = parsed.data.nodes.map((s, index) => mapStatus({ id: index + 1, state: s.state.toLowerCase(), description: s.description, created_at: s.createdAt, creator: s.creator?.__typename === "Bot" && s.creator.databaseId ? { type: "Bot", id: s.creator.databaseId } : null }));
+    }
+    record.state = reservationState({ statuses: record.statuses, serverBotId: args.serverBotId });
+  }
+  return selected.map(({ record }) => record);
+}
+function parsePayload(raw) {
+  let decoded = raw;
+  try {
+    for (let depth = 0;depth < 2 && typeof decoded === "string"; depth++)
+      decoded = JSON.parse(decoded);
+  } catch {
+    return ReservationPayloadSchema.safeParse(undefined);
+  }
+  return ReservationPayloadSchema.safeParse(decoded);
+}
+function mapStatus(s) {
+  const state = s.state === "queued" ? "queued" : s.state === "success" ? "success" : s.state === "failure" ? "failure" : s.state === "inactive" ? "inactive" : "error";
+  const creator = s.creator?.type === "Bot" ? { type: "Bot", databaseId: s.creator.id } : { type: "Other" };
+  return { id: s.id, state, description: s.description, createdAt: s.created_at, creator };
+}
+function ambiguousWrite(error) {
+  if (isNetworkFailure(error) || error instanceof Error && error.name === "TimeoutError")
+    return true;
+  return typeof error === "object" && error !== null && "status" in error && (error.status === 502 || error.status === 503 || error.status === 504);
+}
+
+// src/lib/managed-pull-context.ts
+var MANAGED_REF2 = "csm-ci/repo-settings";
+var SHA3 = /^[0-9a-f]{40}$/u;
+async function deriveManagedPullAttestation(input) {
+  const repository = normalizeRepository2(input.repository);
+  const { owner, repo } = splitRepository(repository);
+  const { data: pull } = await input.target.rest.pulls.get({ owner, repo, pull_number: input.pullNumber });
+  if (pull.head.ref !== MANAGED_REF2)
+    return;
+  if (!SHA3.test(input.configSha))
+    throw new Rejection("managed pull configuration revision is invalid");
+  const serverRepository = normalizeRepository2(input.serverRepository);
+  const serverAddress = splitRepository(serverRepository);
+  const { data: server } = await input.source.rest.repos.get(serverAddress);
+  if (!server.default_branch)
+    throw new Rejection("managed pull server default branch is unavailable");
+  const { data: serverRef } = await input.source.rest.git.getRef({ ...serverAddress, ref: `heads/${server.default_branch}` });
+  if (serverRef.object.sha !== input.configSha)
+    throw new Rejection("managed pull configuration is no longer at the server default-branch head");
+  const config = await loadConfig(input.source, serverRepository, input.configSha, input.configPath);
+  if (config.server_repository !== serverRepository)
+    throw new Rejection("managed pull configuration identifies a different server repository");
+  const entry = repositoryEntry(config, repository);
+  if (!entry)
+    throw new Rejection(`managed pull target ${repository} is not configured`);
+  if (config.repo_settings?.auto_merge_managed_files !== true)
+    return;
+  if (!entry.ops.includes("approve") || !entry.ops.includes("policy-check") || !entry.ops.includes("merge")) {
+    throw new Rejection("managed pull automatic completion requires approve, policy-check, and merge operations");
+  }
+  const { data: targetInfo } = await input.target.rest.repos.get({ owner, repo });
+  const repositoryId = Number(targetInfo.id);
+  if (targetInfo.full_name?.toLowerCase() !== repository || !Number.isSafeInteger(repositoryId) || repositoryId <= 0) {
+    throw new Rejection("managed pull target repository identity is invalid");
+  }
+  if (pull.base.repo?.id !== targetInfo.id || pull.head.repo?.id !== targetInfo.id || pull.base.ref !== targetInfo.default_branch || pull.head.repo?.full_name?.toLowerCase() !== repository || pull.base.repo?.full_name?.toLowerCase() !== repository) {
+    throw new Rejection("managed pull repository or base identity changed");
+  }
+  const callers = selectedCallers(config, repository);
+  const headerRelease = await releaseCandidateFromPull(input.target, owner, repo, pull.head.sha, callers);
+  const releaseContext = await resolveManagedPullRelease(input, {
+    repository,
+    repositoryId,
+    pullNumber: pull.number,
+    pullNodeId: pull.node_id,
+    headSha: pull.head.sha,
+    baseRef: pull.base.ref,
+    serverBotId: config.apps.server_bot_id,
+    headerRelease,
+    callers
+  });
+  const release = releaseContext.release;
+  const additional = await loadAdditionalManagedFiles(input.source, { repository: serverRepository, sha: input.configSha, settings: config.repo_settings });
+  const generated = { release, files: generateWorkflows(config, repository, targetInfo.default_branch, release) };
+  const inspection = await inspectManagedFiles(input.target, {
+    repository,
+    defaultBranch: targetInfo.default_branch,
+    serverBotId: config.apps.server_bot_id,
+    generated,
+    files: additional
+  });
+  assertManagedPullProposalMatches(inspection, input.pullNumber, pull.head.sha);
+  await assertManagedPullContextCurrent({ source: input.source, serverRepository, defaultBranch: server.default_branch, configSha: input.configSha, callers, release });
+  await revalidateManagedPullRelease(input, {
+    repository,
+    repositoryId,
+    pullNumber: pull.number,
+    pullNodeId: pull.node_id,
+    headSha: pull.head.sha,
+    baseRef: pull.base.ref,
+    serverBotId: config.apps.server_bot_id,
+    headerRelease,
+    callers
+  }, releaseContext);
+  return attestManagedPull(input.target, {
+    repository,
+    repositoryId,
+    pullNumber: pull.number,
+    pullNodeId: pull.node_id,
+    defaultBranch: targetInfo.default_branch,
+    defaultSha: inspection.defaultSha,
+    headSha: pull.head.sha,
+    serverBotId: config.apps.server_bot_id,
+    configSha: input.configSha,
+    releaseSha: release.sha,
+    releaseVersion: release.version,
+    inspection
+  });
+}
+function assertManagedPullProposalMatches(inspection, pullNumber, headSha) {
+  if (inspection.status !== "ready" && inspection.status !== "already-applied" || inspection.pullRequest !== pullNumber || inspection.targetSha !== headSha) {
+    throw new Rejection("managed pull does not match the current trusted managed-file proposal");
+  }
+}
+function assertManagedPullReleaseContextCurrent(previous, current) {
+  if (JSON.stringify(current) !== JSON.stringify(previous))
+    throw new Rejection("managed pull reservation or release pin changed during validation");
+}
+async function revalidateManagedPullRelease(input, facts, previous) {
+  const current = await resolveManagedPullRelease(input, facts);
+  assertManagedPullReleaseContextCurrent(previous, current);
+}
+async function resolveManagedPullRelease(input, facts) {
+  if (input.workflowRelease) {
+    await verifyWorkflowReleaseRevision(input.source, input.workflowRelease, facts.callers);
+    return { release: input.workflowRelease };
+  }
+  if (input.deployments) {
+    const records = await findReservationsForPull({
+      server: input.deployments,
+      serverRepository: input.serverRepository,
+      serverBotId: facts.serverBotId,
+      repositoryId: facts.repositoryId,
+      pullNumber: facts.pullNumber,
+      now: new Date
+    });
+    const active = records.filter((record) => record.state.kind === "active");
+    const managed = active.filter((record) => record.payload.version === 2 && record.payload.kind === "managed-files");
+    if (active.some((record) => record.payload.version === 1) || managed.length > 1) {
+      throw new Rejection("managed pull has an ambiguous active reservation");
+    }
+    if (managed.length === 1) {
+      const payload = managed[0].payload;
+      if (payload.repository.toLowerCase() !== facts.repository || payload.repository_id !== facts.repositoryId || payload.pull_number !== facts.pullNumber || payload.pull_node_id !== facts.pullNodeId || payload.base_ref !== facts.baseRef || payload.accepted_head !== facts.headSha || payload.configuration_sha !== input.configSha)
+        throw new Rejection("active managed reservation does not match the current pull request and configuration");
+      if (Date.parse(payload.expires_at) <= Date.now())
+        throw new Rejection("active managed reservation has expired");
+      const pinned = { version: payload.release_version, sha: payload.release_sha };
+      await verifyWorkflowReleaseRevision(input.source, pinned, facts.callers);
+      return { release: pinned, reservation: { deploymentId: managed[0].deploymentId, idempotencyKey: payload.idempotency_key } };
+    }
+  }
+  const latest = await resolveWorkflowRelease(input.source, facts.callers);
+  if (latest.version !== facts.headerRelease.version || latest.sha !== facts.headerRelease.sha) {
+    throw new Rejection("managed pull workflow release is not the current stable release and has no active reservation pin");
+  }
+  return { release: latest };
+}
+async function assertManagedPullContextCurrent(input) {
+  const serverAddress = splitRepository(input.serverRepository);
+  const [currentServerRef] = await Promise.all([
+    input.source.rest.git.getRef({ ...serverAddress, ref: `heads/${input.defaultBranch}` })
+  ]);
+  if (currentServerRef.data.object.sha !== input.configSha)
+    throw new Rejection("managed pull configuration changed during validation");
+  await verifyWorkflowReleaseRevision(input.source, input.release, input.callers);
+}
+async function releaseCandidateFromPull(gh, owner, repo, ref, callers) {
+  const path = `.github/workflows/csm-ci-${callers[0]}.yml`;
+  const { data } = await gh.rest.repos.getContent({ owner, repo, path, ref });
+  if (Array.isArray(data) || data.type !== "file" || data.encoding !== "base64" || typeof data.content !== "string") {
+    throw new Rejection("managed pull has no generated workflow release pin");
+  }
+  const encoded = data.content.replaceAll(`
+`, "");
+  const bytes = Buffer.from(encoded, "base64");
+  if (bytes.toString("base64") !== encoded)
+    throw new Rejection("managed pull generated workflow has malformed base64");
+  const content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  return parseManagedWorkflowReleaseHint(content);
+}
+function parseManagedWorkflowReleaseHint(content) {
+  const header = /^# Generated by csm-ci from (v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?) \(([a-f0-9]{40})\)\.$/mu.exec(content);
+  if (!header)
+    throw new Rejection("managed pull has no valid generated workflow release pin");
+  return ReleasedRevision.parse({ version: header[1], sha: header[2] });
+}
+function normalizeRepository2(value) {
+  if (!/^[^/\s]+\/[^/\s]+$/u.test(value))
+    throw new Rejection("managed pull repository is invalid");
+  return value.toLowerCase();
+}
+
+// src/lib/policy-check.ts
+var ALWAYS = [{ type: "signed-commits" }, { type: "trusted-committers" }];
+function effectivePolicies(config, repository) {
+  const override = repositoryEntry(config, repository)?.sensitive_paths;
+  const configured = config.policies.filter((policy) => !ALWAYS.some((always) => always.type === policy.type)).map((policy) => {
+    if (policy.type !== "sensitive-paths")
+      return policy;
+    return { type: "sensitive-paths", paths: override?.paths ?? policy.paths, exempt: override?.exempt ?? policy.exempt };
+  });
+  if (!configured.some((policy) => policy.type === "sensitive-paths") && override !== undefined) {
+    configured.push({ type: "sensitive-paths", paths: override?.paths ?? [], exempt: override?.exempt ?? [] });
+  }
+  return [...ALWAYS, ...configured];
+}
+async function evaluatePoliciesWithManagedState(ctx, trust, managedAttestation, managedFailure, commandApproval) {
+  const policies = effectivePolicies(ctx.config, ctx.repository);
+  const policyContext = {
+    trust,
+    gh: ctx.server,
+    config: ctx.config,
+    repository: ctx.repository,
+    pullNumber: ctx.pull.number,
+    head: ctx.pull.headSha,
+    authorId: ctx.pull.authorId,
+    ...commandApproval ? { commandApproval } : {}
+  };
+  const results = await evaluatePolicies(policies.filter((policy) => !(managedAttestation && policy.type === "sensitive-paths")), policyContext);
+  if (managedAttestation) {
+    if (policies.some((policy) => policy.type === "sensitive-paths"))
+      results.push({ type: "sensitive-paths", ok: true, problems: [] });
+    results.push({ type: "managed-files", ok: true, problems: [] });
+  } else if (managedFailure) {
+    results.push({ type: "managed-files", ok: false, problems: [managedFailure] });
+  }
+  return results;
+}
+async function evaluateManagedPullPolicies(ctx, rejectionMode = "throw", commandApproval) {
+  if (!ctx.managedSource)
+    throw new Rejection("managed policy evaluation is missing trusted server provenance");
+  let attestation;
+  let failure;
+  try {
+    attestation = await (ctx.deriveManagedPull ?? deriveManagedPullAttestation)({ ...ctx.managedSource, target: ctx.server, repository: ctx.repository, pullNumber: ctx.pull.number });
+  } catch (error) {
+    if (!(error instanceof Rejection))
+      throw error;
+    if (rejectionMode !== "report")
+      throw error;
+    failure = error.message;
+  }
+  const trust = evaluateTrust(await fetchCommitFacts(ctx.server, ctx.repository, ctx.pull.number), ctx.pull.headSha, ctx.config);
+  const results = await evaluatePoliciesWithManagedState(ctx, trust, attestation, failure, commandApproval);
+  if (failure)
+    return { kind: "rejected", reason: failure, results };
+  if (attestation)
+    return { kind: "attested", attestation, results };
+  return { kind: "not-managed", results };
+}
+async function evaluatePullPolicies(ctx, commandApproval) {
+  const trust = evaluateTrust(await fetchCommitFacts(ctx.server, ctx.repository, ctx.pull.number), ctx.pull.headSha, ctx.config);
+  let managedAttestation;
+  let managedFailure;
+  if (ctx.managedSource) {
+    try {
+      managedAttestation = await (ctx.deriveManagedPull ?? deriveManagedPullAttestation)({ ...ctx.managedSource, target: ctx.server, repository: ctx.repository, pullNumber: ctx.pull.number });
+    } catch (error) {
+      if (!(error instanceof Rejection))
+        throw error;
+      managedFailure = error.message;
+    }
+  }
+  return evaluatePoliciesWithManagedState(ctx, trust, managedAttestation, managedFailure, commandApproval);
+}
+async function approverApprovedHead(server, config, repository, pull) {
+  const reviews = await server.paginate(server.rest.pulls.listReviews, { ...splitRepository(repository), pull_number: pull.number, per_page: 100 });
+  const latest = reviews.filter((r) => Number(r.user?.id) === config.approver.id && r.submitted_at).reduce((current, review) => {
+    if (!current || String(review.submitted_at) > String(current.submitted_at))
+      return review;
+    return String(review.submitted_at) === String(current.submitted_at) && Number(review.id) > Number(current.id) ? review : current;
+  }, undefined);
+  return latest?.state === "APPROVED" && latest.commit_id === pull.headSha;
+}
+function policySummary(results) {
+  const escapeCell = (value) => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll("\\", "&#92;").replaceAll("|", "&#124;").replaceAll("`", "&#96;").replaceAll("*", "&#42;").replaceAll("_", "&#95;").replaceAll("[", "&#91;").replaceAll("]", "&#93;").replaceAll("~", "&#126;").replaceAll("!", "&#33;").replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+  const rows = results.map((r) => `| ${escapeCell(r.type)} | ${r.ok ? "pass" : "fail"} | ${escapeCell(r.problems.length ? r.problems.join("; ") : "—")} |`);
+  return ["| Policy | Result | Details |", "| --- | --- | --- |", ...rows].join(`
+`);
+}
+async function updatePolicyCheck(ctx) {
+  if (ctx.pull.state !== "open")
+    return { result: "skipped", reason: `#${ctx.pull.number} is closed` };
+  const { owner, repo } = splitRepository(ctx.repository);
+  const checkRuns = await ctx.server.paginate(ctx.server.rest.checks.listForRef, { owner, repo, ref: ctx.pull.headSha, per_page: 100 });
+  const existing = checkRuns.find((c) => c.name === "csm-ci/policy" && c.external_id === ctx.pull.headSha && Number(c.app?.id) === ctx.config.apps.server_app_id);
+  const { data: current } = await ctx.server.rest.pulls.get({ owner, repo, pull_number: ctx.pull.number });
+  if (current.state !== "open")
+    return { result: "skipped", reason: `#${ctx.pull.number} closed before policy publication` };
+  if (current.head.sha !== ctx.pull.headSha)
+    return { result: "skipped", reason: `#${ctx.pull.number} head moved before policy publication` };
+  const policies = await evaluatePullPolicies(ctx);
+  const approved = await approverApprovedHead(ctx.server, ctx.config, ctx.repository, ctx.pull);
+  const results = [...policies, { type: "approval", ok: approved, problems: approved ? [] : [`${ctx.config.approver.login} has not approved head ${ctx.pull.headSha}`] }];
+  const ok = results.every((r) => r.ok);
+  const summary = policySummary(results);
+  const output = { title: ok ? "Policies passed" : "Policies failed", summary };
+  const completedAt = new Date().toISOString();
+  const { data: final } = await ctx.server.rest.pulls.get({ owner, repo, pull_number: ctx.pull.number });
+  if (final.state !== "open")
+    return { result: "skipped", reason: `#${ctx.pull.number} closed before policy publication` };
+  if (final.head.sha !== ctx.pull.headSha)
+    return { result: "skipped", reason: `#${ctx.pull.number} head moved before policy publication` };
+  if (existing) {
+    await ctx.server.rest.checks.update({ owner, repo, check_run_id: Number(existing.id), name: "csm-ci/policy", external_id: ctx.pull.headSha, head_sha: ctx.pull.headSha, status: "completed", completed_at: completedAt, conclusion: ok ? "success" : "failure", output });
+  } else {
+    await ctx.server.rest.checks.create({ owner, repo, name: "csm-ci/policy", external_id: ctx.pull.headSha, head_sha: ctx.pull.headSha, status: "completed", completed_at: completedAt, conclusion: ok ? "success" : "failure", output });
+  }
+  await publishPolicyReport({ server: ctx.server, repository: ctx.repository, pullNumber: ctx.pull.number, head: ctx.pull.headSha, serverBotId: ctx.config.apps.server_bot_id, serverRun: ctx.serverRun, requestKind: ctx.requestKind ?? "policy-check", ...ctx.requestCommentId === undefined ? {} : { requestCommentId: ctx.requestCommentId } }, policies);
+  return { result: "published", results };
+}
+
+// src/lib/approve.ts
+async function preflightManagedApproval(ctx, pull) {
+  if (!ctx.managedSource)
+    throw new Rejection("managed approval preflight is missing trusted server provenance");
+  checkPullState(pull);
+  const evaluation = await evaluateManagedPullPolicies({ ...ctx, pull });
+  if (evaluation.kind === "rejected")
+    throw new Rejection(evaluation.reason);
+  if (evaluation.kind === "not-managed")
+    throw new Rejection("managed approval preflight did not identify an enabled managed pull request");
+  const results = evaluation.results;
+  const problems = results.flatMap((result) => result.problems.map((problem) => `${result.type}: ${problem}`));
+  if (problems.length > 0)
+    throw new Rejection(`managed approval preflight failed: ${problems.join("; ")}`);
+  return { head: pull.headSha };
+}
+function pullStateOptions(ctx) {
+  const integrationBranches = repositoryEntry(ctx.config, ctx.repository)?.integration_branches;
+  return integrationBranches === undefined ? {} : { integrationBranches };
+}
+async function fetchPull(gh, repository, pullNumber) {
+  const { data: p } = await gh.rest.pulls.get({ ...splitRepository(repository), pull_number: pullNumber });
+  return {
+    number: p.number,
+    state: p.state,
+    draft: p.draft === true,
+    headSha: p.head.sha,
+    headRepository: p.head.repo?.full_name ?? null,
+    baseRepository: p.base.repo.full_name,
+    baseRef: p.base.ref,
+    defaultBranch: p.base.repo.default_branch,
+    authorId: Number(p.user.id)
+  };
+}
+async function approveHead(ctx, pull, body, forceMarker = false, managedAttestation) {
+  const repo = splitRepository(ctx.repository);
+  const head = pull.headSha;
+  if (pull.authorId === ctx.config.approver.id)
+    throw new Rejection(`the approver authored #${pull.number}`);
+  const reviews = await ctx.server.paginate(ctx.server.rest.pulls.listReviews, { ...repo, pull_number: pull.number, per_page: 100 });
+  if (!forceMarker && reviews.some((r) => Number(r.user?.id) === ctx.config.approver.id && r.state === "APPROVED" && r.commit_id === head)) {
+    return { result: "already-approved", head, problems: [] };
+  }
+  if (managedAttestation) {
+    if (!ctx.managedSource)
+      throw new Rejection("managed approval is missing trusted server provenance");
+    const current = await (ctx.deriveManagedPull ?? deriveManagedPullAttestation)({ ...ctx.managedSource, target: ctx.server, repository: ctx.repository, pullNumber: pull.number });
+    if (!current || !sameManagedPullAttestation(managedAttestation, current)) {
+      throw new Rejection("managed pull changed during approval; retry after revalidation");
+    }
+  }
+  const { data: review } = await ctx.approver.rest.pulls.createReview({ ...repo, pull_number: pull.number, event: "APPROVE", commit_id: head, body });
+  const dismiss = (message) => ctx.approver.rest.pulls.dismissReview({ ...repo, pull_number: pull.number, review_id: Number(review.id), message });
+  if (Number(review.user?.id) !== ctx.config.approver.id) {
+    await dismiss("csm-ci: the approver token does not belong to the configured approver");
+    throw new Error(`the approver token belongs to ${review.user?.login}, not ${ctx.config.approver.login}`);
+  }
+  const after = await fetchPull(ctx.server, ctx.repository, pull.number);
+  if (after.headSha !== head) {
+    await dismiss(`csm-ci: the head moved from ${head} to ${after.headSha} while approving`);
+    return { result: "dismissed", head, problems: [`head moved to ${after.headSha}`] };
+  }
+  return { result: "approved", head, problems: [] };
+}
+function sameManagedPullAttestation(a, b) {
+  return a.repositoryId === b.repositoryId && a.repository.toLowerCase() === b.repository.toLowerCase() && a.pullNumber === b.pullNumber && a.pullNodeId === b.pullNodeId && a.baseRef === b.baseRef && a.baseSha === b.baseSha && a.headSha === b.headSha && a.configSha === b.configSha && a.releaseVersion === b.releaseVersion && a.releaseSha === b.releaseSha && a.manifestDigest === b.manifestDigest;
+}
+async function policyProblems(ctx, pull) {
+  const results = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, ...ctx.managedSource ? { managedSource: ctx.managedSource } : {}, ...ctx.deriveManagedPull ? { deriveManagedPull: ctx.deriveManagedPull } : {} });
+  return results.flatMap((r) => r.problems.map((p) => `${r.type}: ${p}`));
+}
+async function refreshPolicy(ctx, pull) {
+  await updatePolicyCheck({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, ...ctx.managedSource ? { managedSource: ctx.managedSource } : {}, ...ctx.deriveManagedPull ? { deriveManagedPull: ctx.deriveManagedPull } : {}, serverRun: ctx.serverRun, requestKind: "approve", ...ctx.requestCommentId === undefined ? {} : { requestCommentId: ctx.requestCommentId } });
+}
+async function autoApprove(ctx, pull) {
+  let managedAttestation = undefined;
+  let problems;
+  if (ctx.managedSource) {
+    const evaluation = await evaluateManagedPullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, managedSource: ctx.managedSource, ...ctx.deriveManagedPull ? { deriveManagedPull: ctx.deriveManagedPull } : {} }, "report");
+    managedAttestation = evaluation.kind === "attested" ? evaluation.attestation : undefined;
+    problems = evaluation.results.flatMap((r) => r.problems.map((p) => `${r.type}: ${p}`));
+  } else {
+    problems = await policyProblems(ctx, pull);
+  }
+  if (problems.length > 0) {
+    await refreshPolicy(ctx, pull);
+    return { result: "declined", head: pull.headSha, problems };
+  }
+  const outcome = await approveHead(ctx, pull, "", false, managedAttestation);
+  await refreshPolicy(ctx, outcome.result === "dismissed" ? await fetchPull(ctx.server, ctx.repository, pull.number) : pull);
+  return outcome;
+}
+async function checkHeadPredatesComment(ctx, pull, comment) {
+  const repo = splitRepository(ctx.repository);
+  const posted = new Date(comment.createdAt).getTime();
+  const { data: head } = await ctx.server.rest.repos.getCommit({ ...repo, ref: pull.headSha });
+  const dated = head.commit.committer?.date;
+  if (!dated || new Date(dated).getTime() > posted)
+    throw new Rejection(`the head ${pull.headSha} is newer than comment ${comment.id}`);
+  const events = await ctx.server.paginate(ctx.server.rest.issues.listEventsForTimeline, { ...repo, issue_number: pull.number, per_page: 100 });
+  const forced = events.some((e) => ("event" in e) && e.event === "head_ref_force_pushed" && ("created_at" in e) && new Date(String(e.created_at)).getTime() >= posted);
+  if (forced)
+    throw new Rejection(`#${pull.number} was force-pushed after comment ${comment.id}`);
+}
+async function commandApprove(ctx, pull, comment) {
+  checkPullState(pull, pullStateOptions(ctx));
+  const commandApproval = { commentId: comment.id, authorId: comment.user?.id ?? -1, head: pull.headSha };
+  let results;
+  let managedAttestation = undefined;
+  if (ctx.managedSource) {
+    const evaluation = await evaluateManagedPullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, managedSource: ctx.managedSource, ...ctx.deriveManagedPull ? { deriveManagedPull: ctx.deriveManagedPull } : {} }, "report", commandApproval);
+    results = evaluation.results;
+    managedAttestation = evaluation.kind === "attested" ? evaluation.attestation : undefined;
+  } else {
+    results = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, ...ctx.deriveManagedPull ? { deriveManagedPull: ctx.deriveManagedPull } : {} }, commandApproval);
+  }
+  const problems = results.flatMap((r) => r.problems.map((p) => `${r.type}: ${p}`));
+  if (problems.length > 0)
+    throw new Rejection(`/approve cannot proceed because policy checks failed: ${problems.join("; ")}`);
+  await checkHeadPredatesComment(ctx, pull, comment);
+  const currentCommand = validateComment(await fetchComment(ctx.server, ctx.repository, comment.id), ctx.repository, pull.number, ctx.now());
+  if (currentCommand.name !== "approve")
+    throw new Rejection(`comment ${comment.id} is no longer exactly /approve`);
+  const outcome = await approveHead(ctx, pull, marker("approve:command", comment.id), true, managedAttestation);
+  await refreshPolicy(ctx, outcome.result === "dismissed" ? await fetchPull(ctx.server, ctx.repository, pull.number) : pull);
+  return outcome;
+}
+async function react(ctx, commentId) {
+  await ctx.server.rest.reactions.createForIssueComment({ ...splitRepository(ctx.repository), comment_id: commentId, content: "rocket" });
+}
+async function runApprove(ctx, args) {
+  ctx = { ...ctx, ...args.comment_id === undefined ? {} : { requestCommentId: args.comment_id } };
+  const pull = await fetchPull(ctx.server, ctx.repository, args.pull_number);
+  const stateOptions = pullStateOptions(ctx);
+  if (args.comment_id === undefined) {
+    checkPullState(pull, stateOptions);
+    return autoApprove(ctx, pull);
+  }
+  const comment = await fetchComment(ctx.server, ctx.repository, args.comment_id);
+  const command = validateComment(comment, ctx.repository, pull.number, ctx.now());
+  if (command.name === "recheck") {
+    await react(ctx, comment.id);
+    checkPullState(pull, stateOptions);
+    return autoApprove(ctx, pull);
+  }
+  if (command.name !== "approve")
+    throw new Rejection(`comment ${comment.id} is not exactly /approve`);
+  const receipt = marker("approve", comment.id);
+  const comments = await ctx.server.paginate(ctx.server.rest.issues.listComments, { ...splitRepository(ctx.repository), issue_number: pull.number, per_page: 100 });
+  if (hasServerMarker(comments, receipt, ctx.config.apps.server_bot_id))
+    throw new Rejection(`comment ${comment.id} was already handled`);
+  requirePrincipal(comment.user, ctx.config.trust.approvers, "approvers");
+  await react(ctx, comment.id);
+  try {
+    const outcome = await commandApprove(ctx, pull, comment);
+    const message = outcome.result === "dismissed" ? `csm-ci: /approve was dismissed because ${escapeHtml(outcome.problems.join("; "))}. Review the current head and post a new exact \`/approve\` comment.` : "csm-ci: /approve succeeded. Approved the requested head.";
+    await postResult(ctx.server, ctx.repository, pull.number, receipt, `${message}
+
+${receiptFooter({ repository: ctx.repository, pullNumber: pull.number, commentId: comment.id, head: outcome.head, serverRun: ctx.serverRun })}`);
+    return outcome;
+  } catch (e) {
+    await postResult(ctx.server, ctx.repository, pull.number, receipt, `csm-ci: /approve ${e instanceof Rejection ? "was declined" : "failed"}: ${escapeHtml(e instanceof Error ? e.message : String(e))}
+
+Resolve the failure, review the current head, and post a new exact \`/approve\` comment.
+
+${receiptFooter({ repository: ctx.repository, pullNumber: pull.number, commentId: comment.id, head: pull.headSha, serverRun: ctx.serverRun })}`);
+    throw e;
+  }
+}
+
+// src/lib/managed-accept.ts
+import { createHash as createHash3 } from "node:crypto";
+async function acceptManagedPull(ctx, pullNumber, dependencies) {
+  const derive = dependencies?.derive ?? (() => deriveManagedPullAttestation({ ...ctx.managedSource, target: ctx.server, repository: ctx.repository, pullNumber }));
+  const evaluatePolicies = dependencies?.evaluatePolicies ?? (() => evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, managedSource: ctx.managedSource }));
+  const isApproved = dependencies?.isApproved ?? (() => approverApprovedHead(ctx.server, ctx.config, ctx.repository, pull));
+  const createReservation = dependencies?.createReservation ?? createManagedReservation;
+  const createStatus = dependencies?.createStatus ?? createReservationStatus;
+  const pull = await fetchManagedPull(ctx.server, ctx.repository, pullNumber);
+  if (pull.state !== "open" || pull.draft)
+    throw new Rejection(`managed pull #${pullNumber} must be open and ready for review`);
+  const entry = repositoryEntry(ctx.config, ctx.repository);
+  if (!entry?.ops.includes("approve") || !entry.ops.includes("policy-check") || !entry.ops.includes("merge")) {
+    throw new Rejection("managed pull automatic completion requires approve, policy-check, and merge operations");
+  }
+  let first;
+  let results;
+  if (dependencies?.derive || dependencies?.evaluatePolicies) {
+    first = await derive();
+    results = await evaluatePolicies();
+  } else {
+    const evaluation = await evaluateManagedPullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, managedSource: ctx.managedSource });
+    if (evaluation.kind === "rejected")
+      throw new Rejection(evaluation.reason);
+    if (evaluation.kind === "not-managed")
+      throw new Rejection("managed acceptance did not identify an enabled managed pull request");
+    first = evaluation.attestation;
+    results = evaluation.results;
+  }
+  if (!first)
+    throw new Rejection("managed acceptance did not identify an enabled managed pull request");
+  const failures = results.filter((result) => !result.ok).flatMap((result) => result.problems.map((problem) => `${result.type}: ${problem}`));
+  if (failures.length)
+    throw new Rejection(`managed acceptance policy check failed: ${failures.join("; ")}`);
+  if (!await isApproved()) {
+    throw new Rejection(`the configured approver has not approved managed head ${pull.headSha}`);
+  }
+  const { data: serverRepository } = await ctx.managedSource.source.rest.repos.get(splitRepository(ctx.managedSource.serverRepository));
+  if (!serverRepository.default_branch)
+    throw new Rejection("managed acceptance cannot resolve the server default branch");
+  const [attestation, current] = await Promise.all([derive(), fetchManagedPull(ctx.server, ctx.repository, pullNumber)]);
+  if (!attestation || !sameAttestation(first, attestation) || current.state !== "open" || current.draft || current.headSha !== pull.headSha || current.baseRef !== pull.baseRef) {
+    throw new Rejection("managed pull changed during acceptance; retry after revalidation");
+  }
+  if (!await isApproved()) {
+    throw new Rejection(`the configured approver has not approved managed head ${current.headSha}`);
+  }
+  const acceptedAt = ctx.now();
+  const acceptedAtIso = acceptedAt.toISOString();
+  const identity = {
+    repository_id: attestation.repositoryId,
+    repository: attestation.repository.toLowerCase(),
+    pull_number: attestation.pullNumber,
+    pull_node_id: attestation.pullNodeId,
+    base_ref: attestation.baseRef,
+    accepted_base: attestation.baseSha,
+    accepted_head: attestation.headSha,
+    configuration_sha: attestation.configSha,
+    release_version: attestation.releaseVersion,
+    release_sha: attestation.releaseSha,
+    manifest_digest: attestation.manifestDigest
+  };
+  const idempotencyKey = createHash3("sha256").update(JSON.stringify(identity)).digest("hex");
+  const payload = {
+    version: 2,
+    kind: "managed-files",
+    ...identity,
+    managed_ref: "csm-ci/repo-settings",
+    idempotency_key: idempotencyKey,
+    accepted_at: acceptedAtIso,
+    expires_at: new Date(acceptedAt.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString()
+  };
+  const reservation = await createReservation({
+    server: ctx.deployments,
+    serverRepository: ctx.managedSource.serverRepository,
+    defaultBranch: serverRepository.default_branch,
+    serverBotId: ctx.config.apps.server_bot_id,
+    payload,
+    serverRunUrl: ctx.serverRunUrl,
+    pullUrl: ctx.pullUrl
+  });
+  if (reservation.state.kind === "active" && reservation.statuses.length === 0) {
+    await createStatus({
+      server: ctx.deployments,
+      serverRepository: ctx.managedSource.serverRepository,
+      serverBotId: ctx.config.apps.server_bot_id,
+      deploymentId: reservation.deploymentId,
+      serverRunUrl: ctx.serverRunUrl,
+      pullUrl: ctx.pullUrl,
+      state: "queued",
+      description: "accepted managed-file proposal; evaluator checks approval, policies, and required checks"
+    });
+  }
+  return reservation;
+}
+async function fetchManagedPull(gh, repository, pullNumber) {
+  const { data: pull } = await gh.rest.pulls.get({ ...splitRepository(repository), pull_number: pullNumber });
+  return {
+    number: pull.number,
+    state: pull.state,
+    draft: pull.draft === true,
+    headSha: pull.head.sha,
+    headRepository: pull.head.repo?.full_name ?? null,
+    baseRepository: pull.base.repo.full_name,
+    baseRef: pull.base.ref,
+    defaultBranch: pull.base.repo.default_branch,
+    authorId: Number(pull.user.id)
+  };
+}
+function sameAttestation(a, b) {
+  return !!a && !!b && a.repositoryId === b.repositoryId && a.repository === b.repository && a.pullNumber === b.pullNumber && a.pullNodeId === b.pullNodeId && a.baseRef === b.baseRef && a.baseSha === b.baseSha && a.headSha === b.headSha && a.configSha === b.configSha && a.releaseSha === b.releaseSha && a.releaseVersion === b.releaseVersion && a.manifestDigest === b.manifestDigest;
+}
+
 // src/server-repo-settings/main.ts
 function env(name) {
   const value = process.env[name];
@@ -38223,6 +39637,54 @@ async function main() {
     setOutput("result", JSON.stringify(result));
     return;
   }
+  if (["managed-preflight", "managed-approve", "managed-accept"].includes(mode)) {
+    const pullNumber = positivePullNumber(input("pull-number", true));
+    const workflowRelease = ReleasedRevision.parse(JSON.parse(input("workflow-release", true)));
+    const managedSource = { source: configGH, serverRepository, configSha: env("GITHUB_SHA"), configPath, workflowRelease };
+    if (mode === "managed-preflight" || mode === "managed-approve") {
+      const pull = await fetchPull(readGH, target.name, pullNumber);
+      if (mode === "managed-preflight") {
+        try {
+          const result = await preflightManagedApproval({ server: readGH, config, repository: target.name, managedSource }, pull);
+          setOutput("authorized", "true");
+          setOutput("head", result.head);
+        } catch (error) {
+          if (!(error instanceof Error) || error.name !== "Rejection")
+            throw error;
+          setOutput("authorized", "false");
+          setOutput("head", "");
+          setOutput("reason", error.message);
+          info(`managed preflight declined: ${error.message}`);
+        }
+        return;
+      }
+      const outcome = await runApprove({
+        server: readGH,
+        approver: github(input("approver-token", true)),
+        config,
+        repository: target.name,
+        managedSource,
+        serverRun: { serverUrl: env("GITHUB_SERVER_URL"), repository: serverRepository, id: env("GITHUB_RUN_ID"), attempt: env("GITHUB_RUN_ATTEMPT") },
+        now: () => new Date
+      }, { pull_number: pullNumber });
+      setOutput("result", outcome.result);
+      setOutput("head", outcome.head);
+      setOutput("approved-head", outcome.head);
+      return;
+    }
+    const result = await acceptManagedPull({
+      server: readGH,
+      deployments: github(input("deployments-token", true)),
+      config,
+      repository: target.name,
+      managedSource,
+      now: () => new Date,
+      serverRunUrl: `${env("GITHUB_SERVER_URL")}/${serverRepository}/actions/runs/${env("GITHUB_RUN_ID")}/attempts/${env("GITHUB_RUN_ATTEMPT")}`,
+      pullUrl: `${env("GITHUB_SERVER_URL")}/${target.name}/pull/${pullNumber}`
+    }, pullNumber);
+    setOutput("deployment-id", String(result.deploymentId));
+    return;
+  }
   if (mode === "managed-inspect" || mode === "managed-apply") {
     const { data: repo } = await readGH.rest.repos.get(address);
     const files = await loadAdditionalManagedFiles(configGH, { repository: serverRepository, sha: env("GITHUB_SHA"), settings: config.repo_settings });
@@ -38234,12 +39696,20 @@ async function main() {
       setOutput("requires-workflows-write", String(result.requiresWorkflowsWrite));
       setOutput("changed-paths", JSON.stringify(result.changedPaths));
       setOutput("has-changes", String(result.status === "ready"));
+      setOutput("pull-request", result.pullRequest === null ? "" : String(result.pullRequest));
       return;
     }
     const result = await applyManagedFiles(readGH, { repository: target.name, defaultBranch: repo.default_branch, serverBotId: config.apps.server_bot_id, generated, files, writeToken: input("contents-token", true) });
     setOutput("result", JSON.stringify(result));
+    setOutput("pull-request", result.pullRequest === undefined ? "" : String(result.pullRequest));
     return;
   }
   throw new Error(`unknown repo-settings mode ${mode}`);
 }
 main().catch((error) => setFailed(error instanceof Error ? error.message : String(error)));
+function positivePullNumber(value) {
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || number <= 0)
+    throw new Error("pull-number must be a positive integer");
+  return number;
+}

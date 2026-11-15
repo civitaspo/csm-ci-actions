@@ -66,6 +66,7 @@ jobs:
         reservation: ${{ fromJSON(needs.list.outputs.matrix) }}
     uses: ./.github/workflows/server-automerge-evaluate.yml
     permissions:
+      actions: write
       contents: read
     with:
       repository: ${{ matrix.reservation.repository }}
@@ -86,6 +87,7 @@ jobs:
         reservation: ${{ fromJSON(needs.list.outputs.repair-matrix) }}
     uses: ./.github/workflows/server-automerge-evaluate.yml
     permissions:
+      actions: write
       contents: read
     with:
       repository: ${{ matrix.reservation.repository }}

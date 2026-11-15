@@ -4,6 +4,7 @@ import { github } from "./github.ts";
 import { marker } from "./notify.ts";
 import { CONFIG_YAML, config, fakeFetch } from "./testing.ts";
 import { parseConfig } from "./config.ts";
+import type { ManagedPullSourceContext } from "./managed-pull-context.ts";
 
 const P = "/repos/owner/repo";
 const now = new Date("2026-10-24T11:30:01Z");
@@ -17,7 +18,12 @@ function pull() {
 function setup(body: string, author = { id: 10, login: "alice", type: "User" }, activeReservation = false, options: { pull?: Record<string, unknown>; pullThen?: unknown[]; pullStatus?: number; repositoryStatus?: number; labelExists?: boolean; commentId?: number; editedAt?: string | null; payload?: Record<string, unknown>; headDate?: string; timeline?: unknown[]; reviews?: unknown[]; reviewsThen?: unknown[]; checks?: unknown[]; checksThen?: unknown[]; commits?: unknown[]; legacyReceipt?: "server" | "forged"; externalReceipt?: boolean; statuses?: { id: number; state: string; description: string; created_at: string; creator: { id: number; type: string } }[]; cancelReceipt?: boolean; autoMergeRequest?: unknown | null; autoMergeRequestThen?: unknown[] } = {}) {
   const commentId = options.commentId ?? 9;
   const comment = { id: commentId, node_id: "IC_node", body, issue_url: "https://api.github.com/repos/owner/repo/issues/12", created_at: "2026-10-24T11:30:00Z", updated_at: "2026-10-24T11:30:00Z", user: author };
-  const payload = { version: 1, repository_id: 123, repository: "owner/repo", pull_number: 12, pull_node_id: "PR_node", base_ref: "main", merger: { id: 10, login: "alice", type: "User" }, mode: "human", command_comment_id: options.commentId ?? 88, accepted_head: sha, accepted_at: "2026-10-20T00:00:00.000Z", expires_at: "2026-10-27T00:00:00.000Z", ...options.payload };
+  const payload: Record<string, unknown> = { version: 1, repository_id: 123, repository: "owner/repo", pull_number: 12, pull_node_id: "PR_node", base_ref: "main", merger: { id: 10, login: "alice", type: "User" }, mode: "human", command_comment_id: options.commentId ?? 88, accepted_head: sha, accepted_at: "2026-10-20T00:00:00.000Z", expires_at: "2026-10-27T00:00:00.000Z", ...options.payload };
+  if (payload.version === 2) {
+    delete payload.merger;
+    delete payload.mode;
+    delete payload.command_comment_id;
+  }
   const deploymentNodes = activeReservation ? [{ id: "D_node", databaseId: 77, task: "csm-ci:automerge", payload, createdAt: "2026-10-20T00:00:00Z", creator: { __typename: "Bot", databaseId: 3000 }, statuses: { nodes: (options.statuses ?? []).map((status) => ({ id: String(status.id), state: status.state.toUpperCase(), description: status.description, createdAt: status.created_at, creator: { __typename: status.creator.type, databaseId: status.creator.id } })), pageInfo: { hasNextPage: false } } }] : [];
   const emptyDeployments = { data: { node: { databaseId: 9, lastEditedAt: options.editedAt ?? null }, repository: { deployments: { nodes: deploymentNodes, pageInfo: { hasNextPage: false, endCursor: null } }, pullRequest: { id: "PR_node", autoMergeRequest: options.autoMergeRequest ?? null } } } };
   const serverFetch = fakeFetch([
@@ -406,9 +412,181 @@ describe("acceptMerge", () => {
     await expect(acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).rejects.toThrow("only the reserving User or a trusted merger can cancel a merge reservation");
     expect(notifyFetch.calls).toEqual([]);
   });
+
+  test("allows a current trusted merger to cancel a managed reservation", async () => {
+    const managed = {
+      version: 2,
+      kind: "managed-files",
+      repository_id: 123,
+      repository: "owner/repo",
+      pull_number: 12,
+      pull_node_id: "PR_node",
+      base_ref: "main",
+      managed_ref: "csm-ci/repo-settings",
+      accepted_base: "b".repeat(40),
+      accepted_head: sha,
+      configuration_sha: "c".repeat(40),
+      release_version: "v1.2.3",
+      release_sha: "d".repeat(40),
+      manifest_digest: "e".repeat(64),
+      idempotency_key: "f".repeat(64),
+      accepted_at: "2026-10-20T00:00:00.000Z",
+      expires_at: "2026-10-27T00:00:00.000Z",
+    };
+    const { ctx, deploymentsFetch } = setup("/merge cancel", { id: 10, login: "alice", type: "User" }, true, { payload: managed });
+    expect(await acceptMerge(ctx, { pull_number: 12, comment_id: 9 })).toMatchObject({ kind: "cancelled", reservation: { payload: { version: 2 } } });
+    expect(deploymentsFetch.requests.some((request) => request.method === "POST" && request.path.endsWith("/statuses"))).toBe(true);
+  });
 });
 
 describe("evaluateReservation", () => {
+  const managedPayload = {
+    version: 2,
+    kind: "managed-files",
+    repository_id: 123,
+    repository: "owner/repo",
+    pull_number: 12,
+    pull_node_id: "PR_node",
+    base_ref: "main",
+    managed_ref: "csm-ci/repo-settings",
+    accepted_base: "b".repeat(40),
+    accepted_head: sha,
+    configuration_sha: "c".repeat(40),
+    release_version: "v1.2.3",
+    release_sha: "d".repeat(40),
+    manifest_digest: "e".repeat(64),
+    idempotency_key: "f".repeat(64),
+    accepted_at: "2026-10-20T00:00:00.000Z",
+    expires_at: "2026-10-27T00:00:00.000Z",
+  };
+
+  test("recovers an already-merged managed reservation only after verifying the squash tree", async () => {
+    const { ctx, deploymentsFetch, payload } = setup("/merge", { id: 10, login: "alice", type: "User" }, true, {
+      payload: managedPayload,
+      pull: { state: "closed", merged: true, merge_commit_sha: "b".repeat(40) },
+    });
+    const verifyManagedMerge = async (args: Parameters<NonNullable<MergeContext["verifyManagedMerge"]>>[0]) => {
+      expect(args.mergeCommit).toBe("b".repeat(40));
+      expect(args.reservation.manifest_digest).toBe(managedPayload.manifest_digest);
+      return { matches: true };
+    };
+    ctx.verifyManagedMerge = verifyManagedMerge;
+    const record = { deploymentId: 77, nodeId: "D_node", createdAt: "2026-10-20T00:00:00Z", payload: payload as never, statuses: [], state: { kind: "active" as const } };
+    const result = await evaluateReservation(ctx, record);
+    expect(result.decision).toMatchObject({ kind: "terminal", state: "success", reason: "merged" });
+    expect(deploymentsFetch.requests.at(-1)?.body).toContain("merged as bbbbbbb");
+  });
+
+  test("fails closed when a managed reservation lacks current-state verifier callbacks", async () => {
+    const managed = {
+      version: 2,
+      kind: "managed-files",
+      repository_id: 123,
+      repository: "owner/repo",
+      pull_number: 12,
+      pull_node_id: "PR_node",
+      base_ref: "main",
+      managed_ref: "csm-ci/repo-settings",
+      accepted_base: "b".repeat(40),
+      accepted_head: sha,
+      configuration_sha: "c".repeat(40),
+      release_version: "v1.2.3",
+      release_sha: "d".repeat(40),
+      manifest_digest: "e".repeat(64),
+      idempotency_key: "f".repeat(64),
+      accepted_at: "2026-10-20T00:00:00.000Z",
+      expires_at: "2026-10-27T00:00:00.000Z",
+    };
+    const { ctx, deploymentsFetch, payload } = setup("/merge", { id: 10, login: "alice", type: "User" }, true, { payload: managed });
+    const record = { deploymentId: 77, nodeId: "D_node", createdAt: "2026-10-20T00:00:00Z", payload: payload as never, statuses: [], state: { kind: "active" as const } };
+    await expect(evaluateReservation(ctx, record)).rejects.toThrow("managed-file reservation evaluator is not connected to current configuration");
+    expect(deploymentsFetch.calls).not.toContain("POST /repos/owner/server/deployments/77/statuses");
+  });
+
+  test("reuses the verified attestation during policy evaluation and retains the reservation's release pin", async () => {
+    const { ctx, payload, serverFetch } = setup("/merge", { id: 10, login: "alice", type: "User" }, true, { payload: managedPayload });
+    const attestationArgs: Parameters<NonNullable<MergeContext["attestManagedPull"]>>[0][] = [];
+    const policySourceArgs: Parameters<NonNullable<MergeContext["managedPolicySource"]>>[0][] = [];
+    ctx.attestManagedPull = async (args) => {
+      attestationArgs.push(args);
+      return {
+        repositoryId: managedPayload.repository_id,
+        repository: managedPayload.repository,
+        pullNumber: managedPayload.pull_number,
+        pullNodeId: managedPayload.pull_node_id,
+        baseRef: managedPayload.base_ref,
+        baseSha: managedPayload.accepted_base,
+        headSha: managedPayload.accepted_head,
+        configSha: managedPayload.configuration_sha,
+        releaseSha: managedPayload.release_sha,
+        releaseVersion: managedPayload.release_version,
+        manifestDigest: managedPayload.manifest_digest,
+      };
+    };
+    ctx.managedPolicySource = async (args): Promise<ManagedPullSourceContext> => {
+      policySourceArgs.push(args);
+      return {
+        source: ctx.server,
+        serverRepository: "owner/server",
+        configSha: managedPayload.configuration_sha,
+        configPath: "csm-ci.yaml",
+        workflowRelease: { version: managedPayload.release_version, sha: managedPayload.release_sha },
+      };
+    };
+    ctx.verifyManagedMerge = async () => ({ matches: true });
+    const record = { deploymentId: 77, nodeId: "D_node", createdAt: "2026-10-20T00:00:00Z", payload: payload as never, statuses: [], state: { kind: "active" as const } };
+
+    const result = await evaluateReservation(ctx, record);
+
+    expect(result.decision).toMatchObject({ kind: "merge", head: sha });
+    expect(result.ready).toBe(true);
+    expect(attestationArgs).toHaveLength(1);
+    expect(attestationArgs[0]?.reservation).toMatchObject({ release_version: "v1.2.3", release_sha: "d".repeat(40) });
+    expect(policySourceArgs).toHaveLength(1);
+    expect(policySourceArgs[0]?.reservation).toMatchObject({ release_version: "v1.2.3", release_sha: "d".repeat(40) });
+    expect(serverFetch.calls.filter((call) => call === `GET ${P}/pulls/12`)).toHaveLength(1);
+  });
+
+  test.each([
+    ["configuration SHA", { configSha: "9".repeat(40) }],
+    ["workflow release pin", null],
+    ["release version", { workflowRelease: { version: "v9.9.9", sha: managedPayload.release_sha } }],
+    ["release SHA", { workflowRelease: { version: managedPayload.release_version, sha: "9".repeat(40) } }],
+  ])("waits when the managed policy source %s moves after attestation", async (_label, sourceOverride) => {
+    const { ctx, payload } = setup("/merge", { id: 10, login: "alice", type: "User" }, true, { payload: managedPayload });
+    ctx.attestManagedPull = async () => ({
+      repositoryId: managedPayload.repository_id,
+      repository: managedPayload.repository,
+      pullNumber: managedPayload.pull_number,
+      pullNodeId: managedPayload.pull_node_id,
+      baseRef: managedPayload.base_ref,
+      baseSha: managedPayload.accepted_base,
+      headSha: managedPayload.accepted_head,
+      configSha: managedPayload.configuration_sha,
+      releaseSha: managedPayload.release_sha,
+      releaseVersion: managedPayload.release_version,
+      manifestDigest: managedPayload.manifest_digest,
+    });
+    ctx.managedPolicySource = async (): Promise<ManagedPullSourceContext> => {
+      const source: ManagedPullSourceContext = {
+        source: ctx.server,
+        serverRepository: "owner/server",
+        configSha: managedPayload.configuration_sha,
+        configPath: "csm-ci.yaml",
+        workflowRelease: { version: managedPayload.release_version, sha: managedPayload.release_sha },
+        ...(sourceOverride ?? {}),
+      };
+      if (sourceOverride === null) delete source.workflowRelease;
+      return source;
+    };
+    ctx.verifyManagedMerge = async () => ({ matches: true });
+    const record = { deploymentId: 77, nodeId: "D_node", createdAt: "2026-10-20T00:00:00Z", payload: payload as never, statuses: [], state: { kind: "active" as const } };
+
+    const result = await evaluateReservation(ctx, record);
+
+    expect(result.decision).toMatchObject({ kind: "wait", reason: "managed-file provenance changed during evaluation" });
+  });
+
   test("expires an overdue Bot reservation without reading Bot commits", async () => {
     const bot = { id: 20, login: "renovate[bot]", type: "Bot" };
     const { ctx, serverFetch, deploymentsFetch, payload } = setup("/merge", bot, true, {
@@ -607,6 +785,67 @@ describe("mergeReservation", () => {
     expect(deploymentsFetch.calls).toContain("POST /repos/owner/server/deployments/77/statuses");
   });
 
+  test("reports a failed managed-tree verification after the squash merge", async () => {
+    const managed = {
+      version: 2,
+      kind: "managed-files",
+      repository_id: 123,
+      repository: "owner/repo",
+      pull_number: 12,
+      pull_node_id: "PR_node",
+      base_ref: "main",
+      managed_ref: "csm-ci/repo-settings",
+      accepted_base: "b".repeat(40),
+      accepted_head: sha,
+      configuration_sha: "c".repeat(40),
+      release_version: "v1.2.3",
+      release_sha: "d".repeat(40),
+      manifest_digest: "e".repeat(64),
+      idempotency_key: "f".repeat(64),
+      accepted_at: "2026-10-20T00:00:00.000Z",
+      expires_at: "2026-10-27T00:00:00.000Z",
+    };
+    const { ctx, record, deploymentsFetch, notifyFetch } = readyReservation({ payload: managed, labelExists: true });
+    let attestCalls = 0;
+    ctx.attestManagedPull = async () => {
+      attestCalls++;
+      return ({
+      repositoryId: managed.repository_id,
+      repository: managed.repository,
+      pullNumber: managed.pull_number,
+      pullNodeId: managed.pull_node_id,
+      baseRef: managed.base_ref,
+      baseSha: managed.accepted_base,
+      headSha: managed.accepted_head,
+      configSha: managed.configuration_sha,
+      releaseSha: managed.release_sha,
+      releaseVersion: managed.release_version,
+      manifestDigest: managed.manifest_digest,
+      });
+    };
+    ctx.managedPolicySource = async (): Promise<ManagedPullSourceContext> => ({
+      source: ctx.server,
+      serverRepository: "owner/server",
+      configSha: managed.configuration_sha,
+      configPath: "csm-ci.yaml",
+      workflowRelease: { version: managed.release_version, sha: managed.release_sha },
+    });
+    ctx.verifyManagedMerge = async () => ({ matches: false, reason: "e2e/repo-settings-managed-drift.txt differs" });
+    const writeFetch = fakeFetch([
+      { method: "POST", path: "/graphql", body: { data: { disablePullRequestAutoMerge: { clientMutationId: null } } } },
+      { method: "PUT", path: `${P}/pulls/12/merge`, status: 200, body: { merged: true, sha: "c".repeat(40) } },
+    ]);
+    ctx.write = github("write", writeFetch);
+
+    await expect(mergeReservation(ctx, record, sha)).rejects.toThrow("merged, but managed files drifted: e2e/repo-settings-managed-drift.txt differs; run repo-settings again");
+
+    expect(writeFetch.calls).toContain(`PUT ${P}/pulls/12/merge`);
+    expect(attestCalls).toBe(2);
+    expect(deploymentsFetch.requests.some(({ body }) => body?.includes('"state":"failure"') && body.includes("reason=rejected") && body.includes("managed files drifted"))).toBe(true);
+    expect(notifyFetch.requests.some(({ body }) => body?.includes("managed files drifted") && body.includes("run repo-settings again"))).toBe(true);
+    expect(notifyFetch.calls).toContain(`DELETE ${P}/issues/12/labels/csm-ci%2Fautomerge`);
+  });
+
   test("fails HTTP 409 without retrying the protected merge write", async () => {
     const { ctx, record, deploymentsFetch, notifyFetch } = readyReservation({ labelExists: true });
     const writeFetch = fakeFetch([{ method: "PUT", path: `${P}/pulls/12/merge`, status: 409, body: { message: "Conflict" } }]);
@@ -705,6 +944,6 @@ describe("mergeReservation", () => {
     ctx.write = github("write", writeFetch);
     expect(await mergeReservation(ctx, record, sha)).toEqual({ result: "merged", head: sha, mergeCommit: "c".repeat(40) });
     expect(mergeWrites).toBe(1);
-    expect(serverFetch.calls.filter((call) => call === `GET ${P}/pulls/12`)).toHaveLength(7);
+    expect(serverFetch.calls.filter((call) => call === `GET ${P}/pulls/12`)).toHaveLength(6);
   });
 });

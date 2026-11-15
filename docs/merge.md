@@ -113,6 +113,7 @@ jobs:
   sweep:
     uses: civitaspo/csm-ci-actions/.github/workflows/server-automerge.yml@<sha> # <version>
     permissions:
+      actions: write
       contents: read
     secrets:
       CSM_CI_SERVER_APP_PRIVATE_KEY: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}

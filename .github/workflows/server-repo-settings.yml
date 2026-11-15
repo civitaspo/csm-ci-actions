@@ -89,6 +89,7 @@ jobs:
         target: ${{ fromJSON(needs.discover.outputs.clients) }}
     uses: ./.github/workflows/server-repo-settings-target.yml
     permissions:
+      actions: write
       contents: read
     with:
       repository: ${{ matrix.target.name }}
@@ -108,6 +109,7 @@ jobs:
       needs.clients.result != 'cancelled'
     uses: ./.github/workflows/server-repo-settings-target.yml
     permissions:
+      actions: write
       contents: read
     with:
       repository: ${{ fromJSON(needs.discover.outputs.server).name }}

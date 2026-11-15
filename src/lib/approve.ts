@@ -2,13 +2,29 @@ import { type CommentFacts, checkPullState, type PullFacts, requirePrincipal, va
 import { repositoryEntry, type Config } from "./config.ts";
 import { type GitHub, splitRepository } from "./github.ts";
 import { escapeHtml, hasServerMarker, marker, postResult, receiptFooter, type ServerRun } from "./notify.ts";
-import { evaluatePullPolicies, updatePolicyCheck } from "./policy-check.ts";
+import { evaluateManagedPullPolicies, evaluatePullPolicies, updatePolicyCheck } from "./policy-check.ts";
 import { Rejection } from "./request.ts";
 import { fetchComment } from "./github-comment.ts";
+import { deriveManagedPullAttestation, type ManagedPullSourceContext } from "./managed-pull-context.ts";
+import type { PolicyResult } from "./policies/index.ts";
 export { fetchComment } from "./github-comment.ts";
 
-export type ApproveContext = { server: GitHub; approver: GitHub; config: Config; repository: string; serverRun: ServerRun; now: () => Date; requestCommentId?: number };
+export type ApproveContext = { server: GitHub; approver: GitHub; config: Config; repository: string; serverRun: ServerRun; now: () => Date; requestCommentId?: number; managedSource?: ManagedPullSourceContext; deriveManagedPull?: typeof deriveManagedPullAttestation };
+export type ManagedApprovalPreflightContext = Pick<ApproveContext, "server" | "config" | "repository" | "managedSource" | "deriveManagedPull">;
 export type ApproveOutcome = { result: "approved" | "already-approved" | "declined" | "dismissed"; head: string; problems: string[] };
+
+/** Read-only gate for minting the Approver App token for a managed pull request. */
+export async function preflightManagedApproval(ctx: ManagedApprovalPreflightContext, pull: PullFacts): Promise<{ head: string }> {
+  if (!ctx.managedSource) throw new Rejection("managed approval preflight is missing trusted server provenance");
+  checkPullState(pull);
+  const evaluation = await evaluateManagedPullPolicies({ ...ctx, pull });
+  if (evaluation.kind === "rejected") throw new Rejection(evaluation.reason);
+  if (evaluation.kind === "not-managed") throw new Rejection("managed approval preflight did not identify an enabled managed pull request");
+  const results = evaluation.results;
+  const problems = results.flatMap((result) => result.problems.map((problem) => `${result.type}: ${problem}`));
+  if (problems.length > 0) throw new Rejection(`managed approval preflight failed: ${problems.join("; ")}`);
+  return { head: pull.headSha };
+}
 
 function pullStateOptions(ctx: ApproveContext) {
   const integrationBranches = repositoryEntry(ctx.config, ctx.repository)?.integration_branches;
@@ -32,13 +48,20 @@ export async function fetchPull(gh: GitHub, repository: string, pullNumber: numb
 
 // The review pins commit_id to the head the checks ran on. A push in between would leave an
 // approval that no push dismisses, so the head is read again and a moved head dismisses it.
-async function approveHead(ctx: ApproveContext, pull: PullFacts, body: string, forceMarker = false): Promise<ApproveOutcome> {
+async function approveHead(ctx: ApproveContext, pull: PullFacts, body: string, forceMarker = false, managedAttestation?: Awaited<ReturnType<typeof deriveManagedPullAttestation>>): Promise<ApproveOutcome> {
   const repo = splitRepository(ctx.repository);
   const head = pull.headSha;
   if (pull.authorId === ctx.config.approver.id) throw new Rejection(`the approver authored #${pull.number}`);
   const reviews = await ctx.server.paginate(ctx.server.rest.pulls.listReviews, { ...repo, pull_number: pull.number, per_page: 100 });
   if (!forceMarker && reviews.some((r) => Number(r.user?.id) === ctx.config.approver.id && r.state === "APPROVED" && r.commit_id === head)) {
     return { result: "already-approved", head, problems: [] };
+  }
+  if (managedAttestation) {
+    if (!ctx.managedSource) throw new Rejection("managed approval is missing trusted server provenance");
+    const current = await (ctx.deriveManagedPull ?? deriveManagedPullAttestation)({ ...ctx.managedSource, target: ctx.server, repository: ctx.repository, pullNumber: pull.number });
+    if (!current || !sameManagedPullAttestation(managedAttestation, current)) {
+      throw new Rejection("managed pull changed during approval; retry after revalidation");
+    }
   }
   const { data: review } = await ctx.approver.rest.pulls.createReview({ ...repo, pull_number: pull.number, event: "APPROVE", commit_id: head, body });
   const dismiss = (message: string) => ctx.approver.rest.pulls.dismissReview({ ...repo, pull_number: pull.number, review_id: Number(review.id), message });
@@ -54,22 +77,37 @@ async function approveHead(ctx: ApproveContext, pull: PullFacts, body: string, f
   return { result: "approved", head, problems: [] };
 }
 
+function sameManagedPullAttestation(a: NonNullable<Awaited<ReturnType<typeof deriveManagedPullAttestation>>>, b: NonNullable<Awaited<ReturnType<typeof deriveManagedPullAttestation>>>): boolean {
+  return a.repositoryId === b.repositoryId && a.repository.toLowerCase() === b.repository.toLowerCase() &&
+    a.pullNumber === b.pullNumber && a.pullNodeId === b.pullNodeId && a.baseRef === b.baseRef && a.baseSha === b.baseSha &&
+    a.headSha === b.headSha && a.configSha === b.configSha && a.releaseVersion === b.releaseVersion &&
+    a.releaseSha === b.releaseSha && a.manifestDigest === b.manifestDigest;
+}
+
 async function policyProblems(ctx: ApproveContext, pull: PullFacts): Promise<string[]> {
-  const results = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull });
+  const results = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, ...(ctx.managedSource ? { managedSource: ctx.managedSource } : {}), ...(ctx.deriveManagedPull ? { deriveManagedPull: ctx.deriveManagedPull } : {}) });
   return results.flatMap((r) => r.problems.map((p) => `${r.type}: ${p}`));
 }
 
 async function refreshPolicy(ctx: ApproveContext, pull: PullFacts): Promise<void> {
-  await updatePolicyCheck({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, serverRun: ctx.serverRun, requestKind: "approve", ...(ctx.requestCommentId === undefined ? {} : { requestCommentId: ctx.requestCommentId }) });
+  await updatePolicyCheck({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, ...(ctx.managedSource ? { managedSource: ctx.managedSource } : {}), ...(ctx.deriveManagedPull ? { deriveManagedPull: ctx.deriveManagedPull } : {}), serverRun: ctx.serverRun, requestKind: "approve", ...(ctx.requestCommentId === undefined ? {} : { requestCommentId: ctx.requestCommentId }) });
 }
 
 export async function autoApprove(ctx: ApproveContext, pull: PullFacts): Promise<ApproveOutcome> {
-  const problems = await policyProblems(ctx, pull);
+  let managedAttestation: Awaited<ReturnType<typeof deriveManagedPullAttestation>> = undefined;
+  let problems: string[];
+  if (ctx.managedSource) {
+    const evaluation = await evaluateManagedPullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, managedSource: ctx.managedSource, ...(ctx.deriveManagedPull ? { deriveManagedPull: ctx.deriveManagedPull } : {}) }, "report");
+    managedAttestation = evaluation.kind === "attested" ? evaluation.attestation : undefined;
+    problems = evaluation.results.flatMap((r) => r.problems.map((p) => `${r.type}: ${p}`));
+  } else {
+    problems = await policyProblems(ctx, pull);
+  }
   if (problems.length > 0) {
     await refreshPolicy(ctx, pull);
     return { result: "declined", head: pull.headSha, problems };
   }
-  const outcome = await approveHead(ctx, pull, "");
+  const outcome = await approveHead(ctx, pull, "", false, managedAttestation);
   await refreshPolicy(ctx, outcome.result === "dismissed" ? await fetchPull(ctx.server, ctx.repository, pull.number) : pull);
   return outcome;
 }
@@ -90,14 +128,23 @@ async function checkHeadPredatesComment(ctx: ApproveContext, pull: PullFacts, co
 
 async function commandApprove(ctx: ApproveContext, pull: PullFacts, comment: CommentFacts): Promise<ApproveOutcome> {
   checkPullState(pull, pullStateOptions(ctx));
-  const results = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull }, { commentId: comment.id, authorId: comment.user?.id ?? -1, head: pull.headSha });
+  const commandApproval = { commentId: comment.id, authorId: comment.user?.id ?? -1, head: pull.headSha };
+  let results: PolicyResult[];
+  let managedAttestation: Awaited<ReturnType<typeof deriveManagedPullAttestation>> = undefined;
+  if (ctx.managedSource) {
+    const evaluation = await evaluateManagedPullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, managedSource: ctx.managedSource, ...(ctx.deriveManagedPull ? { deriveManagedPull: ctx.deriveManagedPull } : {}) }, "report", commandApproval);
+    results = evaluation.results;
+    managedAttestation = evaluation.kind === "attested" ? evaluation.attestation : undefined;
+  } else {
+    results = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, ...(ctx.deriveManagedPull ? { deriveManagedPull: ctx.deriveManagedPull } : {}) }, commandApproval);
+  }
   const problems = results.flatMap((r) => r.problems.map((p) => `${r.type}: ${p}`));
   if (problems.length > 0) throw new Rejection(`/approve cannot proceed because policy checks failed: ${problems.join("; ")}`);
   await checkHeadPredatesComment(ctx, pull, comment);
   // Kill switch: the approver can stop the request by editing or deleting the comment.
   const currentCommand = validateComment(await fetchComment(ctx.server, ctx.repository, comment.id), ctx.repository, pull.number, ctx.now());
   if (currentCommand.name !== "approve") throw new Rejection(`comment ${comment.id} is no longer exactly /approve`);
-  const outcome = await approveHead(ctx, pull, marker("approve:command", comment.id), true);
+  const outcome = await approveHead(ctx, pull, marker("approve:command", comment.id), true, managedAttestation);
   await refreshPolicy(ctx, outcome.result === "dismissed" ? await fetchPull(ctx.server, ctx.repository, pull.number) : pull);
   return outcome;
 }

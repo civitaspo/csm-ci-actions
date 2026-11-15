@@ -36693,6 +36693,7 @@ var RepoSettings = preprocess((input, ctx) => {
   }
   return input;
 }, strictObject({
+  auto_merge_managed_files: boolean2().default(false),
   sponsorships: Sponsorships.optional(),
   settings: strictObject({
     delete_branch_on_merge: boolean2().optional(),
