@@ -21,8 +21,8 @@ export type MergeContext = {
   onAcceptanceFailure?: (record: ReservationRecord, displayFailure: boolean) => Promise<void>;
   /** Must independently derive current managed state; it must not use reservation fields as expectation inputs. */
   attestManagedPull?: (args: { repository: string; pullNumber: number; reservation: Extract<ReservationPayload, { version: 2 }> }) => Promise<ManagedPullAttestation | undefined>;
-  /** Must include the narrow managed-file policy result only after the current PR was attested. */
-  managedReadiness?: (args: { repository: string; pull: PullFacts; attestation: ManagedPullAttestation; reservation: Extract<ReservationPayload, { version: 2 }> }) => Promise<{ kind: "ready" } | { kind: "waiting"; reason: string }>;
+  /** Must independently read the current policy source context for this evaluation. */
+  managedPolicySource?: (args: { repository: string; pull: PullFacts; reservation: Extract<ReservationPayload, { version: 2 }> }) => Promise<ManagedPullSourceContext>;
   /** Compares the actual squash result with a freshly derived desired managed-file tree. */
   verifyManagedMerge?: (args: { repository: string; pullNumber: number; mergeCommit: string; reservation: Extract<ReservationPayload, { version: 2 }> }) => Promise<{ matches: boolean; reason?: string }>;
   notify: GitHub;
@@ -201,6 +201,26 @@ async function requiredChecks(ctx: Pick<MergeContext, "server" | "config" | "rep
 
 export async function evaluateMergeReadiness(ctx: Pick<MergeContext, "server" | "config" | "repository">, pull: PullFacts, managedSource?: ManagedPullSourceContext): Promise<{ kind: "ready" } | { kind: "waiting"; reason: string }> {
   const facts = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, ...(managedSource ? { managedSource } : {}) });
+  return finishMergeReadiness(ctx, pull, facts);
+}
+
+async function evaluateManagedMergeReadiness(ctx: Pick<MergeContext, "server" | "config" | "repository">, pull: PullFacts, managedSource: ManagedPullSourceContext, attestation: ManagedPullAttestation): Promise<{ kind: "ready" } | { kind: "waiting"; reason: string }> {
+  const release = managedSource.workflowRelease;
+  if (managedSource.configSha !== attestation.configSha || !release || release.version !== attestation.releaseVersion || release.sha !== attestation.releaseSha) {
+    return { kind: "waiting", reason: "managed-file provenance changed during evaluation" };
+  }
+  const facts = await evaluatePullPolicies({
+    server: ctx.server,
+    config: ctx.config,
+    repository: ctx.repository,
+    pull,
+    managedSource,
+    deriveManagedPull: async () => attestation,
+  });
+  return finishMergeReadiness(ctx, pull, facts);
+}
+
+async function finishMergeReadiness(ctx: Pick<MergeContext, "server" | "config" | "repository">, pull: PullFacts, facts: Awaited<ReturnType<typeof evaluatePullPolicies>>): Promise<{ kind: "ready" } | { kind: "waiting"; reason: string }> {
   const failures = facts.filter((result) => !result.ok).flatMap((result) => result.problems.map((problem) => `${result.type}: ${problem}`));
   if (failures.length) return { kind: "waiting", reason: `policies failed: ${failures.join("; ")}` };
   if (!(await approverApprovedHead(ctx.server, ctx.config, ctx.repository, pull))) return { kind: "waiting", reason: `waiting for approval of ${pull.headSha.slice(0, 7)}` };
@@ -438,7 +458,7 @@ export async function evaluateReservation(ctx: MergeContext, record: Reservation
   if (record.payload.version === 2) {
     const managedReservation = latest.payload;
     if (managedReservation.version !== 2) throw new Rejection("managed reservation changed during evaluation");
-    if (!ctx.attestManagedPull || !ctx.managedReadiness || !ctx.verifyManagedMerge) {
+    if (!ctx.attestManagedPull || !ctx.managedPolicySource || !ctx.verifyManagedMerge) {
       throw new Rejection("managed-file reservation evaluator is not connected to current configuration, manifest, policy, and merge-result verification");
     }
     let attestation: ManagedPullAttestation | undefined;
@@ -455,7 +475,8 @@ export async function evaluateReservation(ctx: MergeContext, record: Reservation
     }
     const entry = repositoryEntry(ctx.config, targetContext.repository);
     const baseBranchAllowed = pull.baseRef === pull.defaultBranch || entry?.integration_branches?.includes(pull.baseRef) === true;
-    const readinessResult = await ctx.managedReadiness({ repository: targetContext.repository, pull, attestation, reservation: managedReservation });
+    const managedSource = await ctx.managedPolicySource({ repository: targetContext.repository, pull, reservation: managedReservation });
+    const readinessResult = await evaluateManagedMergeReadiness(targetContext, pull, managedSource, attestation);
     const decision = decide({
       reservation: { state: latest.state, payload: latest.payload }, pull, now: ctx.now(), trustValid: true,
       mergeEnabled: entry?.ops.includes("merge") === true, baseBranchAllowed, allowBotRequests: true, botCommitsValid: true, readiness: readinessResult,

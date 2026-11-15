@@ -38761,20 +38761,8 @@ function effectivePolicies(config, repository) {
   }
   return [...ALWAYS, ...configured];
 }
-async function evaluatePullPolicies(ctx, commandApproval) {
-  const trust = evaluateTrust(await fetchCommitFacts(ctx.server, ctx.repository, ctx.pull.number), ctx.pull.headSha, ctx.config);
+async function evaluatePoliciesWithManagedState(ctx, trust, managedAttestation, managedFailure, commandApproval) {
   const policies = effectivePolicies(ctx.config, ctx.repository);
-  let managedAttestation;
-  let managedFailure;
-  if (ctx.managedSource) {
-    try {
-      managedAttestation = await (ctx.deriveManagedPull ?? deriveManagedPullAttestation)({ ...ctx.managedSource, target: ctx.server, repository: ctx.repository, pullNumber: ctx.pull.number });
-    } catch (error) {
-      if (!(error instanceof Rejection))
-        throw error;
-      managedFailure = error.message;
-    }
-  }
   const policyContext = {
     trust,
     gh: ctx.server,
@@ -38794,6 +38782,21 @@ async function evaluatePullPolicies(ctx, commandApproval) {
     results.push({ type: "managed-files", ok: false, problems: [managedFailure] });
   }
   return results;
+}
+async function evaluatePullPolicies(ctx, commandApproval) {
+  const trust = evaluateTrust(await fetchCommitFacts(ctx.server, ctx.repository, ctx.pull.number), ctx.pull.headSha, ctx.config);
+  let managedAttestation;
+  let managedFailure;
+  if (ctx.managedSource) {
+    try {
+      managedAttestation = await (ctx.deriveManagedPull ?? deriveManagedPullAttestation)({ ...ctx.managedSource, target: ctx.server, repository: ctx.repository, pullNumber: ctx.pull.number });
+    } catch (error) {
+      if (!(error instanceof Rejection))
+        throw error;
+      managedFailure = error.message;
+    }
+  }
+  return evaluatePoliciesWithManagedState(ctx, trust, managedAttestation, managedFailure, commandApproval);
 }
 async function approverApprovedHead(server, config, repository, pull) {
   const reviews = await server.paginate(server.rest.pulls.listReviews, { ...splitRepository(repository), pull_number: pull.number, per_page: 100 });
@@ -38899,6 +38902,24 @@ async function requiredChecks(ctx, pull) {
 }
 async function evaluateMergeReadiness(ctx, pull, managedSource) {
   const facts = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, ...managedSource ? { managedSource } : {} });
+  return finishMergeReadiness(ctx, pull, facts);
+}
+async function evaluateManagedMergeReadiness(ctx, pull, managedSource, attestation) {
+  const release = managedSource.workflowRelease;
+  if (managedSource.configSha !== attestation.configSha || !release || release.version !== attestation.releaseVersion || release.sha !== attestation.releaseSha) {
+    return { kind: "waiting", reason: "managed-file provenance changed during evaluation" };
+  }
+  const facts = await evaluatePullPolicies({
+    server: ctx.server,
+    config: ctx.config,
+    repository: ctx.repository,
+    pull,
+    managedSource,
+    deriveManagedPull: async () => attestation
+  });
+  return finishMergeReadiness(ctx, pull, facts);
+}
+async function finishMergeReadiness(ctx, pull, facts) {
   const failures = facts.filter((result) => !result.ok).flatMap((result) => result.problems.map((problem) => `${result.type}: ${problem}`));
   if (failures.length)
     return { kind: "waiting", reason: `policies failed: ${failures.join("; ")}` };
@@ -38961,7 +38982,7 @@ async function evaluateReservation(ctx, record) {
     const managedReservation = latest.payload;
     if (managedReservation.version !== 2)
       throw new Rejection("managed reservation changed during evaluation");
-    if (!ctx.attestManagedPull || !ctx.managedReadiness || !ctx.verifyManagedMerge) {
+    if (!ctx.attestManagedPull || !ctx.managedPolicySource || !ctx.verifyManagedMerge) {
       throw new Rejection("managed-file reservation evaluator is not connected to current configuration, manifest, policy, and merge-result verification");
     }
     let attestation;
@@ -38979,7 +39000,8 @@ async function evaluateReservation(ctx, record) {
     }
     const entry = repositoryEntry(ctx.config, targetContext.repository);
     const baseBranchAllowed = pull.baseRef === pull.defaultBranch || entry?.integration_branches?.includes(pull.baseRef) === true;
-    const readinessResult = await ctx.managedReadiness({ repository: targetContext.repository, pull, attestation, reservation: managedReservation });
+    const managedSource = await ctx.managedPolicySource({ repository: targetContext.repository, pull, reservation: managedReservation });
+    const readinessResult = await evaluateManagedMergeReadiness(targetContext, pull, managedSource, attestation);
     const decision = decide({
       reservation: { state: latest.state, payload: latest.payload },
       pull,
@@ -39416,19 +39438,18 @@ async function main() {
         pullNumber
       });
     },
-    managedReadiness: async ({ repository, pull, reservation }) => {
+    managedPolicySource: async ({ reservation }) => {
       const serverInfo = await configReader.rest.repos.get(splitRepository(serverRepository));
       if (!serverInfo.data.default_branch)
         throw new Error("server default branch is unavailable for managed policy validation");
       const defaultRef = await configReader.rest.git.getRef({ ...splitRepository(serverRepository), ref: `heads/${serverInfo.data.default_branch}` });
-      const managedSource = {
+      return {
         source: configReader,
         serverRepository,
         configSha: defaultRef.data.object.sha,
         configPath,
         workflowRelease: ReleasedRevision.parse({ version: reservation.release_version, sha: reservation.release_sha })
       };
-      return evaluateMergeReadiness({ server, config: ctx.config, repository }, pull, managedSource);
     },
     verifyManagedMerge: async ({ repository: targetRepository, mergeCommit, reservation }) => {
       if (targetRepository.toLowerCase() !== reservation.repository.toLowerCase()) {

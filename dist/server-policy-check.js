@@ -38442,20 +38442,8 @@ function effectivePolicies(config, repository) {
   }
   return [...ALWAYS, ...configured];
 }
-async function evaluatePullPolicies(ctx, commandApproval) {
-  const trust = evaluateTrust(await fetchCommitFacts(ctx.server, ctx.repository, ctx.pull.number), ctx.pull.headSha, ctx.config);
+async function evaluatePoliciesWithManagedState(ctx, trust, managedAttestation, managedFailure, commandApproval) {
   const policies = effectivePolicies(ctx.config, ctx.repository);
-  let managedAttestation;
-  let managedFailure;
-  if (ctx.managedSource) {
-    try {
-      managedAttestation = await (ctx.deriveManagedPull ?? deriveManagedPullAttestation)({ ...ctx.managedSource, target: ctx.server, repository: ctx.repository, pullNumber: ctx.pull.number });
-    } catch (error) {
-      if (!(error instanceof Rejection))
-        throw error;
-      managedFailure = error.message;
-    }
-  }
   const policyContext = {
     trust,
     gh: ctx.server,
@@ -38475,6 +38463,21 @@ async function evaluatePullPolicies(ctx, commandApproval) {
     results.push({ type: "managed-files", ok: false, problems: [managedFailure] });
   }
   return results;
+}
+async function evaluatePullPolicies(ctx, commandApproval) {
+  const trust = evaluateTrust(await fetchCommitFacts(ctx.server, ctx.repository, ctx.pull.number), ctx.pull.headSha, ctx.config);
+  let managedAttestation;
+  let managedFailure;
+  if (ctx.managedSource) {
+    try {
+      managedAttestation = await (ctx.deriveManagedPull ?? deriveManagedPullAttestation)({ ...ctx.managedSource, target: ctx.server, repository: ctx.repository, pullNumber: ctx.pull.number });
+    } catch (error) {
+      if (!(error instanceof Rejection))
+        throw error;
+      managedFailure = error.message;
+    }
+  }
+  return evaluatePoliciesWithManagedState(ctx, trust, managedAttestation, managedFailure, commandApproval);
 }
 async function approverApprovedHead(server, config, repository, pull) {
   const reviews = await server.paginate(server.rest.pulls.listReviews, { ...splitRepository(repository), pull_number: pull.number, per_page: 100 });

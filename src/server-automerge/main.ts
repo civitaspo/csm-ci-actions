@@ -8,7 +8,7 @@ import { verifyManagedMergeTree } from "../lib/managed-pull.ts";
 import { reconcileManagedDrift } from "./managed-drift.ts";
 import { summarizeReservation } from "../lib/automerge-summary.ts";
 import { syncAutomergeDisplay } from "../lib/automerge-display.ts";
-import { evaluateMergeReadiness, evaluateReservation, mergeReservation, type MergeContext } from "../lib/merge.ts";
+import { evaluateReservation, mergeReservation, type MergeContext } from "../lib/merge.ts";
 import { automergeConcurrencyKey } from "../lib/request.ts";
 import { activeReservationForPullByRepositoryId, activeSweepReservations, evaluationReservation, installedRepositoryId, partitionSweepRepositories, resolveRepositoryName, sweepBatch, terminalRepairReservations } from "./sweep.ts";
 
@@ -155,18 +155,17 @@ async function main(): Promise<void> {
         pullNumber,
       });
     },
-    managedReadiness: async ({ repository, pull, reservation }) => {
+    managedPolicySource: async ({ reservation }) => {
       const serverInfo = await configReader.rest.repos.get(splitRepository(serverRepository));
       if (!serverInfo.data.default_branch) throw new Error("server default branch is unavailable for managed policy validation");
       const defaultRef = await configReader.rest.git.getRef({ ...splitRepository(serverRepository), ref: `heads/${serverInfo.data.default_branch}` });
-      const managedSource = {
+      return {
         source: configReader,
         serverRepository,
         configSha: defaultRef.data.object.sha,
         configPath,
         workflowRelease: ReleasedRevision.parse({ version: reservation.release_version, sha: reservation.release_sha }),
       };
-      return evaluateMergeReadiness({ server, config: ctx.config, repository }, pull, managedSource);
     },
     verifyManagedMerge: async ({ repository: targetRepository, mergeCommit, reservation }) => {
       if (targetRepository.toLowerCase() !== reservation.repository.toLowerCase()) {

@@ -13,8 +13,8 @@ const attestation = {
 };
 let derive: () => Promise<typeof attestation | undefined> = async () => attestation;
 
-const { evaluatePullPolicies } = await import("./policy-check.ts");
-const { preflightManagedApproval, runApprove } = await import("./approve.ts");
+const { evaluateManagedPullPolicies, evaluatePullPolicies } = await import("./policy-check.ts");
+const { autoApprove, preflightManagedApproval, runApprove } = await import("./approve.ts");
 
 function context(withManagedSource: boolean) {
   const cfg = config();
@@ -85,4 +85,46 @@ test("managed approval preflight rejects before any server write or approver tok
 
   await expect(preflightManagedApproval(ctx, pull)).rejects.toThrow("managed pull does not match the current trusted managed-file proposal");
   expect(ctx.serverFetch.requests).toEqual([]);
+});
+
+test("managed approval preflight reuses its single derived attestation for policy evaluation", async () => {
+  let deriveCalls = 0;
+  derive = async () => {
+    deriveCalls++;
+    return attestation;
+  };
+  const ctx = context(true);
+
+  expect(await preflightManagedApproval(ctx, pull)).toEqual({ head });
+  expect(deriveCalls).toBe(1);
+});
+
+test("managed policy evaluation derives once and returns its result without accepting an attestation input", async () => {
+  let deriveCalls = 0;
+  derive = async () => {
+    deriveCalls++;
+    return attestation;
+  };
+  const result = await evaluateManagedPullPolicies(context(true));
+
+  expect(result.kind).toBe("attested");
+  expect(result.kind === "attested" ? result.attestation : undefined).toEqual(attestation);
+  expect(result.results.find((item) => item.type === "managed-files")).toEqual({ type: "managed-files", ok: true, problems: [] });
+  expect(deriveCalls).toBe(1);
+});
+
+test("managed approval revalidates provenance after policy evaluation and before creating the review", async () => {
+  const attestations = [attestation, { ...attestation, releaseVersion: "v1.2.4" }];
+  derive = async () => attestations.shift();
+  const ctx = context(true);
+  const approverFetch = fakeFetch([]);
+  const approvalContext = {
+    ...ctx,
+    approver: github("approver", approverFetch),
+    serverRun: { serverUrl: "https://github.com", repository: "owner/server", id: "345", attempt: "2" },
+    now: () => new Date("2026-10-24T12:00:00Z"),
+  };
+
+  await expect(autoApprove(approvalContext, pull)).rejects.toThrow("managed pull changed during approval; retry after revalidation");
+  expect(approverFetch.requests.some((request) => request.method === "POST" && request.path.endsWith("/pulls/12/reviews"))).toBe(false);
 });

@@ -12,6 +12,11 @@ import { Rejection } from "./request.ts";
 const ALWAYS: Policy[] = [{ type: "signed-commits" }, { type: "trusted-committers" }];
 export type PolicyCheckContext = { server: GitHub; config: Config; repository: string; pull: PullFacts; managedSource?: ManagedPullSourceContext; deriveManagedPull?: typeof deriveManagedPullAttestation };
 type PublicationContext = PolicyCheckContext & { serverRun: ServerRun; requestKind?: "approve" | "policy-check"; requestCommentId?: number };
+export type ManagedPullPolicyEvaluation =
+  | { kind: "attested"; attestation: ManagedPullAttestation; results: PolicyResult[] }
+  | { kind: "not-managed"; results: PolicyResult[] }
+  | { kind: "rejected"; reason: string; results: PolicyResult[] };
+export type ManagedPolicyRejectionMode = "throw" | "report";
 
 export function effectivePolicies(config: Config, repository: string): Policy[] {
   const override = repositoryEntry(config, repository)?.sensitive_paths;
@@ -25,19 +30,14 @@ export function effectivePolicies(config: Config, repository: string): Policy[] 
   return [...ALWAYS, ...configured];
 }
 
-export async function evaluatePullPolicies(ctx: PolicyCheckContext, commandApproval?: { commentId: number; authorId: number; head: string }): Promise<PolicyResult[]> {
-  const trust = evaluateTrust(await fetchCommitFacts(ctx.server, ctx.repository, ctx.pull.number), ctx.pull.headSha, ctx.config);
+async function evaluatePoliciesWithManagedState(
+  ctx: PolicyCheckContext,
+  trust: ReturnType<typeof evaluateTrust>,
+  managedAttestation?: ManagedPullAttestation,
+  managedFailure?: string,
+  commandApproval?: { commentId: number; authorId: number; head: string },
+): Promise<PolicyResult[]> {
   const policies = effectivePolicies(ctx.config, ctx.repository);
-  let managedAttestation: ManagedPullAttestation | undefined;
-  let managedFailure: string | undefined;
-  if (ctx.managedSource) {
-    try {
-      managedAttestation = await (ctx.deriveManagedPull ?? deriveManagedPullAttestation)({ ...ctx.managedSource, target: ctx.server, repository: ctx.repository, pullNumber: ctx.pull.number });
-    } catch (error) {
-      if (!(error instanceof Rejection)) throw error;
-      managedFailure = error.message;
-    }
-  }
   const policyContext = {
     trust, gh: ctx.server, config: ctx.config, repository: ctx.repository,
     pullNumber: ctx.pull.number, head: ctx.pull.headSha, authorId: ctx.pull.authorId,
@@ -51,6 +51,43 @@ export async function evaluatePullPolicies(ctx: PolicyCheckContext, commandAppro
     results.push({ type: "managed-files", ok: false, problems: [managedFailure] });
   }
   return results;
+}
+
+export async function evaluateManagedPullPolicies(
+  ctx: PolicyCheckContext,
+  rejectionMode: ManagedPolicyRejectionMode = "throw",
+  commandApproval?: { commentId: number; authorId: number; head: string },
+): Promise<ManagedPullPolicyEvaluation> {
+  if (!ctx.managedSource) throw new Rejection("managed policy evaluation is missing trusted server provenance");
+  let attestation: ManagedPullAttestation | undefined;
+  let failure: string | undefined;
+  try {
+    attestation = await (ctx.deriveManagedPull ?? deriveManagedPullAttestation)({ ...ctx.managedSource, target: ctx.server, repository: ctx.repository, pullNumber: ctx.pull.number });
+  } catch (error) {
+    if (!(error instanceof Rejection)) throw error;
+    if (rejectionMode !== "report") throw error;
+    failure = error.message;
+  }
+  const trust = evaluateTrust(await fetchCommitFacts(ctx.server, ctx.repository, ctx.pull.number), ctx.pull.headSha, ctx.config);
+  const results = await evaluatePoliciesWithManagedState(ctx, trust, attestation, failure, commandApproval);
+  if (failure) return { kind: "rejected", reason: failure, results };
+  if (attestation) return { kind: "attested", attestation, results };
+  return { kind: "not-managed", results };
+}
+
+export async function evaluatePullPolicies(ctx: PolicyCheckContext, commandApproval?: { commentId: number; authorId: number; head: string }): Promise<PolicyResult[]> {
+  const trust = evaluateTrust(await fetchCommitFacts(ctx.server, ctx.repository, ctx.pull.number), ctx.pull.headSha, ctx.config);
+  let managedAttestation: ManagedPullAttestation | undefined;
+  let managedFailure: string | undefined;
+  if (ctx.managedSource) {
+    try {
+      managedAttestation = await (ctx.deriveManagedPull ?? deriveManagedPullAttestation)({ ...ctx.managedSource, target: ctx.server, repository: ctx.repository, pullNumber: ctx.pull.number });
+    } catch (error) {
+      if (!(error instanceof Rejection)) throw error;
+      managedFailure = error.message;
+    }
+  }
+  return evaluatePoliciesWithManagedState(ctx, trust, managedAttestation, managedFailure, commandApproval);
 }
 
 export async function approverApprovedHead(server: GitHub, config: Config, repository: string, pull: PullFacts): Promise<boolean> {

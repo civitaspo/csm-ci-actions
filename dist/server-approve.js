@@ -38509,20 +38509,8 @@ function effectivePolicies(config, repository) {
   }
   return [...ALWAYS, ...configured];
 }
-async function evaluatePullPolicies(ctx, commandApproval) {
-  const trust = evaluateTrust(await fetchCommitFacts(ctx.server, ctx.repository, ctx.pull.number), ctx.pull.headSha, ctx.config);
+async function evaluatePoliciesWithManagedState(ctx, trust, managedAttestation, managedFailure, commandApproval) {
   const policies = effectivePolicies(ctx.config, ctx.repository);
-  let managedAttestation;
-  let managedFailure;
-  if (ctx.managedSource) {
-    try {
-      managedAttestation = await (ctx.deriveManagedPull ?? deriveManagedPullAttestation)({ ...ctx.managedSource, target: ctx.server, repository: ctx.repository, pullNumber: ctx.pull.number });
-    } catch (error) {
-      if (!(error instanceof Rejection))
-        throw error;
-      managedFailure = error.message;
-    }
-  }
   const policyContext = {
     trust,
     gh: ctx.server,
@@ -38542,6 +38530,43 @@ async function evaluatePullPolicies(ctx, commandApproval) {
     results.push({ type: "managed-files", ok: false, problems: [managedFailure] });
   }
   return results;
+}
+async function evaluateManagedPullPolicies(ctx, rejectionMode = "throw", commandApproval) {
+  if (!ctx.managedSource)
+    throw new Rejection("managed policy evaluation is missing trusted server provenance");
+  let attestation;
+  let failure;
+  try {
+    attestation = await (ctx.deriveManagedPull ?? deriveManagedPullAttestation)({ ...ctx.managedSource, target: ctx.server, repository: ctx.repository, pullNumber: ctx.pull.number });
+  } catch (error) {
+    if (!(error instanceof Rejection))
+      throw error;
+    if (rejectionMode !== "report")
+      throw error;
+    failure = error.message;
+  }
+  const trust = evaluateTrust(await fetchCommitFacts(ctx.server, ctx.repository, ctx.pull.number), ctx.pull.headSha, ctx.config);
+  const results = await evaluatePoliciesWithManagedState(ctx, trust, attestation, failure, commandApproval);
+  if (failure)
+    return { kind: "rejected", reason: failure, results };
+  if (attestation)
+    return { kind: "attested", attestation, results };
+  return { kind: "not-managed", results };
+}
+async function evaluatePullPolicies(ctx, commandApproval) {
+  const trust = evaluateTrust(await fetchCommitFacts(ctx.server, ctx.repository, ctx.pull.number), ctx.pull.headSha, ctx.config);
+  let managedAttestation;
+  let managedFailure;
+  if (ctx.managedSource) {
+    try {
+      managedAttestation = await (ctx.deriveManagedPull ?? deriveManagedPullAttestation)({ ...ctx.managedSource, target: ctx.server, repository: ctx.repository, pullNumber: ctx.pull.number });
+    } catch (error) {
+      if (!(error instanceof Rejection))
+        throw error;
+      managedFailure = error.message;
+    }
+  }
+  return evaluatePoliciesWithManagedState(ctx, trust, managedAttestation, managedFailure, commandApproval);
 }
 async function approverApprovedHead(server, config, repository, pull) {
   const reviews = await server.paginate(server.rest.pulls.listReviews, { ...splitRepository(repository), pull_number: pull.number, per_page: 100 });
@@ -38608,7 +38633,7 @@ async function fetchPull(gh, repository, pullNumber) {
     authorId: Number(p.user.id)
   };
 }
-async function approveHead(ctx, pull, body, forceMarker = false) {
+async function approveHead(ctx, pull, body, forceMarker = false, managedAttestation) {
   const repo = splitRepository(ctx.repository);
   const head = pull.headSha;
   if (pull.authorId === ctx.config.approver.id)
@@ -38616,6 +38641,14 @@ async function approveHead(ctx, pull, body, forceMarker = false) {
   const reviews = await ctx.server.paginate(ctx.server.rest.pulls.listReviews, { ...repo, pull_number: pull.number, per_page: 100 });
   if (!forceMarker && reviews.some((r) => Number(r.user?.id) === ctx.config.approver.id && r.state === "APPROVED" && r.commit_id === head)) {
     return { result: "already-approved", head, problems: [] };
+  }
+  if (managedAttestation) {
+    if (!ctx.managedSource)
+      throw new Rejection("managed approval is missing trusted server provenance");
+    const current = await (ctx.deriveManagedPull ?? deriveManagedPullAttestation)({ ...ctx.managedSource, target: ctx.server, repository: ctx.repository, pullNumber: pull.number });
+    if (!current || !sameManagedPullAttestation(managedAttestation, current)) {
+      throw new Rejection("managed pull changed during approval; retry after revalidation");
+    }
   }
   const { data: review } = await ctx.approver.rest.pulls.createReview({ ...repo, pull_number: pull.number, event: "APPROVE", commit_id: head, body });
   const dismiss = (message) => ctx.approver.rest.pulls.dismissReview({ ...repo, pull_number: pull.number, review_id: Number(review.id), message });
@@ -38630,6 +38663,9 @@ async function approveHead(ctx, pull, body, forceMarker = false) {
   }
   return { result: "approved", head, problems: [] };
 }
+function sameManagedPullAttestation(a, b) {
+  return a.repositoryId === b.repositoryId && a.repository.toLowerCase() === b.repository.toLowerCase() && a.pullNumber === b.pullNumber && a.pullNodeId === b.pullNodeId && a.baseRef === b.baseRef && a.baseSha === b.baseSha && a.headSha === b.headSha && a.configSha === b.configSha && a.releaseVersion === b.releaseVersion && a.releaseSha === b.releaseSha && a.manifestDigest === b.manifestDigest;
+}
 async function policyProblems(ctx, pull) {
   const results = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, ...ctx.managedSource ? { managedSource: ctx.managedSource } : {}, ...ctx.deriveManagedPull ? { deriveManagedPull: ctx.deriveManagedPull } : {} });
   return results.flatMap((r) => r.problems.map((p) => `${r.type}: ${p}`));
@@ -38638,12 +38674,20 @@ async function refreshPolicy(ctx, pull) {
   await updatePolicyCheck({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, ...ctx.managedSource ? { managedSource: ctx.managedSource } : {}, ...ctx.deriveManagedPull ? { deriveManagedPull: ctx.deriveManagedPull } : {}, serverRun: ctx.serverRun, requestKind: "approve", ...ctx.requestCommentId === undefined ? {} : { requestCommentId: ctx.requestCommentId } });
 }
 async function autoApprove(ctx, pull) {
-  const problems = await policyProblems(ctx, pull);
+  let managedAttestation = undefined;
+  let problems;
+  if (ctx.managedSource) {
+    const evaluation = await evaluateManagedPullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, managedSource: ctx.managedSource, ...ctx.deriveManagedPull ? { deriveManagedPull: ctx.deriveManagedPull } : {} }, "report");
+    managedAttestation = evaluation.kind === "attested" ? evaluation.attestation : undefined;
+    problems = evaluation.results.flatMap((r) => r.problems.map((p) => `${r.type}: ${p}`));
+  } else {
+    problems = await policyProblems(ctx, pull);
+  }
   if (problems.length > 0) {
     await refreshPolicy(ctx, pull);
     return { result: "declined", head: pull.headSha, problems };
   }
-  const outcome = await approveHead(ctx, pull, "");
+  const outcome = await approveHead(ctx, pull, "", false, managedAttestation);
   await refreshPolicy(ctx, outcome.result === "dismissed" ? await fetchPull(ctx.server, ctx.repository, pull.number) : pull);
   return outcome;
 }
@@ -38661,7 +38705,16 @@ async function checkHeadPredatesComment(ctx, pull, comment) {
 }
 async function commandApprove(ctx, pull, comment) {
   checkPullState(pull, pullStateOptions(ctx));
-  const results = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, ...ctx.managedSource ? { managedSource: ctx.managedSource } : {}, ...ctx.deriveManagedPull ? { deriveManagedPull: ctx.deriveManagedPull } : {} }, { commentId: comment.id, authorId: comment.user?.id ?? -1, head: pull.headSha });
+  const commandApproval = { commentId: comment.id, authorId: comment.user?.id ?? -1, head: pull.headSha };
+  let results;
+  let managedAttestation = undefined;
+  if (ctx.managedSource) {
+    const evaluation = await evaluateManagedPullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, managedSource: ctx.managedSource, ...ctx.deriveManagedPull ? { deriveManagedPull: ctx.deriveManagedPull } : {} }, "report", commandApproval);
+    results = evaluation.results;
+    managedAttestation = evaluation.kind === "attested" ? evaluation.attestation : undefined;
+  } else {
+    results = await evaluatePullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, ...ctx.deriveManagedPull ? { deriveManagedPull: ctx.deriveManagedPull } : {} }, commandApproval);
+  }
   const problems = results.flatMap((r) => r.problems.map((p) => `${r.type}: ${p}`));
   if (problems.length > 0)
     throw new Rejection(`/approve cannot proceed because policy checks failed: ${problems.join("; ")}`);
@@ -38669,7 +38722,7 @@ async function commandApprove(ctx, pull, comment) {
   const currentCommand = validateComment(await fetchComment(ctx.server, ctx.repository, comment.id), ctx.repository, pull.number, ctx.now());
   if (currentCommand.name !== "approve")
     throw new Rejection(`comment ${comment.id} is no longer exactly /approve`);
-  const outcome = await approveHead(ctx, pull, marker("approve:command", comment.id), true);
+  const outcome = await approveHead(ctx, pull, marker("approve:command", comment.id), true, managedAttestation);
   await refreshPolicy(ctx, outcome.result === "dismissed" ? await fetchPull(ctx.server, ctx.repository, pull.number) : pull);
   return outcome;
 }

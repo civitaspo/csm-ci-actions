@@ -4,6 +4,7 @@ import { github } from "./github.ts";
 import { marker } from "./notify.ts";
 import { CONFIG_YAML, config, fakeFetch } from "./testing.ts";
 import { parseConfig } from "./config.ts";
+import type { ManagedPullSourceContext } from "./managed-pull-context.ts";
 
 const P = "/repos/owner/repo";
 const now = new Date("2026-10-24T11:30:01Z");
@@ -502,10 +503,10 @@ describe("evaluateReservation", () => {
     expect(deploymentsFetch.calls).not.toContain("POST /repos/owner/server/deployments/77/statuses");
   });
 
-  test("passes the reservation's pinned release to managed attestation and readiness", async () => {
-    const { ctx, payload } = setup("/merge", { id: 10, login: "alice", type: "User" }, true, { payload: managedPayload });
+  test("reuses the verified attestation during policy evaluation and retains the reservation's release pin", async () => {
+    const { ctx, payload, serverFetch } = setup("/merge", { id: 10, login: "alice", type: "User" }, true, { payload: managedPayload });
     const attestationArgs: Parameters<NonNullable<MergeContext["attestManagedPull"]>>[0][] = [];
-    const readinessArgs: Parameters<NonNullable<MergeContext["managedReadiness"]>>[0][] = [];
+    const policySourceArgs: Parameters<NonNullable<MergeContext["managedPolicySource"]>>[0][] = [];
     ctx.attestManagedPull = async (args) => {
       attestationArgs.push(args);
       return {
@@ -522,18 +523,68 @@ describe("evaluateReservation", () => {
         manifestDigest: managedPayload.manifest_digest,
       };
     };
-    ctx.managedReadiness = async (args) => {
-      readinessArgs.push(args);
-      return { kind: "waiting", reason: "approval is pending" };
+    ctx.managedPolicySource = async (args): Promise<ManagedPullSourceContext> => {
+      policySourceArgs.push(args);
+      return {
+        source: ctx.server,
+        serverRepository: "owner/server",
+        configSha: managedPayload.configuration_sha,
+        configPath: "csm-ci.yaml",
+        workflowRelease: { version: managedPayload.release_version, sha: managedPayload.release_sha },
+      };
     };
     ctx.verifyManagedMerge = async () => ({ matches: true });
     const record = { deploymentId: 77, nodeId: "D_node", createdAt: "2026-10-20T00:00:00Z", payload: payload as never, statuses: [], state: { kind: "active" as const } };
 
-    await evaluateReservation(ctx, record);
+    const result = await evaluateReservation(ctx, record);
 
-    for (const args of [attestationArgs[0], readinessArgs[0]]) {
-      expect(args?.reservation).toMatchObject({ release_version: "v1.2.3", release_sha: "d".repeat(40) });
-    }
+    expect(result.decision).toMatchObject({ kind: "merge", head: sha });
+    expect(result.ready).toBe(true);
+    expect(attestationArgs).toHaveLength(1);
+    expect(attestationArgs[0]?.reservation).toMatchObject({ release_version: "v1.2.3", release_sha: "d".repeat(40) });
+    expect(policySourceArgs).toHaveLength(1);
+    expect(policySourceArgs[0]?.reservation).toMatchObject({ release_version: "v1.2.3", release_sha: "d".repeat(40) });
+    expect(serverFetch.calls.filter((call) => call === `GET ${P}/pulls/12`)).toHaveLength(1);
+  });
+
+  test.each([
+    ["configuration SHA", { configSha: "9".repeat(40) }],
+    ["workflow release pin", null],
+    ["release version", { workflowRelease: { version: "v9.9.9", sha: managedPayload.release_sha } }],
+    ["release SHA", { workflowRelease: { version: managedPayload.release_version, sha: "9".repeat(40) } }],
+  ])("waits when the managed policy source %s moves after attestation", async (_label, sourceOverride) => {
+    const { ctx, payload } = setup("/merge", { id: 10, login: "alice", type: "User" }, true, { payload: managedPayload });
+    ctx.attestManagedPull = async () => ({
+      repositoryId: managedPayload.repository_id,
+      repository: managedPayload.repository,
+      pullNumber: managedPayload.pull_number,
+      pullNodeId: managedPayload.pull_node_id,
+      baseRef: managedPayload.base_ref,
+      baseSha: managedPayload.accepted_base,
+      headSha: managedPayload.accepted_head,
+      configSha: managedPayload.configuration_sha,
+      releaseSha: managedPayload.release_sha,
+      releaseVersion: managedPayload.release_version,
+      manifestDigest: managedPayload.manifest_digest,
+    });
+    ctx.managedPolicySource = async (): Promise<ManagedPullSourceContext> => {
+      const source: ManagedPullSourceContext = {
+        source: ctx.server,
+        serverRepository: "owner/server",
+        configSha: managedPayload.configuration_sha,
+        configPath: "csm-ci.yaml",
+        workflowRelease: { version: managedPayload.release_version, sha: managedPayload.release_sha },
+        ...(sourceOverride ?? {}),
+      };
+      if (sourceOverride === null) delete source.workflowRelease;
+      return source;
+    };
+    ctx.verifyManagedMerge = async () => ({ matches: true });
+    const record = { deploymentId: 77, nodeId: "D_node", createdAt: "2026-10-20T00:00:00Z", payload: payload as never, statuses: [], state: { kind: "active" as const } };
+
+    const result = await evaluateReservation(ctx, record);
+
+    expect(result.decision).toMatchObject({ kind: "wait", reason: "managed-file provenance changed during evaluation" });
   });
 
   test("expires an overdue Bot reservation without reading Bot commits", async () => {
@@ -755,7 +806,10 @@ describe("mergeReservation", () => {
       expires_at: "2026-10-27T00:00:00.000Z",
     };
     const { ctx, record, deploymentsFetch, notifyFetch } = readyReservation({ payload: managed, labelExists: true });
-    ctx.attestManagedPull = async () => ({
+    let attestCalls = 0;
+    ctx.attestManagedPull = async () => {
+      attestCalls++;
+      return ({
       repositoryId: managed.repository_id,
       repository: managed.repository,
       pullNumber: managed.pull_number,
@@ -767,8 +821,15 @@ describe("mergeReservation", () => {
       releaseSha: managed.release_sha,
       releaseVersion: managed.release_version,
       manifestDigest: managed.manifest_digest,
+      });
+    };
+    ctx.managedPolicySource = async (): Promise<ManagedPullSourceContext> => ({
+      source: ctx.server,
+      serverRepository: "owner/server",
+      configSha: managed.configuration_sha,
+      configPath: "csm-ci.yaml",
+      workflowRelease: { version: managed.release_version, sha: managed.release_sha },
     });
-    ctx.managedReadiness = async () => ({ kind: "ready" });
     ctx.verifyManagedMerge = async () => ({ matches: false, reason: "e2e/repo-settings-managed-drift.txt differs" });
     const writeFetch = fakeFetch([
       { method: "POST", path: "/graphql", body: { data: { disablePullRequestAutoMerge: { clientMutationId: null } } } },
@@ -779,6 +840,7 @@ describe("mergeReservation", () => {
     await expect(mergeReservation(ctx, record, sha)).rejects.toThrow("merged, but managed files drifted: e2e/repo-settings-managed-drift.txt differs; run repo-settings again");
 
     expect(writeFetch.calls).toContain(`PUT ${P}/pulls/12/merge`);
+    expect(attestCalls).toBe(2);
     expect(deploymentsFetch.requests.some(({ body }) => body?.includes('"state":"failure"') && body.includes("reason=rejected") && body.includes("managed files drifted"))).toBe(true);
     expect(notifyFetch.requests.some(({ body }) => body?.includes("managed files drifted") && body.includes("run repo-settings again"))).toBe(true);
     expect(notifyFetch.calls).toContain(`DELETE ${P}/issues/12/labels/csm-ci%2Fautomerge`);

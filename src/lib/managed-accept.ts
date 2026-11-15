@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { repositoryEntry, type Config } from "./config.ts";
 import { type GitHub, splitRepository } from "./github.ts";
 import { createManagedReservation, createReservationStatus, type ReservationRecord } from "./automerge-github.ts";
-import { approverApprovedHead, evaluatePullPolicies } from "./policy-check.ts";
+import { approverApprovedHead, evaluateManagedPullPolicies, evaluatePullPolicies } from "./policy-check.ts";
 import { deriveManagedPullAttestation, type ManagedPullSourceContext } from "./managed-pull-context.ts";
 import type { PullFacts } from "./command.ts";
 import type { PolicyResult } from "./policies/index.ts";
@@ -47,14 +47,27 @@ export async function acceptManagedPull(ctx: ManagedAcceptContext, pullNumber: n
     throw new Rejection("managed pull automatic completion requires approve, policy-check, and merge operations");
   }
 
-  const first = await derive();
+  let first: ManagedPullAttestation | undefined;
+  let results: PolicyResult[];
+  if (dependencies?.derive || dependencies?.evaluatePolicies) {
+    first = await derive();
+    results = await evaluatePolicies();
+  } else {
+    const evaluation = await evaluateManagedPullPolicies({ server: ctx.server, config: ctx.config, repository: ctx.repository, pull, managedSource: ctx.managedSource });
+    if (evaluation.kind === "rejected") throw new Rejection(evaluation.reason);
+    if (evaluation.kind === "not-managed") throw new Rejection("managed acceptance did not identify an enabled managed pull request");
+    first = evaluation.attestation;
+    results = evaluation.results;
+  }
   if (!first) throw new Rejection("managed acceptance did not identify an enabled managed pull request");
-  const results = await evaluatePolicies();
   const failures = results.filter((result) => !result.ok).flatMap((result) => result.problems.map((problem) => `${result.type}: ${problem}`));
   if (failures.length) throw new Rejection(`managed acceptance policy check failed: ${failures.join("; ")}`);
   if (!(await isApproved())) {
     throw new Rejection(`the configured approver has not approved managed head ${pull.headSha}`);
   }
+
+  const { data: serverRepository } = await ctx.managedSource.source.rest.repos.get(splitRepository(ctx.managedSource.serverRepository));
+  if (!serverRepository.default_branch) throw new Rejection("managed acceptance cannot resolve the server default branch");
 
   // Re-read both provenance and the review pin immediately before the server-side write.
   const [attestation, current] = await Promise.all([derive(), fetchManagedPull(ctx.server, ctx.repository, pullNumber)]);
@@ -90,8 +103,6 @@ export async function acceptManagedPull(ctx: ManagedAcceptContext, pullNumber: n
     accepted_at: acceptedAtIso,
     expires_at: new Date(acceptedAt.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString(),
   };
-  const { data: serverRepository } = await ctx.managedSource.source.rest.repos.get(splitRepository(ctx.managedSource.serverRepository));
-  if (!serverRepository.default_branch) throw new Rejection("managed acceptance cannot resolve the server default branch");
   const reservation = await createReservation({
     server: ctx.deployments,
     serverRepository: ctx.managedSource.serverRepository,
@@ -134,5 +145,5 @@ async function fetchManagedPull(gh: GitHub, repository: string, pullNumber: numb
 function sameAttestation(a: Awaited<ReturnType<typeof deriveManagedPullAttestation>>, b: Awaited<ReturnType<typeof deriveManagedPullAttestation>>): boolean {
   return !!a && !!b && a.repositoryId === b.repositoryId && a.repository === b.repository && a.pullNumber === b.pullNumber &&
     a.pullNodeId === b.pullNodeId && a.baseRef === b.baseRef && a.baseSha === b.baseSha && a.headSha === b.headSha &&
-    a.configSha === b.configSha && a.releaseSha === b.releaseSha && a.manifestDigest === b.manifestDigest;
+    a.configSha === b.configSha && a.releaseSha === b.releaseSha && a.releaseVersion === b.releaseVersion && a.manifestDigest === b.manifestDigest;
 }
