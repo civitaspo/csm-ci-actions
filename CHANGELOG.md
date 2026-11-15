@@ -2,6 +2,25 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.9.0] - 2026-11-15
+
+### 🚀 Features
+
+- *(repo-settings)* Complete managed file pull requests ([#240](https://github.com/civitaspo/csm-ci-actions/pull/240))
+
+### 📚 Documentation
+
+- *(repo-settings)* Specify managed pull request automation ([#238](https://github.com/civitaspo/csm-ci-actions/pull/238))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(deps)* Update dependency github:jdx/jactionlint to v2.6.0 ([#195](https://github.com/civitaspo/csm-ci-actions/pull/195))
+- *(deps)* Update dependency go to v1.27.4 ([#229](https://github.com/civitaspo/csm-ci-actions/pull/229))
+- *(deps)* Update jdx/jactionlint action to v2.6.0 ([#222](https://github.com/civitaspo/csm-ci-actions/pull/222))
+- *(deps)* Update dependency github:github/gh-actions-lock to v0.4.1 ([#220](https://github.com/civitaspo/csm-ci-actions/pull/220))
+- *(deps)* Update dependency goreleaser/goreleaser to v2.20.2 ([#221](https://github.com/civitaspo/csm-ci-actions/pull/221))
+- *(deps)* Update civitaspo/csm-ci-actions action to v0.8.0 ([#228](https://github.com/civitaspo/csm-ci-actions/pull/228))
+
 ## [0.8.0] - 2026-11-14
 
 ### 🚀 Features
