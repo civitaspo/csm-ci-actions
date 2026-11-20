@@ -1,5 +1,5 @@
 [tools]
-bun = "1.4.4"
+bun = "1.4.5"
 "github:jdx/jactionlint" = "v2.6.0"
 "github:github/gh-actions-lock" = { version = "v0.4.1", bin = "gh-actions-lock" }
 
