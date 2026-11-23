@@ -410,6 +410,42 @@ async function cleanupManagedState(ctx: Ctx, observedHead: string | undefined, p
   await ctx.gh.rest.git.deleteRef({ ...address, ref: `heads/${BRANCH}` });
 }
 
+// Captures a client main file so a scenario can change it and restore the original bytes afterwards.
+async function clientMainFile(ctx: Ctx, path: string): Promise<{ write: (content: string) => Promise<void>; restore: () => Promise<void> }> {
+  const address = splitRepository(CLIENT);
+  let original: string | null = null;
+  try {
+    original = (await readFileAtRef(ctx.gh, address.owner, address.repo, path, "main")).content;
+  } catch (error) {
+    if (!hasStatus(error, 404)) throw error;
+  }
+  const currentSha = async (): Promise<string | undefined> => {
+    try {
+      const { data } = await ctx.gh.rest.repos.getContent({ ...address, path, ref: "main" });
+      assert(!Array.isArray(data) && data.type === "file", `${path} is not a file`);
+      return data.sha;
+    } catch (error) {
+      if (!hasStatus(error, 404)) throw error;
+      return undefined;
+    }
+  };
+  const put = async (content: string, message: string, sha: string | undefined) => {
+    await ctx.gh.rest.repos.createOrUpdateFileContents({ ...address, path, message, content: Buffer.from(content).toString("base64"), branch: "main", ...(sha ? { sha } : {}) });
+  };
+  return {
+    write: async (content) => put(content, "Exercise managed-file drift", await currentSha()),
+    restore: async () => {
+      const sha = await currentSha();
+      if (original === null) {
+        if (sha) await ctx.gh.rest.repos.deleteFile({ ...address, path, message: "Restore managed-file e2e fixture", sha, branch: "main" });
+      } else {
+        assert(sha, `${path} disappeared before cleanup`);
+        await put(original, "Restore managed-file e2e fixture", sha);
+      }
+    },
+  };
+}
+
 async function makeSettingsDrift(ctx: Ctx): Promise<void> {
   const address = splitRepository(CLIENT);
   const desired = {
@@ -605,47 +641,7 @@ export const repoSettings: Scenario[] = [
       const snapshot = await snapshotRepository(ctx.gh, CLIENT);
       const createdRulesetIds = new Set<number>();
       const driftPath = "e2e/repo-settings-managed-drift.txt";
-      const driftAddress = splitRepository(CLIENT);
-      let originalDriftContent: string | null = null;
-      try {
-        originalDriftContent = (await readFileAtRef(ctx.gh, driftAddress.owner, driftAddress.repo, driftPath, "main")).content;
-      } catch (error) {
-        if (!hasStatus(error, 404)) throw error;
-      }
-      const writeDriftFile = async (content: string) => {
-        let sha: string | undefined;
-        try {
-          const { data } = await ctx.gh.rest.repos.getContent({ ...driftAddress, path: driftPath, ref: "main" });
-          assert(!Array.isArray(data) && data.type === "file", `${driftPath} is not a file`);
-          sha = data.sha;
-        } catch (error) {
-          if (!hasStatus(error, 404)) throw error;
-        }
-        await ctx.gh.rest.repos.createOrUpdateFileContents({
-          ...driftAddress,
-          path: driftPath,
-          message: "Exercise managed-file post-merge drift recovery",
-          content: Buffer.from(content).toString("base64"),
-          branch: "main",
-          ...(sha ? { sha } : {}),
-        });
-      };
-      const restoreDriftFile = async () => {
-        let sha: string | undefined;
-        try {
-          const { data } = await ctx.gh.rest.repos.getContent({ ...driftAddress, path: driftPath, ref: "main" });
-          assert(!Array.isArray(data) && data.type === "file", `${driftPath} is not a file during cleanup`);
-          sha = data.sha;
-        } catch (error) {
-          if (!hasStatus(error, 404)) throw error;
-        }
-        if (originalDriftContent === null) {
-          if (sha) await ctx.gh.rest.repos.deleteFile({ ...driftAddress, path: driftPath, message: "Restore managed-file drift e2e fixture", sha, branch: "main" });
-        } else {
-          assert(sha, `${driftPath} disappeared before cleanup`);
-          await ctx.gh.rest.repos.createOrUpdateFileContents({ ...driftAddress, path: driftPath, message: "Restore managed-file drift e2e fixture", content: Buffer.from(originalDriftContent).toString("base64"), sha, branch: "main" });
-        }
-      };
+      const driftFile = await clientMainFile(ctx, driftPath);
       const startedAt = new Date(Date.now() - 2_000);
       const drainManagedWorkflows = onceAsync(() => drainWorkflowRuns(ctx.gh, startedAt, { timeoutMs: 30 * 60_000 }));
       let observedPull: ManagedCompletionPull | undefined;
@@ -656,7 +652,7 @@ export const repoSettings: Scenario[] = [
       }, async () => withCleanup(async () => {
         releaseManagedMergeGate = await createManagedMergeGate(ctx);
         // The required check keeps the PR open until its first reservation is observable.
-        await writeDriftFile("managed by csm-ci e2e\n");
+        await driftFile.write("managed by csm-ci e2e\n");
         const initial = await dispatchReconciliation(ctx, CLIENT, "dispatch", undefined, { targets: "managed-files", createdRulesetIds, expectedConclusion: "failure" });
         assert(initial.stepConclusions.get("Apply managed files") === "success", `managed-files stage did not complete (${initial.url})`);
         observedPull = await until("automatic managed-files pull request", async () => {
@@ -696,7 +692,7 @@ export const repoSettings: Scenario[] = [
         const { data: heldPull } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: observedPull.number });
         assert(!heldPull.merged, "managed pull request merged despite the pending main-branch gate");
 
-        await writeDriftFile("drift introduced after the managed reservation was accepted\n");
+        await driftFile.write("drift introduced after the managed reservation was accepted\n");
         const { data: driftedBase } = await ctx.gh.rest.git.getRef({ ...splitRepository(CLIENT), ref: "heads/main" });
         const reconciled = await dispatchReconciliation(ctx, CLIENT, "dispatch", undefined, { targets: "managed-files", createdRulesetIds, expectedConclusion: "failure" });
         assert(reconciled.stepConclusions.get("Apply managed files") === "success", `managed-files retry did not complete after base drift (${reconciled.url})`);
@@ -731,7 +727,7 @@ export const repoSettings: Scenario[] = [
         assert(merged.merge_commit_sha, "managed pull request has no squash merge SHA");
         const mergedContent = await readFileAtRef(ctx.gh, splitRepository(CLIENT).owner, splitRepository(CLIENT).repo, "e2e/repo-settings-managed.txt", merged.merge_commit_sha);
         assert(mergedContent.content === "managed by csm-ci e2e\n", "merged commit does not contain the expected managed bytes");
-        const mergedDrift = await readFileAtRef(ctx.gh, driftAddress.owner, driftAddress.repo, driftPath, merged.merge_commit_sha);
+        const mergedDrift = await readFileAtRef(ctx.gh, splitRepository(CLIENT).owner, splitRepository(CLIENT).repo, driftPath, merged.merge_commit_sha);
         assert(mergedDrift.content === "managed by csm-ci e2e\n", "the replacement managed merge did not restore the desired bytes after base drift");
         assert(await managedBranchHead(ctx.gh, CLIENT) === undefined, "the managed branch remains after its pull request merged");
         const after = await snapshotRepository(ctx.gh, CLIENT, "observed");
@@ -753,7 +749,7 @@ export const repoSettings: Scenario[] = [
               if (head) await cleanupManagedState(ctx, head, observedPull ? { number: observedPull.number, headSha: observedPull.headSha } : undefined, CLIENT, ["e2e/repo-settings-managed.txt", driftPath]);
             }
           },
-          restoreDriftFile,
+          driftFile.restore,
           async () => { if (releaseManagedMergeGate) await releaseManagedMergeGate(); },
           () => restoreRepository(ctx.gh, CLIENT, snapshot, createdRulesetIds),
         ]) {
@@ -822,9 +818,13 @@ export const repoSettings: Scenario[] = [
       await ensureNoPreviousManagedState(ctx);
       const snapshot = await snapshotRepository(ctx.gh, CLIENT);
       const createdRulesetIds = new Set<number>();
+      const managedFile = await clientMainFile(ctx, "e2e/repo-settings-managed.txt");
       let observedHead: string | undefined;
       let managedPull: ManagedPull | undefined;
       await withCleanup(async () => {
+        // An earlier managed merge can leave the client in sync, so the scenario creates its own managed-file drift
+        // while the snapshot rulesets still allow the harness to write main.
+        await managedFile.write("drift before managed-files reconciliation\n");
         await makeSettingsDrift(ctx);
         const initial = await dispatchReconciliation(ctx, CLIENT, "dispatch", undefined, { createdRulesetIds });
         assert(initial.stepConclusions.get("Mint approver contents token") === "success", `client dispatch did not verify the Approver App installation (${initial.url})`);
@@ -912,6 +912,8 @@ export const repoSettings: Scenario[] = [
       }, [
         () => cleanupManagedState(ctx, observedHead, managedPull),
         () => restoreRepository(ctx.gh, CLIENT, snapshot, createdRulesetIds),
+        // Reconciled rulesets block direct writes to main, so restore the file after the snapshot rulesets.
+        managedFile.restore,
       ]);
 
       const serverSnapshot = await snapshotRepository(ctx.gh, SERVER);
