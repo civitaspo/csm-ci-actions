@@ -6,7 +6,7 @@ The `policy-check` operation evaluates the effective repository policies in `csm
 
 Closed pull requests skip evaluation and publication. Immediately before creating or updating a check, the server rereads the pull request and skips publication if it closed or its head changed. This also protects policy refreshes after approval. Skips leave existing checks untouched and the standalone action reports `result=skipped` with a reason in its log. An open pull request with no commits still fails both trust policies.
 
-The `signed-commits` and `trusted-committers` policies and the built-in `approval` row always run, even when omitted from configuration. `sensitive-paths` checks changed and renamed paths against the configured patterns. Include these default paths when you want the standard dependency, build, and workflow coverage:
+The `signed-commits` and `trusted-committers` policies and the built-in `approval` row always run, even when omitted from configuration. [`pull-request-title`](#pull-request-title-policy) checks the title against the Conventional Commit header form. `sensitive-paths` checks changed and renamed paths against the configured patterns. Include these default paths when you want the standard dependency, build, and workflow coverage:
 
 ```yaml
 paths:
@@ -46,9 +46,84 @@ The planned [managed-file automatic completion](repo-settings.md#automatic-compl
 
 The built-in `approval` row always runs. It passes only when the latest review by the configured approver is an approval for the current head. GitHub UI approvals by other accounts do not satisfy it, so a csm-ci automerge reservation needs the configured approver. A missing approval alone fails the check, but it neither creates a policy failure report nor prevents resolving an existing one.
 
-The `/approve` command first validates all trust and configured policies other than `sensitive-paths` and `approval`, then writes its marked approval, and finally refreshes `csm-ci/policy`. This provides the approval evidence required by `sensitive-paths` and `approval` without creating an approval cycle. Automatic approval and `/recheck` refresh the same check after their evaluation.
+The `/approve` command first validates all trust and configured policies other than `sensitive-paths`, `pull-request-title` and `approval`, then writes its marked approval, and finally refreshes `csm-ci/policy`. This provides the approval evidence required by `sensitive-paths` and `approval` without creating an approval cycle. The title is excluded for a different reason: it is not evidence about the code; see [where it runs](#where-it-runs). Automatic approval and `/recheck` refresh the same check after their evaluation.
 
 The client workflow runs on pull request open, synchronize, reopen, ready-for-review and edited events. It never checks out pull request code. `/recheck` also causes a fresh evaluation through the approve request path.
+
+## Pull request title policy
+
+csm-ci squash-merges with the pull request title as the commit subject, and releases build `CHANGELOG.md` from those subjects with git-cliff's Conventional Commit parser. The `pull-request-title` policy fails `csm-ci/policy` when the title is not a Conventional Commit header, so client repositories need no title workflow or third-party title action.
+
+```yaml
+policies:
+  - type: pull-request-title
+    types: [feat, fix, docs, refactor, test, ci, build, chore, perf, revert]
+```
+
+`types` is required. It is a non-empty list of unique types, each matching `^[a-z]+$`, and it must include `chore`, because csm-ci's own pull requests use it. The strict parser rejects any other key.
+
+The title passes when it matches `^(<types>)(\([a-z0-9-]+\))?!?: \S`, where `<types>` is the configured list. The title is matched as GitHub returns it; nothing is trimmed or rewritten.
+
+| Title | Result |
+| --- | --- |
+| `refactor: name the registration check after skipped files` | pass |
+| `chore(release): v0.1.0` | pass |
+| `feat!: drop the old option` | pass |
+| `chore(deps): update dependency bun to v1.4.5` | pass |
+| `Name test directories by scope` | fail: no type |
+| `feat:missing space` | fail: no space after the colon |
+| `fix(ci) : extra space` | fail: space before the colon |
+| `feature: unknown type` | fail: type not configured |
+| `feat(Policy): uppercase scope` | fail: scope outside `[a-z0-9-]` |
+| `Revert "feat: x"` | fail: GitHub's revert title; rename it to `revert: ...` |
+
+A failing row names the policy, quotes the title, and states the expected form with the configured types. The failure report tells the author to edit the title. Approval cannot change this result.
+
+### Enablement and scope
+
+The policy is opt-in. A server configuration without a `pull-request-title` entry produces no title row and keeps its current behavior. When the entry is present, it applies to every repository in that server's `repositories[]`, like a global `sensitive-paths` policy. There is no repository override: a `repositories[].pull_request_title` key is rejected as unknown. Add one only for a concrete need.
+
+### Where it runs
+
+`effectivePolicies` returns the configured policy for every caller of the shared resolver. Each evaluation reads the title from `GET /repos/{owner}/{repo}/pulls/{number}` with the Server App token during that evaluation. For check publication, the title comes from the read that confirms the pinned head just before policies are evaluated, never from the pull request facts read when the request started. The client event, label description and comment never supply it.
+
+| Path | Title evaluated | Effect of a failing title |
+| --- | --- | --- |
+| Standalone policy-check (`edited` included) | yes | `csm-ci/policy` fails and the failure report lists it |
+| Full refresh after automatic approval, `/recheck`, or `/approve` | yes | same as standalone policy-check |
+| Automatic approval and `/recheck` decision | no | does not decline the approval |
+| `/approve` preflight | no | does not reject the command |
+| Managed-file approval preflight | no | does not reject the approval |
+| Merge readiness, including the final evaluation before the write | yes | the reservation waits with `policies failed: pull-request-title: ...` |
+
+The title is metadata of the squash commit, not evidence about the code, so approval decisions ignore it, as `/approve` already ignores `sensitive-paths` and `approval` in its preflight. Approval never makes the row pass. Every full refresh publishes the title result in `csm-ci/policy`, and merge readiness requires it to pass, so a pull request with a failing title cannot merge through csm-ci.
+
+Ignoring the title in approval decisions keeps recovery to one step. The approve caller does not run on `edited`, so if a failing title declined automatic approval, editing the title would leave the approval missing until `/recheck`. Instead the head is approved on its merits, the author edits the title, and the `edited` event's standalone policy-check publishes a passing result for the same head without `/recheck`. Policy-check shares the repository-and-PR concurrency group with approve. A newer pending run replaces an older pending one, so the run that executes after an earlier evaluation finishes reads the latest title.
+
+### The validated title is the commit subject
+
+GitHub's merge API takes `sha` to bind the head, but nothing binds the title, and the title can change at any time. csm-ci passes the commit title explicitly. The squash commit title is the pull request title that the final readiness evaluation read and validated, plus ` (#<number>)`. That evaluation is the one that runs after GitHub auto-merge is disabled and immediately before the merge write. Each revalidation before a retry of HTTP 405, 422, or 503 supplies the title for that retry. A title read at any other point, including one read before the final evaluation, is never used for the commit.
+
+A title edited after the final evaluation does not reach the commit. The merged commit carries the validated title, and the pull request may then show a different title. A title edited before the final evaluation is validated by it: a failing title stops the merge and the reservation waits; a passing title becomes the subject.
+
+The ` (#<number>)` suffix keeps a passing title passing, because the pattern constrains only the header prefix.
+
+### csm-ci's own pull requests
+
+csm-ci creates and titles these pull requests. Each title passes whenever `types` includes `chore`, which the parser requires.
+
+| Pull request | Title | Source |
+| --- | --- | --- |
+| Release PR (`release/next`) | `chore(release): v<version>` | `actions/client/release-prepare/action.yml` sets the commit message; the `release-pr` securefix route uses its subject without a route prefix (`src/lib/securefix-operation.ts`, [release-pr](release-pr.md)) |
+| Managed-file PR (`csm-ci/repo-settings`) | `chore(repo-settings): sync managed files` | `MANAGED_FILES_TITLE` in `src/lib/managed-files.ts`, restored on every run ([repo-settings](repo-settings.md)) |
+
+Other securefix routes are titled `<route name>: <subject>`. Such a pull request passes only when the route name is one of `types` and the subject starts with a non-space character. Name a route after a type, such as `chore`, when its pull requests must merge with the policy enabled. securefix PR mode does not create or retitle pull requests.
+
+### Verification requirements for the implementation
+
+Add the variant to `PolicySchema` and an evaluator registered in `EVALUATORS`. Cover every title in the table above and every parser rule in table-driven tests that assert the rejection message. Prove that automatic approval, `/recheck`, `/approve` preflight, and managed approval preflight ignore a failing title, and that the full refresh and merge readiness fail on it. Prove that the merge write uses the title from the final evaluation: a title changed after the first readiness evaluation and before the final one must be validated before it is used, and a title read before the final evaluation must never reach `commit_title`. Mutation-check each new rule individually.
+
+Enable the policy in the e2e server fixture. Its PR titles and the `e2e-route` securefix route title must then pass, or every scenario fails `csm-ci/policy`. Add live scenarios for a failing title, an `edited` fix that passes without `/recheck`, and a title edited after approval but before merge.
 
 ## Repository policy configuration
 
