@@ -504,6 +504,33 @@ describe("evaluateReservation", () => {
     expect(deploymentsFetch.calls).not.toContain("POST /repos/owner/server/deployments/77/statuses");
   });
 
+  test("an unchanged managed wait longer than a status description writes no second status", async () => {
+    const titled = parseConfig(CONFIG_YAML.replace("  - { type: trusted-committers }\n", "  - { type: trusted-committers }\n  - { type: pull-request-title, types: [chore] }\n"));
+    const managed = (statuses: unknown[] = []) => {
+      const { ctx, payload, deploymentsFetch } = setup("/merge", { id: 10, login: "alice", type: "User" }, true, { payload: managedPayload, pull: { title: "Sync managed files" }, statuses: statuses as never });
+      ctx.config = titled;
+      ctx.reloadConfig = async () => titled;
+      ctx.attestManagedPull = async () => ({
+        repositoryId: managedPayload.repository_id, repository: managedPayload.repository, pullNumber: managedPayload.pull_number, pullNodeId: managedPayload.pull_node_id,
+        baseRef: managedPayload.base_ref, baseSha: managedPayload.accepted_base, headSha: managedPayload.accepted_head, configSha: managedPayload.configuration_sha,
+        releaseSha: managedPayload.release_sha, releaseVersion: managedPayload.release_version, manifestDigest: managedPayload.manifest_digest,
+      });
+      ctx.managedPolicySource = async (): Promise<ManagedPullSourceContext> => ({ source: ctx.server, serverRepository: "owner/server", configSha: managedPayload.configuration_sha, configPath: "csm-ci.yaml", workflowRelease: { version: managedPayload.release_version, sha: managedPayload.release_sha } });
+      ctx.verifyManagedMerge = async () => ({ matches: true });
+      const record = { deploymentId: 77, nodeId: "D_node", createdAt: "2026-10-20T00:00:00Z", payload: payload as never, statuses: [], state: { kind: "active" as const } };
+      return { ctx, record, deploymentsFetch };
+    };
+    const first = managed();
+    expect((await evaluateReservation(first.ctx, first.record)).decision.kind).toBe("wait");
+    const written = first.deploymentsFetch.requests.filter((r) => r.method === "POST" && r.path === "/repos/owner/server/deployments/77/statuses");
+    expect(written).toHaveLength(1);
+    const stored = z.object({ description: z.string() }).parse(JSON.parse(written[0]?.body ?? "{}")).description;
+    expect(Array.from(stored)).toHaveLength(140);
+    const second = managed([{ id: 99, state: "queued", description: stored, created_at: "2026-10-24T11:30:00Z", creator: { id: 3000, type: "Bot" } }]);
+    expect((await evaluateReservation(second.ctx, second.record)).decision.kind).toBe("wait");
+    expect(second.deploymentsFetch.calls).not.toContain("POST /repos/owner/server/deployments/77/statuses");
+  });
+
   test("reuses the verified attestation during policy evaluation and retains the reservation's release pin", async () => {
     const { ctx, payload, serverFetch } = setup("/merge", { id: 10, login: "alice", type: "User" }, true, { payload: managedPayload });
     const attestationArgs: Parameters<NonNullable<MergeContext["attestManagedPull"]>>[0][] = [];
@@ -976,6 +1003,22 @@ describe("pull request title at merge", () => {
     const evaluation = await evaluateReservation(ctx, record);
     expect(evaluation.decision).toEqual({ kind: "wait", reason: `policies failed: pull-request-title: title "Add a change" is not a Conventional Commit header; edit it to <type>[(<scope>)][!]: <subject> with type one of feat, fix, chore` });
     expect(evaluation.commit).toBeUndefined();
+  });
+
+  test("an unchanged title wait longer than a status description writes no second status", async () => {
+    const first = ready("Add a change", []);
+    await evaluateReservation(first.ctx, first.record);
+    const written = first.deploymentsFetch.requests.filter((r) => r.method === "POST" && r.path === "/repos/owner/server/deployments/77/statuses");
+    expect(written).toHaveLength(1);
+    const stored = z.object({ description: z.string() }).parse(JSON.parse(written[0]?.body ?? "{}")).description;
+    expect(Array.from(stored)).toHaveLength(140);
+    const queued = { id: 99, state: "queued", description: stored, created_at: "2026-10-24T11:30:00Z", creator: { id: 3000, type: "Bot" } };
+    const { ctx, deploymentsFetch, payload } = setup("/merge", { id: 10, login: "alice", type: "User" }, true, { commentId: 9, pull: { title: "Add a change" }, statuses: [queued], payload: { merger: { id: 10, login: "alice", type: "User" } } });
+    ctx.config = titled;
+    ctx.reloadConfig = async () => titled;
+    const record = { deploymentId: 77, nodeId: "D_node", createdAt: "2026-10-20T00:00:00Z", payload: payload as never, statuses: [], state: { kind: "active" as const } };
+    expect((await evaluateReservation(ctx, record)).decision.kind).toBe("wait");
+    expect(deploymentsFetch.calls).not.toContain("POST /repos/owner/server/deployments/77/statuses");
   });
 
   test("the squash commit title is the one the final evaluation validated, not an earlier read", async () => {

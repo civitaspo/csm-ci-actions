@@ -539,6 +539,12 @@ export async function postComment(ctx: Ctx, pr: Pr, body: string, as: GitHub = c
   return { id: Number(data.id), since, authorAssociation: data.author_association ?? "" };
 }
 
+export async function editPrTitle(ctx: Ctx, pr: Pr, title: string): Promise<Date> {
+  const since = new Date(Date.now() - 2_000);
+  await ctx.gh.rest.pulls.update({ ...splitRepository(CLIENT), pull_number: pr.number, title });
+  return since;
+}
+
 export async function approverReviews(ctx: Ctx, pr: Pr): Promise<{ id: number; state: string; commit_id: string | null; body: string }[]> {
   const reviews = await ctx.gh.paginate(ctx.gh.rest.pulls.listReviews, { ...splitRepository(CLIENT), pull_number: pr.number, per_page: 100 });
   return reviews.filter((r) => r.user?.login === APPROVER_LOGIN).map((r) => ({ id: Number(r.id), state: r.state, commit_id: r.commit_id, body: r.body }));

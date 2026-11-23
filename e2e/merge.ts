@@ -8,7 +8,7 @@ import { marker } from "../src/lib/notify.ts";
 import { automergeMarker } from "../src/lib/automerge.ts";
 import { parseConfig } from "../src/lib/config.ts";
 import { splitRepository } from "../src/lib/github.ts";
-import { approverReviews, assert, CLIENT, closePr, dispatch, expectOp, openPr, type Pr, postComment, prCase as caseIntent, type Scenario, SERVER, SERVER_BOT_ID, serverComments, until, withServerConfig } from "./harness.ts";
+import { approverReviews, assert, editPrTitle, CLIENT, closePr, dispatch, expectOp, openPr, type Pr, postComment, prCase as caseIntent, type Scenario, SERVER, SERVER_BOT_ID, serverComments, until, withServerConfig } from "./harness.ts";
 
 const TEST_BOT_ID = 347402450;
 const TEST_BOT_LOGIN = "testing-csm-ci-untrusted-committer[bot]";
@@ -332,14 +332,10 @@ export async function withPendingRequiredCheck(ctx: Parameters<Scenario["run"]>[
 }
 
 // Platform auto-merge requires the branch rules to enforce csm-ci/policy; the shared fixture ruleset may lack it.
-async function editTitle(ctx: Parameters<Scenario["run"]>[0], pr: Pr, title: string): Promise<void> {
-  await ctx.gh.rest.pulls.update({ ...splitRepository(CLIENT), pull_number: pr.number, title });
-}
-
 export const merge: Scenario[] = [
   automergeScenario("title-edited-after-approval", "A title edited to fail after approval holds the reservation, and the fixed title becomes the commit subject", async (ctx) => withSignedPr(ctx, async (pr) => {
     const id = randomUUID().slice(0, 8);
-    await editTitle(ctx, pr, `Edited e2e title ${id}`);
+    await editPrTitle(ctx, pr, `Edited e2e title ${id}`);
     await until("the failing title in csm-ci/policy", async () => {
       const checks = await ctx.gh.paginate(ctx.gh.rest.checks.listForRef, { ...splitRepository(CLIENT), ref: pr.head, per_page: 100 });
       return checks.some((check) => check.name === "csm-ci/policy" && check.external_id === pr.head && check.conclusion === "failure" && check.output?.summary?.includes("| pull-request-title | fail |")) ? true : undefined;
@@ -352,7 +348,7 @@ export const merge: Scenario[] = [
     });
     await noMerge(ctx, pr);
     const title = `fix(e2e): validated title ${id}`;
-    await editTitle(ctx, pr, title);
+    await editPrTitle(ctx, pr, title);
     await until("the fixed title in csm-ci/policy", async () => {
       const checks = await ctx.gh.paginate(ctx.gh.rest.checks.listForRef, { ...splitRepository(CLIENT), ref: pr.head, per_page: 100 });
       return checks.some((check) => check.name === "csm-ci/policy" && check.external_id === pr.head && check.conclusion === "success") ? true : undefined;

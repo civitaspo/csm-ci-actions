@@ -5,7 +5,7 @@ import { fetchComment } from "./approve.ts";
 import { escapeHtml, hasServerMarker, marker, postResult, receiptFooter, type ServerRun } from "./notify.ts";
 import { Rejection } from "./request.ts";
 import { evaluateTrust, fetchCommitFacts } from "./trust.ts";
-import { AUTOMERGE_LABEL, automergeMarker, canCancelReservation, decide, ReservationPayloadSchema, terminalDescription, type Decision, type ReservationPayload } from "./automerge.ts";
+import { AUTOMERGE_LABEL, automergeMarker, canCancelReservation, decide, ReservationPayloadSchema, terminalDescription, truncateDeploymentDescription, type Decision, type ReservationPayload } from "./automerge.ts";
 import { createReservation, createReservationStatus, findReservationsForPull, type ReservationRecord } from "./automerge-github.ts";
 import { createAutomergeDisplayCommit } from "./automerge-display-commit.ts";
 import { type GitHub, isNetworkFailure, splitRepository } from "./github.ts";
@@ -485,7 +485,7 @@ export async function evaluateReservation(ctx: MergeContext, record: Reservation
     if (latest.state.kind === "active") {
       await postAutomergeComment(targetContext, latest, "accepted", `Managed-file merge reserved until ${latest.payload.expires_at}. It requires the current managed manifest, approval, policies, and checks. Cancel with /merge cancel. The ${AUTOMERGE_LABEL} label shows the reservation state.`, latest.payload.accepted_head);
     }
-    if (decision.kind !== "merge" && (decision.kind === "terminal" || latest.state.kind !== "active" || latest.state.waitingReason !== decision.reason)) {
+    if (decision.kind !== "merge" && (decision.kind === "terminal" || latest.state.kind !== "active" || latest.state.waitingReason !== truncateDeploymentDescription(decision.reason))) {
       const statusDescription = decision.kind === "terminal" ? terminalDescription(decision.reason, decision.description) : decision.reason;
       await createReservationStatus({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, deploymentId: latest.deploymentId, serverRunUrl: runUrl(ctx.serverRun), pullUrl: pullUrl(ctx.serverRun.serverUrl, targetContext.repository, pull.number), state: decision.kind === "terminal" ? decision.state : "queued", description: statusDescription });
     }
@@ -515,7 +515,7 @@ export async function evaluateReservation(ctx: MergeContext, record: Reservation
   }
   const statusValue = decision.kind === "terminal" ? decision.state : "queued";
   const description = decision.kind === "terminal" ? decision.description : decision.kind === "wait" ? decision.reason : undefined;
-  if (latest.state.kind === "active" && decision.kind !== "merge" && (statusValue !== "queued" || latest.state.waitingReason !== description)) {
+  if (latest.state.kind === "active" && decision.kind !== "merge" && (statusValue !== "queued" || latest.state.waitingReason !== truncateDeploymentDescription(description ?? ""))) {
     const statusDescription = decision.kind === "terminal" ? terminalDescription(decision.reason, description ?? "") : description ?? "";
     await createReservationStatus({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, deploymentId: latest.deploymentId, serverRunUrl: runUrl(ctx.serverRun), pullUrl: pullUrl(ctx.serverRun.serverUrl, targetContext.repository, pull.number), state: statusValue, description: statusDescription });
   }

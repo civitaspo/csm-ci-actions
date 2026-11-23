@@ -6,6 +6,10 @@ import { annotatedBody, annotatePr, assertGeneratedMetadata, assertManagedMetada
 import { SCENARIOS } from "./scenarios.ts";
 import { testIntent, testMetadata, testRun } from "./test-metadata.ts";
 import { MANAGED_FILES_TITLE } from "../src/lib/managed-files.ts";
+import { readFileSync } from "node:fs";
+import { parseConfig } from "../src/lib/config.ts";
+import type { PolicyContext } from "../src/lib/policies/index.ts";
+import { pullRequestTitle } from "../src/lib/policies/pull-request-title.ts";
 
 const repo = `/repos/${CLIENT}`;
 const scenario = (feature: keyof typeof SCENARIOS, id: string) => {
@@ -48,6 +52,15 @@ describe("PR intent catalog", () => {
     }
     expect(skippedCases).toBeGreaterThan(0);
     expect(catalog.size).toBe(LABEL_CATALOG.length);
+  });
+
+  test("every harness PR title passes the fixture's pull-request-title policy", () => {
+    const fixture = parseConfig(readFileSync(new URL("./fixtures/testing-csm-ci-server/csm-ci.yaml", import.meta.url), "utf8"));
+    const policy = fixture.policies.find((item) => item.type === "pull-request-title");
+    if (policy?.type !== "pull-request-title") throw new Error("the fixture does not enable pull-request-title");
+    const failures = Object.entries(SCENARIOS).flatMap(([feature, scenarios]) => scenarios.flatMap((item) => Object.values(item.cases).map((intent) =>
+      pullRequestTitle(policy, { title: prTitle({ ...testRun, feature: feature as typeof testRun.feature }, intent, "e2e-fixture") } as PolicyContext)))).flat();
+    expect(failures).toEqual([]);
   });
 
   test("PR-producing paths stay declared and no-PR scenarios remain empty", () => {

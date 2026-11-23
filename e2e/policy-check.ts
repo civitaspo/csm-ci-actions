@@ -24,6 +24,7 @@ import {
   type Ctx,
   closePr,
   approverReviews,
+  editPrTitle,
 } from "./harness.ts";
 
 const SERVER_APP_ID = 5455185;
@@ -107,12 +108,6 @@ async function policyReports(ctx: Ctx, pr: Pr) {
   return reports;
 }
 
-async function editTitle(ctx: Ctx, pr: Pr, title: string): Promise<Date> {
-  const since = new Date(Date.now() - 2_000);
-  await ctx.gh.rest.pulls.update({ ...splitRepository(CLIENT), pull_number: pr.number, title });
-  return since;
-}
-
 async function checkAfter(ctx: Ctx, pr: Pr, since: Date, conclusion: "success" | "failure"): Promise<PolicyCheck> {
   await expectOp(ctx, { kind: "policy-check", repository: CLIENT, args: { pull_number: pr.number } }, since, "success");
   return until(`a ${conclusion} csm-ci/policy check for ${pr.head} after ${since.toISOString()}`, async () => {
@@ -144,7 +139,7 @@ export const policyCheck: Scenario[] = [
         await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: command.id } }, command.since, "success");
         const afterApprove = await checkForHead(ctx, pr);
         assert(afterApprove.conclusion === "failure" && afterApprove.output?.summary?.includes("| pull-request-title | fail |"), "/approve cleared the failing title");
-        const edited = await editTitle(ctx, pr, `test(e2e): fix the title fixture ${id}`);
+        const edited = await editPrTitle(ctx, pr, `test(e2e): fix the title fixture ${id}`);
         const fixed = await checkAfter(ctx, pr, edited, "success");
         assert(fixed.output?.summary?.includes("| pull-request-title | pass |"), "the edited title did not pass");
         await until("the title failure report is resolved", async () => {
