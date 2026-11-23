@@ -57,13 +57,13 @@ describe("pull-request-title configuration", () => {
   });
 
   test.each([
-    ["missing types", "  - { type: pull-request-title }", "types"],
-    ["empty types", "  - { type: pull-request-title, types: [] }", "Too small"],
+    ["missing types", "  - { type: pull-request-title }", "Invalid input: expected array, received undefined"],
+    ["empty types", "  - { type: pull-request-title, types: [] }", "Too small: expected array to have >=1 items"],
     ["a type outside ^[a-z]+$", "  - { type: pull-request-title, types: [chore, feat-x] }", "must match ^[a-z]+$"],
     ["an uppercase type", "  - { type: pull-request-title, types: [chore, Feat] }", "must match ^[a-z]+$"],
     ["a duplicate type", "  - { type: pull-request-title, types: [chore, feat, feat] }", "duplicate type"],
     ["types without chore", "  - { type: pull-request-title, types: [feat, fix] }", "must include chore, which csm-ci's own pull requests use"],
-    ["an unknown key", "  - { type: pull-request-title, types: [chore], scopes: [ci] }", "scopes"],
+    ["an unknown key", "  - { type: pull-request-title, types: [chore], scopes: [ci] }", "Unrecognized key: \\\"scopes\\\""],
     ["a second entry", "  - { type: pull-request-title, types: [chore] }\n  - { type: pull-request-title, types: [chore, feat] }", "at most one pull-request-title policy"],
   ])("rejects %s", (_name, entry, message) => {
     expect(() => parseConfig(withPolicy(entry))).toThrow(message);

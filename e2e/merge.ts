@@ -353,6 +353,10 @@ export const merge: Scenario[] = [
     await noMerge(ctx, pr);
     const title = `fix(e2e): validated title ${id}`;
     await editTitle(ctx, pr, title);
+    await until("the fixed title in csm-ci/policy", async () => {
+      const checks = await ctx.gh.paginate(ctx.gh.rest.checks.listForRef, { ...splitRepository(CLIENT), ref: pr.head, per_page: 100 });
+      return checks.some((check) => check.name === "csm-ci/policy" && check.external_id === pr.head && check.conclusion === "success") ? true : undefined;
+    });
     await waitForCsmMerge(ctx, pr, pr.head);
     const { data: merged } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
     assert(merged.merge_commit_sha, `pull request #${pr.number} has no merge commit`);
