@@ -28,7 +28,7 @@ function context(files: unknown[], extra: Overrides = {}): PolicyContext {
     { method: "POST", path: "/graphql", ...(extra.graphqlStatus === undefined ? {} : { status: extra.graphqlStatus }), body: { data: { node: extra.sourceNode === undefined ? { databaseId: 9, lastEditedAt: extra.lastEditedAt ?? null } : extra.sourceNode } } },
   ]));
   const trust: TrustResult = { head: "head", problems: [], commits: [{ sha: "head", signed: true, identity: { kind: "user", principal: alice }, trusted: true }] };
-  return { trust, gh, config: config(), repository: "owner/repo", pullNumber: 1, head: "head", authorId: 10, ...(extra.authorId === undefined ? {} : { authorId: extra.authorId }), ...(extra.trust ? { trust: extra.trust } : {}), ...(extra.commandApproval ? { commandApproval: extra.commandApproval } : {}) };
+  return { trust, gh, config: config(), repository: "owner/repo", pullNumber: 1, head: "head", authorId: 10, title: "feat: add a change", ...(extra.authorId === undefined ? {} : { authorId: extra.authorId }), ...(extra.trust ? { trust: extra.trust } : {}), ...(extra.commandApproval ? { commandApproval: extra.commandApproval } : {}) };
 }
 
 describe("sensitive-paths", () => {

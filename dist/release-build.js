@@ -14931,7 +14931,11 @@ var OPS = ["approve", "merge", "policy-check", "securefix", "release"];
 var PolicySchema = discriminatedUnion("type", [
   strictObject({ type: literal("signed-commits") }),
   strictObject({ type: literal("trusted-committers") }),
-  strictObject({ type: literal("sensitive-paths"), paths: array(string2().min(1)), exempt: array(Principal).default([]) })
+  strictObject({ type: literal("sensitive-paths"), paths: array(string2().min(1)), exempt: array(Principal).default([]) }),
+  strictObject({
+    type: literal("pull-request-title"),
+    types: array(string2().regex(/^[a-z]+$/, "must match ^[a-z]+$")).min(1).refine((types) => new Set(types).size === types.length, "duplicate type").refine((types) => types.includes("chore"), "must include chore, which csm-ci's own pull requests use")
+  })
 ]);
 var SecurefixPathRule = _enum(["any", "semver", "version-only"]);
 var SecurefixRoute = strictObject({
@@ -15038,7 +15042,7 @@ var ConfigSchema = strictObject({
   merge: strictObject({
     required_checks: array(strictObject({ name: string2().min(1), app_id: Id }))
   }),
-  policies: array(PolicySchema),
+  policies: array(PolicySchema).refine((policies) => policies.filter((policy) => policy.type === "pull-request-title").length <= 1, "at most one pull-request-title policy"),
   securefix: SecurefixSchema.optional(),
   repo_settings: RepoSettings.optional(),
   repositories: array(RepositoryEntry).min(1)

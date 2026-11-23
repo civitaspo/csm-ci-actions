@@ -34,7 +34,8 @@ export type MergeContext = {
   serverRun: ServerRun;
   now: () => Date;
 };
-export type Evaluation = { decision: Decision; ready: boolean; head: string; reservation: ReservationRecord; repository: string };
+// commit carries the title and body that this evaluation read and validated; the merge write uses only it.
+export type Evaluation = { decision: Decision; ready: boolean; head: string; reservation: ReservationRecord; repository: string; commit?: { title: string; message: string } };
 export type MergeOutcome = { result: "merged"; head: string; mergeCommit: string };
 export type MergeAcceptancePreparation =
   | { kind: "accept"; pull: MergePullFacts; comment: CommentFacts; merger: Principal; mode: Extract<ReservationPayload, { version: 1 }>["mode"] }
@@ -493,7 +494,7 @@ export async function evaluateReservation(ctx: MergeContext, record: Reservation
     }
     const newerActive = current.some((item) => item.deploymentId !== latest.deploymentId && item.state.kind === "active" && Date.parse(item.createdAt) > Date.parse(latest.createdAt));
     await setLabel(targetContext, pull.number, newerActive || decision.kind !== "terminal" || decision.state === "success");
-    return { decision, ready: decision.kind === "merge", head: decision.kind === "merge" ? decision.head : pull.headSha, reservation: latest, repository: targetContext.repository };
+    return { decision, ready: decision.kind === "merge", head: decision.kind === "merge" ? decision.head : pull.headSha, reservation: latest, repository: targetContext.repository, ...(decision.kind === "merge" ? { commit: commitText(pull) } : {}) };
   }
   const humanPayload = record.payload;
   if (humanPayload.version !== 1) throw new Rejection("managed reservation changed during evaluation");
@@ -524,7 +525,7 @@ export async function evaluateReservation(ctx: MergeContext, record: Reservation
   }
   const newerActive = current.some((item) => item.deploymentId !== latest.deploymentId && item.state.kind === "active" && Date.parse(item.createdAt) > Date.parse(latest.createdAt));
   await setLabel(targetContext, pull.number, newerActive || decision.kind !== "terminal" || decision.state === "success");
-  return { decision, ready: decision.kind === "merge", head: decision.kind === "merge" ? decision.head : pull.headSha, reservation: latest, repository: targetContext.repository };
+  return { decision, ready: decision.kind === "merge", head: decision.kind === "merge" ? decision.head : pull.headSha, reservation: latest, repository: targetContext.repository, ...(decision.kind === "merge" ? { commit: commitText(pull) } : {}) };
 }
 
 async function persistTerminal(ctx: MergeContext, record: ReservationRecord, repository: string, decision: Extract<Decision, { kind: "terminal" }>, current: readonly ReservationRecord[], suppressClientWrites = false): Promise<Evaluation> {
@@ -579,10 +580,9 @@ export async function mergeReservation(ctx: MergeContext, record: ReservationRec
     throw new Rejection(`pull request #${pull.number} was merged outside csm-ci`);
   }
   if (await fetchAutoMergeRequest(ctx.server, evaluated.repository, pull.number)) throw new Rejection(`GitHub auto-merge is still enabled for pull request #${pull.number}`);
-  const commit = commitText(pull);
   const latest = await evaluateReservation(targetContext, record);
-  if (latest.decision.kind !== "merge" || latest.decision.head !== head) throw new Rejection("merge readiness changed after disabling auto-merge");
-  const { title, message } = commit;
+  if (latest.decision.kind !== "merge" || latest.decision.head !== head || !latest.commit) throw new Rejection("merge readiness changed after disabling auto-merge");
+  let { title, message } = latest.commit;
   let mergedSha: string | undefined;
   for (let attempt = 0; ; attempt++) {
     try {
@@ -620,7 +620,8 @@ export async function mergeReservation(ctx: MergeContext, record: ReservationRec
       }
       if (![405, 422, 503].includes(code ?? 0) || attempt >= 2) throw error;
       const check = await evaluateReservation(targetContext, record);
-      if (check.decision.kind !== "merge" || check.decision.head !== head) throw new Rejection("merge readiness changed before retry");
+      if (check.decision.kind !== "merge" || check.decision.head !== head || !check.commit) throw new Rejection("merge readiness changed before retry");
+      ({ title, message } = check.commit);
     }
   }
   if (!mergedSha) throw new Error("merge completed without a commit SHA");

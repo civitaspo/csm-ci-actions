@@ -342,8 +342,8 @@ export type ReleaseBuildType = Release["build_type"];
 
 // signed: createCommitOnBranch, which GitHub signs as web-flow for the token's user.
 // Otherwise the REST contents API, whose commits GitHub leaves unsigned.
-export async function openPr(ctx: Ctx, options: { intent: PrIntent; kind: "signed" | "unsigned"; as?: GitHub; author?: { name: string; email: string } | undefined; prAs?: GitHub; filePath?: string | undefined; draft?: boolean; fileContent?: string; baseRef?: string }): Promise<Pr> {
-  const { intent, kind, as = ctx.gh, author, prAs = ctx.gh, filePath, draft = false, fileContent, baseRef = "main" } = options;
+export async function openPr(ctx: Ctx, options: { intent: PrIntent; kind: "signed" | "unsigned"; as?: GitHub; author?: { name: string; email: string } | undefined; prAs?: GitHub; filePath?: string | undefined; draft?: boolean; title?: string; fileContent?: string; baseRef?: string }): Promise<Pr> {
+  const { intent, kind, as = ctx.gh, author, prAs = ctx.gh, filePath, draft = false, fileContent, baseRef = "main", title } = options;
   const repo = splitRepository(CLIENT);
   const base = (await ctx.gh.rest.repos.getBranch({ ...repo, branch: baseRef })).data.commit.sha;
   const branch = `e2e-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
@@ -374,7 +374,7 @@ export async function openPr(ctx: Ctx, options: { intent: PrIntent; kind: "signe
     });
     head = data.commit.sha ?? "";
   }
-  const { data: pr } = await prAs.rest.pulls.create({ ...repo, base: baseRef, head: branch, title: prTitle(ctx.run, intent, branch), body: prBody(ctx.run, intent), ...(draft ? { draft: true } : {}) });
+  const { data: pr } = await prAs.rest.pulls.create({ ...repo, base: baseRef, head: branch, title: title ?? prTitle(ctx.run, intent, branch), body: prBody(ctx.run, intent), ...(draft ? { draft: true } : {}) });
   const owned = { number: pr.number, head, branch, baseRef };
   ctx.urls.push(pr.html_url);
   try { await labelPr(ctx.gh, CLIENT, pr.number, ctx.run, intent); }

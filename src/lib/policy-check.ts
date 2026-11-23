@@ -40,7 +40,7 @@ async function evaluatePoliciesWithManagedState(
   const policies = effectivePolicies(ctx.config, ctx.repository);
   const policyContext = {
     trust, gh: ctx.server, config: ctx.config, repository: ctx.repository,
-    pullNumber: ctx.pull.number, head: ctx.pull.headSha, authorId: ctx.pull.authorId,
+    pullNumber: ctx.pull.number, head: ctx.pull.headSha, authorId: ctx.pull.authorId, title: ctx.pull.title,
     ...(commandApproval ? { commandApproval } : {}),
   };
   const results = await evaluatePolicies(policies.filter((policy) => !(managedAttestation && policy.type === "sensitive-paths")), policyContext);
@@ -132,7 +132,7 @@ export async function updatePolicyCheck(ctx: PublicationContext): Promise<Policy
   if (current.state !== "open") return { result: "skipped", reason: `#${ctx.pull.number} closed before policy publication` };
   if (current.head.sha !== ctx.pull.headSha) return { result: "skipped", reason: `#${ctx.pull.number} head moved before policy publication` };
   // Read provenance and all policy inputs after confirming the pinned head, close to publication.
-  const policies = await evaluatePullPolicies(ctx);
+  const policies = await evaluatePullPolicies({ ...ctx, pull: { ...ctx.pull, title: current.title } });
   const approved = await approverApprovedHead(ctx.server, ctx.config, ctx.repository, ctx.pull);
   const results: PolicyResult[] = [...policies, { type: "approval", ok: approved, problems: approved ? [] : [`${ctx.config.approver.login} has not approved head ${ctx.pull.headSha}`] }];
   const ok = results.every((r) => r.ok);

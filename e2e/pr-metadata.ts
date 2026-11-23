@@ -71,7 +71,8 @@ export function prLabels(feature: Feature, intent: PrIntent): string[] {
   return ["e2e", `e2e:${feature}`, `case:${intent.classification}`, ...new Set(intent.checks.map((check) => `check:${check}`))];
 }
 export function prTitle(run: RunMetadata, intent: PrIntent, fixture: string): string {
-  return `[e2e][${run.feature}][${intent.classification}] ${intent.title.replace(/[\r\n]+/g, " ")} — ${fixture}`;
+  // The server fixture enables pull-request-title, so harness titles are Conventional Commit headers.
+  return `test(e2e): ${intent.title.replace(/[\r\n]+/g, " ")} [${run.feature}][${intent.classification}] — ${fixture}`;
 }
 export function prBody(run: RunMetadata, intent: PrIntent): string {
   const text = escapeText;

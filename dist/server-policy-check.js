@@ -32738,7 +32738,11 @@ var OPS = ["approve", "merge", "policy-check", "securefix", "release"];
 var PolicySchema = discriminatedUnion("type", [
   strictObject({ type: literal("signed-commits") }),
   strictObject({ type: literal("trusted-committers") }),
-  strictObject({ type: literal("sensitive-paths"), paths: array(string2().min(1)), exempt: array(Principal).default([]) })
+  strictObject({ type: literal("sensitive-paths"), paths: array(string2().min(1)), exempt: array(Principal).default([]) }),
+  strictObject({
+    type: literal("pull-request-title"),
+    types: array(string2().regex(/^[a-z]+$/, "must match ^[a-z]+$")).min(1).refine((types) => new Set(types).size === types.length, "duplicate type").refine((types) => types.includes("chore"), "must include chore, which csm-ci's own pull requests use")
+  })
 ]);
 var SecurefixPathRule = _enum(["any", "semver", "version-only"]);
 var SecurefixRoute = strictObject({
@@ -32845,7 +32849,7 @@ var ConfigSchema = strictObject({
   merge: strictObject({
     required_checks: array(strictObject({ name: string2().min(1), app_id: Id }))
   }),
-  policies: array(PolicySchema),
+  policies: array(PolicySchema).refine((policies) => policies.filter((policy) => policy.type === "pull-request-title").length <= 1, "at most one pull-request-title policy"),
   securefix: SecurefixSchema.optional(),
   repo_settings: RepoSettings.optional(),
   repositories: array(RepositoryEntry).min(1)
@@ -37116,11 +37120,20 @@ function trustedCommitters(_, { trust }) {
   ];
 }
 
+// src/lib/policies/pull-request-title.ts
+function pullRequestTitle(policy, { title }) {
+  const header = new RegExp(`^(${policy.types.join("|")})(\\([a-z0-9-]+\\))?!?: \\S`);
+  if (header.test(title))
+    return [];
+  return [`title ${JSON.stringify(title)} is not a Conventional Commit header; edit it to <type>[(<scope>)][!]: <subject> with type one of ${policy.types.join(", ")}`];
+}
+
 // src/lib/policies/index.ts
 var EVALUATORS = {
   "signed-commits": signedCommits,
   "trusted-committers": trustedCommitters,
-  "sensitive-paths": sensitivePaths
+  "sensitive-paths": sensitivePaths,
+  "pull-request-title": pullRequestTitle
 };
 async function evaluatePolicies(policies, ctx) {
   return Promise.all(policies.map(async (policy) => {
@@ -37236,7 +37249,9 @@ function policyFailureContent(results) {
     const details = results.filter((r) => !r.ok && r.type === type).flatMap((r) => r.problems).join("; ");
     return `- ${type}: <code>${escapeDetail(details, Math.floor(5700 / Math.max(failures.length, 1)) - 100)}</code>`;
   });
-  const guidance = failures.includes("sensitive-paths") ? "For sensitive changes, obtain the required trusted approver's `/approve` evidence for this head. " : "";
+  const sensitive = failures.includes("sensitive-paths") ? "For sensitive changes, obtain the required trusted approver's `/approve` evidence for this head. " : "";
+  const title = failures.includes("pull-request-title") ? "Edit the pull request title. With the `policy-check` operation enabled, the edit re-runs the check; otherwise use `/recheck`. " : "";
+  const guidance = sensitive + title;
   return `csm-ci: Policy check failed.
 
 ${rows.join(`
@@ -38452,6 +38467,7 @@ async function evaluatePoliciesWithManagedState(ctx, trust, managedAttestation, 
     pullNumber: ctx.pull.number,
     head: ctx.pull.headSha,
     authorId: ctx.pull.authorId,
+    title: ctx.pull.title,
     ...commandApproval ? { commandApproval } : {}
   };
   const results = await evaluatePolicies(policies.filter((policy) => !(managedAttestation && policy.type === "sensitive-paths")), policyContext);
@@ -38505,7 +38521,7 @@ async function updatePolicyCheck(ctx) {
     return { result: "skipped", reason: `#${ctx.pull.number} closed before policy publication` };
   if (current.head.sha !== ctx.pull.headSha)
     return { result: "skipped", reason: `#${ctx.pull.number} head moved before policy publication` };
-  const policies = await evaluatePullPolicies(ctx);
+  const policies = await evaluatePullPolicies({ ...ctx, pull: { ...ctx.pull, title: current.title } });
   const approved = await approverApprovedHead(ctx.server, ctx.config, ctx.repository, ctx.pull);
   const results = [...policies, { type: "approval", ok: approved, problems: approved ? [] : [`${ctx.config.approver.login} has not approved head ${ctx.pull.headSha}`] }];
   const ok = results.every((r) => r.ok);
@@ -38540,7 +38556,8 @@ async function fetchPull(gh, repository, pullNumber) {
     baseRepository: p.base.repo.full_name,
     baseRef: p.base.ref,
     defaultBranch: p.base.repo.default_branch,
-    authorId: Number(p.user.id)
+    authorId: Number(p.user.id),
+    title: p.title
   };
 }
 

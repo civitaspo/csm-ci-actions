@@ -54,6 +54,7 @@ export type PullFacts = {
   baseRef: string;
   defaultBranch: string;
   authorId: number;
+  title: string;
 };
 
 export function checkPullState(p: PullFacts, options: { allowDraft?: boolean; integrationBranches?: readonly string[] } = {}): void {

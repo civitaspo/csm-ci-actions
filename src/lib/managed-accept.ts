@@ -5,7 +5,7 @@ import { createManagedReservation, createReservationStatus, type ReservationReco
 import { approverApprovedHead, evaluateManagedPullPolicies, evaluatePullPolicies } from "./policy-check.ts";
 import { deriveManagedPullAttestation, type ManagedPullSourceContext } from "./managed-pull-context.ts";
 import type { PullFacts } from "./command.ts";
-import type { PolicyResult } from "./policies/index.ts";
+import { approvalDecisionResults, type PolicyResult } from "./policies/index.ts";
 import type { ManagedPullAttestation } from "./managed-pull.ts";
 import { Rejection } from "./request.ts";
 
@@ -60,7 +60,7 @@ export async function acceptManagedPull(ctx: ManagedAcceptContext, pullNumber: n
     results = evaluation.results;
   }
   if (!first) throw new Rejection("managed acceptance did not identify an enabled managed pull request");
-  const failures = results.filter((result) => !result.ok).flatMap((result) => result.problems.map((problem) => `${result.type}: ${problem}`));
+  const failures = approvalDecisionResults(results).filter((result) => !result.ok).flatMap((result) => result.problems.map((problem) => `${result.type}: ${problem}`));
   if (failures.length) throw new Rejection(`managed acceptance policy check failed: ${failures.join("; ")}`);
   if (!(await isApproved())) {
     throw new Rejection(`the configured approver has not approved managed head ${pull.headSha}`);
@@ -139,6 +139,7 @@ async function fetchManagedPull(gh: GitHub, repository: string, pullNumber: numb
     baseRef: pull.base.ref,
     defaultBranch: pull.base.repo.default_branch,
     authorId: Number(pull.user.id),
+    title: pull.title,
   };
 }
 

@@ -332,7 +332,35 @@ export async function withPendingRequiredCheck(ctx: Parameters<Scenario["run"]>[
 }
 
 // Platform auto-merge requires the branch rules to enforce csm-ci/policy; the shared fixture ruleset may lack it.
+async function editTitle(ctx: Parameters<Scenario["run"]>[0], pr: Pr, title: string): Promise<void> {
+  await ctx.gh.rest.pulls.update({ ...splitRepository(CLIENT), pull_number: pr.number, title });
+}
+
 export const merge: Scenario[] = [
+  automergeScenario("title-edited-after-approval", "A title edited to fail after approval holds the reservation, and the fixed title becomes the commit subject", async (ctx) => withSignedPr(ctx, async (pr) => {
+    const id = randomUUID().slice(0, 8);
+    await editTitle(ctx, pr, `Edited e2e title ${id}`);
+    await until("the failing title in csm-ci/policy", async () => {
+      const checks = await ctx.gh.paginate(ctx.gh.rest.checks.listForRef, { ...splitRepository(CLIENT), ref: pr.head, per_page: 100 });
+      return checks.some((check) => check.name === "csm-ci/policy" && check.external_id === pr.head && check.conclusion === "failure" && check.output?.summary?.includes("| pull-request-title | fail |")) ? true : undefined;
+    });
+    const { record } = await reserve(ctx, pr);
+    await until("a reservation waiting on the title", async () => {
+      const current = (await reservations(ctx, pr)).find((item) => item.databaseId === record.databaseId);
+      assert(current && !terminalStatus(current), `reservation ${record.databaseId} ended before the title was fixed`);
+      return current.statuses.nodes.some((status) => status.state === "QUEUED" && status.description?.includes("pull-request-title")) ? true : undefined;
+    });
+    await noMerge(ctx, pr);
+    const title = `fix(e2e): validated title ${id}`;
+    await editTitle(ctx, pr, title);
+    await waitForCsmMerge(ctx, pr, pr.head);
+    const { data: merged } = await ctx.gh.rest.pulls.get({ ...splitRepository(CLIENT), pull_number: pr.number });
+    assert(merged.merge_commit_sha, `pull request #${pr.number} has no merge commit`);
+    const { data: commit } = await ctx.gh.rest.repos.getCommit({ ...splitRepository(CLIENT), ref: merged.merge_commit_sha });
+    const subject = commit.commit.message.split("\n", 1)[0];
+    assert(subject === `${title} (#${pr.number})`, `merge commit subject is ${JSON.stringify(subject)}, expected the validated title`);
+    await assertReservation(ctx, pr, "SUCCESS");
+  })),
   {
     id: "merge.authorized",
     cases: {

@@ -7,7 +7,7 @@ import { effectivePolicies, evaluatePullPolicies, policySummary, updatePolicyChe
 
 const serverRun = { serverUrl: "https://github.com", repository: "owner/server", id: "345", attempt: "2" };
 const head = "a".repeat(40);
-const pull: PullFacts = { number: 12, state: "open", draft: false, headSha: head, headRepository: "owner/repo", baseRepository: "owner/repo", baseRef: "main", defaultBranch: "main", authorId: 10 };
+const pull: PullFacts = { number: 12, state: "open", draft: false, headSha: head, headRepository: "owner/repo", baseRepository: "owner/repo", baseRef: "main", defaultBranch: "main", authorId: 10, title: "feat: add a change" };
 const base = "/repos/owner/repo";
 
 function setup(checkRuns: unknown[], current = { state: "open", head: { sha: head } }, commits: unknown[] = [{ sha: head, commit: { verification: { verified: true } }, author: { id: 10, login: "alice" }, committer: { id: 10, login: "alice" } }], pullStatus = 200, reviews?: unknown[]) {

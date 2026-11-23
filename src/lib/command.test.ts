@@ -106,6 +106,7 @@ describe("checkPullState", () => {
     baseRef: "main",
     defaultBranch: "main",
     authorId: 10,
+    title: "feat: add a change",
   };
   test("accepts an open same-repository pull request to the default branch", () => {
     expect(() => checkPullState(ok)).not.toThrow();
