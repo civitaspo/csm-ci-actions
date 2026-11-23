@@ -5,6 +5,11 @@ import { assertManagedPullReleaseContextCurrent, revalidateManagedPullRelease, r
 
 const oldRelease = { version: "v1.2.3", sha: "d".repeat(40) };
 const latestRelease = { version: "v1.2.4", sha: "e".repeat(40) };
+// The resolver compares expiry with the real clock, so reservation times are relative to it.
+const DAY = 24 * 60 * 60 * 1000;
+const acceptedAt = new Date(Date.now() - DAY).toISOString();
+const expiresAt = new Date(Date.parse(acceptedAt) + 7 * DAY).toISOString();
+const expiredAt = new Date(Date.now() - DAY / 2).toISOString();
 const payload = (overrides: Record<string, unknown> = {}) => ({
   version: 2,
   kind: "managed-files",
@@ -21,8 +26,8 @@ const payload = (overrides: Record<string, unknown> = {}) => ({
   release_sha: oldRelease.sha,
   manifest_digest: "f".repeat(64),
   idempotency_key: "1".repeat(64),
-  accepted_at: "2026-11-14T00:00:00.000Z",
-  expires_at: "2026-11-21T00:00:00.000Z",
+  accepted_at: acceptedAt,
+  expires_at: expiresAt,
   ...overrides,
 });
 
@@ -32,7 +37,7 @@ function deploymentClient(records: unknown[], status = 200, nextRecords?: unknow
     databaseId: index + 1,
     task: "csm-ci:automerge",
     payload: value,
-    createdAt: "2026-11-14T00:00:00.000Z",
+    createdAt: acceptedAt,
     creator: { __typename: "Bot", databaseId: 3000 },
     statuses: { nodes: [], pageInfo: { hasNextPage: false } },
   }));
@@ -104,7 +109,7 @@ test("rejects an active reservation whose release pin no longer resolves", async
 
 test("rejects an active reservation after its expiry timestamp", async () => {
   const source = releaseClient();
-  const deployments = deploymentClient([payload({ expires_at: "2026-11-14T14:00:00.000Z" })]);
+  const deployments = deploymentClient([payload({ expires_at: expiredAt })]);
   await expect(resolveManagedPullRelease({ ...sourceBase, source: source.client, deployments: deployments.client }, facts))
     .rejects.toThrow("active managed reservation has expired");
 });
@@ -156,7 +161,7 @@ test("rejects when the active reservation becomes terminal before final validati
 
 test("rejects when the active reservation expires before final validation", async () => {
   const source = releaseClient();
-  const deployments = deploymentClient([payload()], 200, [payload({ expires_at: "2026-11-14T14:00:00.000Z" })]);
+  const deployments = deploymentClient([payload()], 200, [payload({ expires_at: expiredAt })]);
   const input = { ...sourceBase, source: source.client, deployments: deployments.client };
   const initial = await resolveManagedPullRelease(input, facts);
   await expect(revalidateManagedPullRelease(input, facts, initial)).rejects.toThrow("active managed reservation has expired");
