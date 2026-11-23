@@ -28,7 +28,9 @@ export function policyFailureContent(results: readonly PolicyResult[]): string {
     const details = results.filter((r) => !r.ok && r.type === type).flatMap((r) => r.problems).join("; ");
     return `- ${type}: <code>${escapeDetail(details, Math.floor(5700 / Math.max(failures.length, 1)) - 100)}</code>`;
   });
-  const guidance = failures.includes("sensitive-paths") ? "For sensitive changes, obtain the required trusted approver's `/approve` evidence for this head. " : "";
+  const sensitive = failures.includes("sensitive-paths") ? "For sensitive changes, obtain the required trusted approver's `/approve` evidence for this head. " : "";
+  const title = failures.includes("pull-request-title") ? "Edit the pull request title. With the `policy-check` operation enabled, the edit re-runs the check; otherwise use `/recheck`. " : "";
+  const guidance = sensitive + title;
   return `csm-ci: Policy check failed.\n\n${rows.join("\n")}\n\nFix the reported violations. ${guidance}Trust restrictions must pass; approval cannot bypass them. Use \`/recheck\` after correcting the cause or a temporary issue.`;
 }
 

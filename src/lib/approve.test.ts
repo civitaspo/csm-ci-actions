@@ -400,3 +400,48 @@ describe("policy report full evaluation boundaries", () => {
     }
   });
 });
+
+describe("pull request title in approval", () => {
+  const titled = () => {
+    const cfg = config();
+    cfg.policies = [{ type: "pull-request-title", types: ["feat", "chore"] }];
+    return cfg;
+  };
+  const checkSummary = (server: ReturnType<typeof fakeFetch>) => {
+    const request = server.requests.find((r) => r.method === "POST" && r.path === `${P}/check-runs`);
+    return z.object({ conclusion: z.string(), output: z.object({ summary: z.string() }) }).parse(JSON.parse(request?.body ?? "{}"));
+  };
+
+  test.each(["automatic", "/recheck", "/approve"])("%s approves despite a failing title and publishes the failing title row", async (mode) => {
+    const bad = pull({ title: "Add a change" });
+    const { ctx, approver, server } = context({ config: titled(), pull: bad, pullAfter: bad, ...(mode === "/recheck" ? { comment: comment({ body: "/recheck" }) } : {}) });
+    expect((await runApprove(ctx, { pull_number: 12, ...(mode === "automatic" ? {} : { comment_id: 9 }) })).result).toBe("approved");
+    expect(approver.calls).toContain(`POST ${P}/pulls/12/reviews`);
+    const check = checkSummary(server);
+    expect(check.conclusion).toBe("failure");
+    expect(check.output.summary).toContain("| pull-request-title | fail | title \"Add a change\" is not a Conventional Commit header");
+    const report = server.requests.find((r) => r.method === "POST" && r.path === `${P}/issues/12/comments` && r.body?.includes("csm-ci:policy-failure"));
+    expect(report?.body).toContain("Edit the pull request title. With the `policy-check` operation enabled, the edit re-runs the check; otherwise use `/recheck`.");
+  });
+
+  test("the published check uses the title read when the pinned head is confirmed, not the request's first read", async () => {
+    const { ctx, server } = context({ config: titled(), pull: pull({ title: "Add a change" }), pullAfter: pull({ title: "feat: add a change" }) });
+    await runApprove(ctx, { pull_number: 12 });
+    expect(checkSummary(server).output.summary).toContain("| pull-request-title | pass | — |");
+  });
+
+  test("a passing first read does not hide a failing title at publication", async () => {
+    const { ctx, server } = context({ config: titled(), pull: pull({ title: "feat: add a change" }), pullAfter: pull({ title: "Add a change" }) });
+    await runApprove(ctx, { pull_number: 12 });
+    expect(checkSummary(server).output.summary).toContain("| pull-request-title | fail |");
+  });
+
+  test("another failing policy still declines approval alongside a failing title", async () => {
+    const bad = pull({ title: "Add a change" });
+    const { ctx, approver } = context({ config: titled(), pull: bad, pullAfter: bad, commits: [commit(HEAD, { committer: mallory, author: mallory })] });
+    const outcome = await runApprove(ctx, { pull_number: 12 });
+    expect(outcome.result).toBe("declined");
+    expect(outcome.problems.some((problem) => problem.startsWith("pull-request-title"))).toBe(false);
+    expect(approver.calls).toEqual([]);
+  });
+});

@@ -149,3 +149,11 @@ test("managed acceptance pins the base and head and creates a retryable reservat
   expect(args.payload.idempotency_key).toMatch(/^[0-9a-f]{64}$/u);
   expect(statusCalls).toHaveLength(1);
 });
+
+test("managed acceptance ignores a failing title and leaves it to merge readiness", async () => {
+  reset();
+  const titleFailure: PolicyResult = { type: "pull-request-title", ok: false, problems: ["title \"x\" is not a Conventional Commit header"] };
+  await expect(acceptManagedPull(context(), 12, dependencies({ policies: [titleFailure], approved: false }))).rejects.toThrow(`the configured approver has not approved managed head ${head}`);
+  await expect(acceptManagedPull(context(), 12, dependencies({ policies: [titleFailure, { type: "signed-commits", ok: false, problems: ["signature is invalid"] }] })))
+    .rejects.toThrow("managed acceptance policy check failed: signed-commits: signature is invalid");
+});

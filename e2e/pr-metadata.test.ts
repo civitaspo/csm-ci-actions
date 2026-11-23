@@ -6,6 +6,10 @@ import { annotatedBody, annotatePr, assertGeneratedMetadata, assertManagedMetada
 import { SCENARIOS } from "./scenarios.ts";
 import { testIntent, testMetadata, testRun } from "./test-metadata.ts";
 import { MANAGED_FILES_TITLE } from "../src/lib/managed-files.ts";
+import { readFileSync } from "node:fs";
+import { parseConfig } from "../src/lib/config.ts";
+import type { PolicyContext } from "../src/lib/policies/index.ts";
+import { pullRequestTitle } from "../src/lib/policies/pull-request-title.ts";
 
 const repo = `/repos/${CLIENT}`;
 const scenario = (feature: keyof typeof SCENARIOS, id: string) => {
@@ -50,12 +54,21 @@ describe("PR intent catalog", () => {
     expect(catalog.size).toBe(LABEL_CATALOG.length);
   });
 
+  test("every harness PR title passes the fixture's pull-request-title policy", () => {
+    const fixture = parseConfig(readFileSync(new URL("./fixtures/testing-csm-ci-server/csm-ci.yaml", import.meta.url), "utf8"));
+    const policy = fixture.policies.find((item) => item.type === "pull-request-title");
+    if (policy?.type !== "pull-request-title") throw new Error("the fixture does not enable pull-request-title");
+    const failures = Object.entries(SCENARIOS).flatMap(([feature, scenarios]) => scenarios.flatMap((item) => Object.values(item.cases).map((intent) =>
+      pullRequestTitle(policy, { title: prTitle({ ...testRun, feature: feature as typeof testRun.feature }, intent, "e2e-fixture") } as PolicyContext)))).flat();
+    expect(failures).toEqual([]);
+  });
+
   test("PR-producing paths stay declared and no-PR scenarios remain empty", () => {
     expect(Object.fromEntries(Object.entries(SCENARIOS).map(([feature, scenarios]) => [feature, scenarios.filter((item) => Object.keys(item.cases).length > 0).map((item) => item.id)]))).toEqual({
       smoke: [],
       approve: ["repository-paths", "trusted-auto", "unsigned-auto", "command", "replay", "unsigned-command", "edited-command", "recheck", "forged-author", "untrusted-commit", "untrusted-requester", "prefilter"].map((id) => `approve.${id}`),
-      merge: ["authorized", "reserve-then-approve", "head-change-carries-over", "head-change-needs-approval", "cancel", "cancel-unauthorized", "closed", "command-edit-ignored", "label-reconcile", "sweep", "platform-auto-merge-disabled", "workflow-change", "notification-scope", "non-merger", "configured-bot-ownership"].map((id) => `merge.${id}`),
-      "policy-check": ["repository-sensitivity", "trusted", "closed-shared-sha", "unsigned", "untrusted", "sensitive-approval", "recheck", "non-approver-marker", "comment-marker"].map((id) => `policy-check.${id}`),
+      merge: ["title-edited-after-approval", "authorized", "reserve-then-approve", "head-change-carries-over", "head-change-needs-approval", "cancel", "cancel-unauthorized", "closed", "command-edit-ignored", "label-reconcile", "sweep", "platform-auto-merge-disabled", "workflow-change", "notification-scope", "non-merger", "configured-bot-ownership"].map((id) => `merge.${id}`),
+      "policy-check": ["pull-request-title", "repository-sensitivity", "trusted", "closed-shared-sha", "unsigned", "untrusted", "sensitive-approval", "recheck", "non-approver-marker", "comment-marker"].map((id) => `policy-check.${id}`),
       securefix: ["pr-write", ...["unsafe-path", "symlink", "file-limit", "single-file-size-limit", "total-size-limit"].map((mode) => `client-${mode}`), "workflow-disabled", "forged-run", "target-event", "route-refresh", "alternate-base"].map((id) => `securefix.${id}`),
       release: ["publish-none", "publish-js-action", "publish-goreleaser", "publish-cargo", "publish-cargo-raw", "publish-cargo-raw-metadata", "terraform-replay", "none-replay", "stale-dist", "tag-collision", "foreign-release", "invalid-version", "wrong-merger"].map((id) => `release.${id}`),
       "release-pr": ["version-files-empty", "version-files-explicit", "explicit-refresh", "inferred-version"].map((id) => `release-pr.${id}`),
@@ -116,7 +129,7 @@ describe("PR intent catalog", () => {
     expect(local).toContain("not observed results or authorization evidence");
     const ci = prBody({ ...testRun, runner: { kind: "ci", url: "https://github.com/owner/repo/actions/runs/123", attempt: "2" } }, testIntent);
     expect(ci).toContain("https://github.com/owner/repo/actions/runs/123 (attempt 2)");
-    expect(prTitle(testRun, testIntent, "1.2.3")).toBe("[e2e][release][positive] Release fixture — 1.2.3");
+    expect(prTitle(testRun, testIntent, "1.2.3")).toBe("test(e2e): Release fixture [release][positive] — 1.2.3");
   });
 
   test("declarations escape HTML and Markdown text", () => {
@@ -245,7 +258,7 @@ describe("metadata failures keep cleanup", () => {
     expect(deleted).toBe(!cleanupFails);
     const create = JSON.parse(api.requests.find((request) => request.path === `${repo}/pulls`)!.body!);
     expect(create.body).toBe(prBody(testRun, testIntent));
-    expect(create.title).toContain("[e2e][release][positive] Release fixture");
+    expect(create.title).toContain("test(e2e): Release fixture [release][positive]");
   });
 
   test("release label failure recovers the rendered title and retains both primary and cleanup failures", async () => {

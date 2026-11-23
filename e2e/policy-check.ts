@@ -23,6 +23,8 @@ import {
   until,
   type Ctx,
   closePr,
+  approverReviews,
+  editPrTitle,
 } from "./harness.ts";
 
 const SERVER_APP_ID = 5455185;
@@ -106,7 +108,47 @@ async function policyReports(ctx: Ctx, pr: Pr) {
   return reports;
 }
 
+async function checkAfter(ctx: Ctx, pr: Pr, since: Date, conclusion: "success" | "failure"): Promise<PolicyCheck> {
+  await expectOp(ctx, { kind: "policy-check", repository: CLIENT, args: { pull_number: pr.number } }, since, "success");
+  return until(`a ${conclusion} csm-ci/policy check for ${pr.head} after ${since.toISOString()}`, async () => {
+    const check = await checkForHead(ctx, pr);
+    return check.conclusion === conclusion && check.completed_at && Date.parse(check.completed_at) > since.getTime() ? check : undefined;
+  });
+}
+
 export const policyCheck: Scenario[] = [
+  {
+    id: "policy-check.pull-request-title",
+    cases: { fixture: { id: "fixture", target: "client", title: "A failing title survives approval and an edited title passes", classification: "mixed", checks: ["approval-policy", "request-validation"], steps: [{ operation: "policy-check", outcome: "rejected", expected: "A non-Conventional title fails csm-ci/policy; approval and /approve do not clear it" }, { operation: "policy-check", outcome: "permitted", expected: "Editing the title re-runs the check through the edited event without /recheck" }], identity: OWNER_IDENTITY } },
+    name: "a failing pull request title survives approval and an edited title passes without /recheck",
+    run: async (ctx) => {
+      const id = Date.now().toString(36);
+      const since = new Date(Date.now() - 2_000);
+      const pr = await openPr(ctx, { intent: prCase(ctx, "fixture"), kind: "signed", title: `Add an e2e title fixture ${id}` });
+      try {
+        await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number } }, since, "success");
+        await until("the automatic approval despite the failing title", async () =>
+          (await approverReviews(ctx, pr)).some((r) => r.state === "APPROVED" && r.commit_id === pr.head) ? true : undefined);
+        await expectPolicy(ctx, pr, since, "failure", "pull-request-title");
+        const report = await until("an active title failure report", async () => {
+          const reports = await policyReports(ctx, pr);
+          return reports.length === 1 && !reports[0]?.isMinimized ? reports[0] : undefined;
+        });
+        assert(report.body.includes("Edit the pull request title."), "policy report omits the title guidance");
+        const command = await postComment(ctx, pr, "/approve");
+        await expectOp(ctx, { kind: "approve", repository: CLIENT, args: { pull_number: pr.number, comment_id: command.id } }, command.since, "success");
+        const afterApprove = await checkForHead(ctx, pr);
+        assert(afterApprove.conclusion === "failure" && afterApprove.output?.summary?.includes("| pull-request-title | fail |"), "/approve cleared the failing title");
+        const edited = await editPrTitle(ctx, pr, `test(e2e): fix the title fixture ${id}`);
+        const fixed = await checkAfter(ctx, pr, edited, "success");
+        assert(fixed.output?.summary?.includes("| pull-request-title | pass |"), "the edited title did not pass");
+        await until("the title failure report is resolved", async () => {
+          const reports = await policyReports(ctx, pr);
+          return reports.length === 1 && reports[0]?.isMinimized && reports[0].minimizedReason?.toLowerCase() === "resolved" ? true : undefined;
+        });
+      } finally { await closePolicyPr(ctx, pr); }
+    },
+  },
   {
     id: "policy-check.repository-sensitivity",
     cases: { fixture: { id: "fixture", target: "client", title: "Repository sensitivity requires command approval and recovers", classification: "mixed", checks: ["path-safety", "approval-policy"], steps: [{ operation: "policy-check", outcome: "rejected", expected: "All-path repository sensitivity with no exemptions fails the policy" }, { operation: "approve", outcome: "permitted", expected: "Owner command approval restores a successful policy check" }], identity: OWNER_IDENTITY } },

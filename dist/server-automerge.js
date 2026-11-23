@@ -36807,7 +36807,11 @@ var OPS = ["approve", "merge", "policy-check", "securefix", "release"];
 var PolicySchema = discriminatedUnion("type", [
   strictObject({ type: literal("signed-commits") }),
   strictObject({ type: literal("trusted-committers") }),
-  strictObject({ type: literal("sensitive-paths"), paths: array(string2().min(1)), exempt: array(Principal).default([]) })
+  strictObject({ type: literal("sensitive-paths"), paths: array(string2().min(1)), exempt: array(Principal).default([]) }),
+  strictObject({
+    type: literal("pull-request-title"),
+    types: array(string2().regex(/^[a-z]+$/, "must match ^[a-z]+$")).min(1).refine((types) => new Set(types).size === types.length, "duplicate type").refine((types) => types.includes("chore"), "must include chore, which csm-ci's own pull requests use")
+  })
 ]);
 var SecurefixPathRule = _enum(["any", "semver", "version-only"]);
 var SecurefixRoute = strictObject({
@@ -36914,7 +36918,7 @@ var ConfigSchema = strictObject({
   merge: strictObject({
     required_checks: array(strictObject({ name: string2().min(1), app_id: Id }))
   }),
-  policies: array(PolicySchema),
+  policies: array(PolicySchema).refine((policies) => policies.filter((policy) => policy.type === "pull-request-title").length <= 1, "at most one pull-request-title policy"),
   securefix: SecurefixSchema.optional(),
   repo_settings: RepoSettings.optional(),
   repositories: array(RepositoryEntry).min(1)
@@ -38644,11 +38648,20 @@ function trustedCommitters(_, { trust }) {
   ];
 }
 
+// src/lib/policies/pull-request-title.ts
+function pullRequestTitle(policy, { title }) {
+  const header = new RegExp(`^(${policy.types.join("|")})(\\([a-z0-9-]+\\))?!?: \\S`);
+  if (header.test(title))
+    return [];
+  return [`title ${JSON.stringify(title)} is not a Conventional Commit header; edit it to <type>[(<scope>)][!]: <subject> with type one of ${policy.types.join(", ")}`];
+}
+
 // src/lib/policies/index.ts
 var EVALUATORS = {
   "signed-commits": signedCommits,
   "trusted-committers": trustedCommitters,
-  "sensitive-paths": sensitivePaths
+  "sensitive-paths": sensitivePaths,
+  "pull-request-title": pullRequestTitle
 };
 async function evaluatePolicies(policies, ctx) {
   return Promise.all(policies.map(async (policy) => {
@@ -38771,6 +38784,7 @@ async function evaluatePoliciesWithManagedState(ctx, trust, managedAttestation, 
     pullNumber: ctx.pull.number,
     head: ctx.pull.headSha,
     authorId: ctx.pull.authorId,
+    title: ctx.pull.title,
     ...commandApproval ? { commandApproval } : {}
   };
   const results = await evaluatePolicies(policies.filter((policy) => !(managedAttestation && policy.type === "sensitive-paths")), policyContext);
@@ -39016,7 +39030,7 @@ async function evaluateReservation(ctx, record) {
     if (latest.state.kind === "active") {
       await postAutomergeComment(targetContext, latest, "accepted", `Managed-file merge reserved until ${latest.payload.expires_at}. It requires the current managed manifest, approval, policies, and checks. Cancel with /merge cancel. The ${AUTOMERGE_LABEL} label shows the reservation state.`, latest.payload.accepted_head);
     }
-    if (decision.kind !== "merge" && (decision.kind === "terminal" || latest.state.kind !== "active" || latest.state.waitingReason !== decision.reason)) {
+    if (decision.kind !== "merge" && (decision.kind === "terminal" || latest.state.kind !== "active" || latest.state.waitingReason !== truncateDeploymentDescription(decision.reason))) {
       const statusDescription = decision.kind === "terminal" ? terminalDescription(decision.reason, decision.description) : decision.reason;
       await createReservationStatus({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, deploymentId: latest.deploymentId, serverRunUrl: runUrl(ctx.serverRun), pullUrl: pullUrl(ctx.serverRun.serverUrl, targetContext.repository, pull.number), state: decision.kind === "terminal" ? decision.state : "queued", description: statusDescription });
     }
@@ -39025,7 +39039,7 @@ async function evaluateReservation(ctx, record) {
     }
     const newerActive = current.some((item) => item.deploymentId !== latest.deploymentId && item.state.kind === "active" && Date.parse(item.createdAt) > Date.parse(latest.createdAt));
     await setLabel(targetContext, pull.number, newerActive || decision.kind !== "terminal" || decision.state === "success");
-    return { decision, ready: decision.kind === "merge", head: decision.kind === "merge" ? decision.head : pull.headSha, reservation: latest, repository: targetContext.repository };
+    return { decision, ready: decision.kind === "merge", head: decision.kind === "merge" ? decision.head : pull.headSha, reservation: latest, repository: targetContext.repository, ...decision.kind === "merge" ? { commit: commitText(pull) } : {} };
   }
   const humanPayload = record.payload;
   if (humanPayload.version !== 1)
@@ -39044,7 +39058,7 @@ async function evaluateReservation(ctx, record) {
   }
   const statusValue = decision.kind === "terminal" ? decision.state : "queued";
   const description = decision.kind === "terminal" ? decision.description : decision.kind === "wait" ? decision.reason : undefined;
-  if (latest.state.kind === "active" && decision.kind !== "merge" && (statusValue !== "queued" || latest.state.waitingReason !== description)) {
+  if (latest.state.kind === "active" && decision.kind !== "merge" && (statusValue !== "queued" || latest.state.waitingReason !== truncateDeploymentDescription(description ?? ""))) {
     const statusDescription = decision.kind === "terminal" ? terminalDescription(decision.reason, description ?? "") : description ?? "";
     await createReservationStatus({ server: ctx.deployments, serverRepository: ctx.serverRepository, serverBotId: ctx.config.apps.server_bot_id, deploymentId: latest.deploymentId, serverRunUrl: runUrl(ctx.serverRun), pullUrl: pullUrl(ctx.serverRun.serverUrl, targetContext.repository, pull.number), state: statusValue, description: statusDescription });
   }
@@ -39054,7 +39068,7 @@ async function evaluateReservation(ctx, record) {
   }
   const newerActive = current.some((item) => item.deploymentId !== latest.deploymentId && item.state.kind === "active" && Date.parse(item.createdAt) > Date.parse(latest.createdAt));
   await setLabel(targetContext, pull.number, newerActive || decision.kind !== "terminal" || decision.state === "success");
-  return { decision, ready: decision.kind === "merge", head: decision.kind === "merge" ? decision.head : pull.headSha, reservation: latest, repository: targetContext.repository };
+  return { decision, ready: decision.kind === "merge", head: decision.kind === "merge" ? decision.head : pull.headSha, reservation: latest, repository: targetContext.repository, ...decision.kind === "merge" ? { commit: commitText(pull) } : {} };
 }
 async function persistTerminal(ctx, record, repository, decision, current, suppressClientWrites = false) {
   const targetContext = { ...ctx, repository };
@@ -39095,11 +39109,10 @@ async function mergeReservation(ctx, record, head) {
   }
   if (await fetchAutoMergeRequest(ctx.server, evaluated.repository, pull.number))
     throw new Rejection(`GitHub auto-merge is still enabled for pull request #${pull.number}`);
-  const commit = commitText(pull);
   const latest = await evaluateReservation(targetContext, record);
-  if (latest.decision.kind !== "merge" || latest.decision.head !== head)
+  if (latest.decision.kind !== "merge" || latest.decision.head !== head || !latest.commit)
     throw new Rejection("merge readiness changed after disabling auto-merge");
-  const { title, message } = commit;
+  let { title, message } = latest.commit;
   let mergedSha;
   for (let attempt = 0;; attempt++) {
     try {
@@ -39140,8 +39153,9 @@ async function mergeReservation(ctx, record, head) {
       if (![405, 422, 503].includes(code ?? 0) || attempt >= 2)
         throw error;
       const check = await evaluateReservation(targetContext, record);
-      if (check.decision.kind !== "merge" || check.decision.head !== head)
+      if (check.decision.kind !== "merge" || check.decision.head !== head || !check.commit)
         throw new Rejection("merge readiness changed before retry");
+      ({ title, message } = check.commit);
     }
   }
   if (!mergedSha)

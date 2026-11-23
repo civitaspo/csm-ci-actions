@@ -66,6 +66,12 @@ export const PolicySchema = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("signed-commits") }),
   z.strictObject({ type: z.literal("trusted-committers") }),
   z.strictObject({ type: z.literal("sensitive-paths"), paths: z.array(z.string().min(1)), exempt: z.array(Principal).default([]) }),
+  z.strictObject({
+    type: z.literal("pull-request-title"),
+    types: z.array(z.string().regex(/^[a-z]+$/, "must match ^[a-z]+$")).min(1)
+      .refine((types) => new Set(types).size === types.length, "duplicate type")
+      .refine((types) => types.includes("chore"), "must include chore, which csm-ci's own pull requests use"),
+  }),
 ]);
 export type Policy = z.infer<typeof PolicySchema>;
 
@@ -184,7 +190,7 @@ export const ConfigSchema = z
     merge: z.strictObject({
       required_checks: z.array(z.strictObject({ name: z.string().min(1), app_id: Id })),
     }),
-    policies: z.array(PolicySchema),
+    policies: z.array(PolicySchema).refine((policies) => policies.filter((policy) => policy.type === "pull-request-title").length <= 1, "at most one pull-request-title policy"),
     securefix: SecurefixSchema.optional(),
     repo_settings: RepoSettings.optional(),
     repositories: z.array(RepositoryEntry).min(1),

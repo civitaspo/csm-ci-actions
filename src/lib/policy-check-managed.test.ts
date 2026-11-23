@@ -6,7 +6,7 @@ import { Rejection } from "./request.ts";
 
 const repository = "owner/repo";
 const head = "a".repeat(40);
-const pull: PullFacts = { number: 12, state: "open", draft: false, headSha: head, headRepository: repository, baseRepository: repository, baseRef: "main", defaultBranch: "main", authorId: 10 };
+const pull: PullFacts = { number: 12, state: "open", draft: false, headSha: head, headRepository: repository, baseRepository: repository, baseRef: "main", defaultBranch: "main", authorId: 10, title: "feat: add a change" };
 const attestation = {
   repositoryId: 42, repository, pullNumber: 12, pullNodeId: "PR_node", baseRef: "main", baseSha: "b".repeat(40), headSha: head,
   configSha: "c".repeat(40), releaseSha: "d".repeat(40), releaseVersion: "v1.2.3", manifestDigest: "e".repeat(64),
@@ -127,4 +127,28 @@ test("managed approval revalidates provenance after policy evaluation and before
 
   await expect(autoApprove(approvalContext, pull)).rejects.toThrow("managed pull changed during approval; retry after revalidation");
   expect(approverFetch.requests.some((request) => request.method === "POST" && request.path.endsWith("/pulls/12/reviews"))).toBe(false);
+});
+
+test("managed approval preflight ignores a failing title", async () => {
+  derive = async () => attestation;
+  const ctx = context(true);
+  ctx.config.policies = [...ctx.config.policies, { type: "pull-request-title", types: ["chore"] }];
+  const titled = { ...pull, title: "Sync managed files" };
+  expect((await evaluatePullPolicies({ ...ctx, pull: titled })).find((result) => result.type === "pull-request-title")?.ok).toBe(false);
+  expect(await preflightManagedApproval(ctx, titled)).toEqual({ head });
+});
+
+test("managed automatic approval ignores a failing title", async () => {
+  derive = async () => attestation;
+  const ctx = context(true);
+  ctx.config.policies = [...ctx.config.policies, { type: "pull-request-title", types: ["chore"] }];
+  const approverFetch = fakeFetch([{ method: "POST", path: `/repos/${repository}/pulls/12/reviews`, body: { id: 77, user: { id: ctx.config.approver.id, login: ctx.config.approver.login } } }]);
+  const approvalContext = {
+    ...ctx,
+    approver: github("approver", approverFetch),
+    serverRun: { serverUrl: "https://github.com", repository: "owner/server", id: "345", attempt: "2" },
+    now: () => new Date("2026-10-24T12:00:00Z"),
+  };
+  expect((await autoApprove(approvalContext, { ...pull, title: "Sync managed files" })).result).toBe("approved");
+  expect(approverFetch.calls).toEqual([`POST /repos/${repository}/pulls/12/reviews`]);
 });
