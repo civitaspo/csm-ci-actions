@@ -19,7 +19,7 @@ The client workflow sends a comment request only when the commenter's associatio
 ## Automatic path
 
 1. The pull request is open, not a draft, from the same repository, and based on the default branch or an integration branch explicitly listed on that exact repository entry in the server's `csm-ci.yaml`.
-2. The server pins the head. It evaluates `signed-commits` and `trusted-committers`, which always apply, and every other policy in `csm-ci.yaml`.
+2. The server pins the head. It evaluates `signed-commits` and `trusted-committers`, which always apply, and every other policy in `csm-ci.yaml` except [`pull-request-title`](policy-check.md#pull-request-title-policy). The title is checked by the policy refresh and merge readiness, not by the approval decision.
 3. If any policy fails, the result is `declined` and nothing is approved.
 4. Otherwise the approver App approves with `commit_id` set to the pinned head. If it already approved that head, nothing changes.
 5. The server reads the head again. If it moved, the approval is dismissed.
@@ -31,7 +31,7 @@ The client workflow sends a comment request only when the commenter's associatio
 1. Checks the comment. It must belong to the pull request, the body must be exactly `/approve`, and it must be unedited and at most 60 minutes old.
 2. Rejects a comment it already answered (one with a receipt by the server bot), and a commenter whose user id is not in `trust.approvers`. Neither gets a rocket or a receipt, so a label cannot make the server post again and again.
 3. Reacts with a rocket.
-4. Runs the same policies as the automatic path. They must all pass.
+4. Runs the same policies as the automatic path. They must all pass. `/approve` never makes a failing `pull-request-title` row pass.
 5. Rejects a head that may have been pushed after the comment: a force-push after the comment, or a head commit dated after it. Only a trusted committer could fake the date, and their commits pass the trust rules anyway.
 6. Reads the comment again, so editing or deleting it stops the request.
 7. Approves with the marker `<!-- csm-ci:approve:command:<comment id> -->` in the review body, then checks the head again as in the automatic path.
