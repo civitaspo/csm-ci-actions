@@ -2,6 +2,28 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.10.0] - 2026-11-23
+
+### 🚀 Features
+
+- *(policy-check)* Add the pull request title policy ([#250](https://github.com/civitaspo/csm-ci-actions/pull/250))
+
+### 🐛 Bug Fixes
+
+- *(e2e)* Create managed-file drift in the reconciliation scenario ([#251](https://github.com/civitaspo/csm-ci-actions/pull/251))
+
+### 📚 Documentation
+
+- *(policy-check)* Specify the pull request title policy ([#248](https://github.com/civitaspo/csm-ci-actions/pull/248))
+
+### 🧪 Testing
+
+- *(merge)* Make managed reservation test times relative to the clock ([#249](https://github.com/civitaspo/csm-ci-actions/pull/249))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(repo-settings)* Sync managed files ([#214](https://github.com/civitaspo/csm-ci-actions/pull/214))
+
 ## [0.9.0] - 2026-11-15
 
 ### 🚀 Features
