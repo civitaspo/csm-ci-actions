@@ -18,11 +18,12 @@ repo_settings:
     has_wiki: false
     has_projects: false
     allow_update_branch: true
+    dependabot_security_updates: false
   additional_managed_files:
     .github/PULL_REQUEST_TEMPLATE.md: managed-files/pull-request-template.md
 ```
 
-Omitted repository settings remain unchanged. The merge-method settings accept only the values shown above. `allow_auto_merge` accepts either value and controls GitHub's native auto-merge setting; csm-ci's deployment-backed `/merge` operation uses the Server App and does not enable native auto-merge.
+Omitted repository settings remain unchanged. `dependabot_security_updates` is described in [Dependabot security updates](#dependabot-security-updates). The merge-method settings accept only the values shown above. `allow_auto_merge` accepts either value and controls GitHub's native auto-merge setting; csm-ci's deployment-backed `/merge` operation uses the Server App and does not enable native auto-merge.
 
 `auto_merge_managed_files` is optional and defaults to `false`. When enabled, csm-ci validates, approves, reserves, and merges only the exact managed-file pull request produced by a successful `managed-files` stage. It uses the ordinary policy, approval, required-check, and protected-merge path. The Approver App must be installed on each target, and target callers must use compatible reusable workflows. The repo-settings caller must accept the optional `managed-drift-key` input, include it in its `run-name`, and grant `actions: write` to the caller job that invokes `server-repo-settings.yml`. The label and automerge callers also need `actions: write` propagated through each reusable-workflow call so the evaluator can dispatch a drift reconciliation. See [setup](setup.md#4-add-the-server-workflows) for caller templates and permissions. Keep the option disabled until the compatible callers and runtime have been installed and the testing-repository E2E suites pass.
 
@@ -172,6 +173,26 @@ The final runtime rejects the removed `repo_settings.managed_files` key, includi
 
 Implementation must update fixtures and harness configuration rewrites, generated bundles, and setup examples together. Table-driven and mutation tests cover changed rejection rules, exact-commit resolution, preserved bytes, source-only updates, identical retries, removal, and safe existing-PR reuse. Record live evidence and any existing verification gaps in the PR; this specification has no live execution evidence of its own.
 
+## Dependabot security updates
+
+`repo_settings.settings.dependabot_security_updates` is an optional boolean that manages Dependabot security updates on every target. With `false`, Dependabot stops opening pull requests for vulnerable dependencies. With `true`, it opens them again. Omitting the field leaves the setting unchanged. Use `false` when Renovate owns dependency updates, so dependency pull requests come from one bot and follow its title and automerge configuration.
+
+The field changes nothing else:
+
+- Dependabot alerts stay as they are. They remain visible in the Security tab, and Renovate's `vulnerabilityAlerts` reads them to open its own security updates.
+- Dependabot version updates run only from a committed `.github/dependabot.yml`. csm-ci does not manage that file and never deletes it. Remove it through an ordinary pull request.
+- csm-ci does not close open Dependabot pull requests. Close them through the repository's usual process.
+
+When the `settings` target is selected, inspection reads `GET /repos/{owner}/{repo}/automated-security-fixes` with the existing target-scoped administration token and compares its `enabled` field with the configured value. The `paused` field is not compared. GitHub documents a 404 from this read as "Dependabot is not enabled for the repository", so inspection reads a 404 as `enabled: false`. A 200 response without a boolean `enabled`, and any other read error, fail the run.
+
+Inspection reports `changes.dependabotSecurityUpdates` as a boolean, and this drift alone makes the apply step run. Apply sends `PUT` on the same path for `true` and `DELETE` for `false`. The field is never sent in the `PATCH /repos/{owner}/{repo}` body. Apply reports `dependabotSecurityUpdatesUpdated` as `0` or `1`, separately from `settingsUpdated`, like `sponsorshipsUpdated`. Each write gets one attempt. A lost response or a write error fails the run, and the next run reads the setting again and writes only on drift. A repeat with no drift makes no write. `targets: managed-files` neither reads nor writes the setting.
+
+Security updates can be configured only while Dependabot alerts are enabled. With alerts disabled, the read returns `enabled: false`, so `false` needs no write. `true` then makes GitHub reject the `PUT`; the run fails and csm-ci does not enable alerts. See [GitHub behavior relied on](testing.md#github-behavior-relied-on).
+
+Implementation adds table-driven unit cases for `true`, `false`, omission, an unselected `settings` target, 404, a malformed body, and read and write errors, and checks that a repeat with no drift makes no write. Live e2e snapshots each testing repository's setting and restores it after the scenario.
+
+Upgrade every Server configuration parser pin to a compatible runtime before adding the field. Older revisions reject it as an unknown key.
+
 ## Sponsorships
 
 This runtime accepts the sponsorship contract from issue #67. Deployment and live acceptance checks remain pending. Upgrade every Server configuration parser pin to a verified compatible revision before adding `sponsorships`; older revisions reject the key.
@@ -254,7 +275,7 @@ The reusable workflow accepts `targets`, a comma-separated list that names what 
 
 | Target | Changes | Tokens |
 |---|---|---|
-| `settings` | Repository settings, repository features, and the Sponsor button setting | Administration |
+| `settings` | Repository settings, repository features, Dependabot security updates, and the Sponsor button setting | Administration |
 | `rulesets` | `integrity`, `review-and-checks`, `controlled-merges`, `release-tags`, and `automerge-display`, including the `controlled-merges` activation preflight | Administration; approver only when a dispatch activates `controlled-merges` |
 | `releases` | Immutable releases | Administration |
 | `managed-files` | The managed-file pull request: additional files, generated standard callers, and generated funding content | Contents and pull requests; workflows only when a managed path is a workflow or an existing branch is rebuilt |
@@ -330,6 +351,6 @@ Enable the behavior only after compatible callers and runtime revisions are inst
 
 The `csm-ci` environment holds App credentials. The official `actions/create-github-app-token` action issues all tokens; application code receives tokens only.
 
-Discovery uses metadata read access. The activation preflight and managed-file inspection use a repository-scoped token with contents and pull-requests read access. Settings, rulesets and immutable releases are read and changed with a token scoped to one target with only `administration: write`. The apply stage reruns the activation preflight before its first write. GitHub returns a ruleset's `bypass_actors` only to callers with write access to that ruleset, so a read-only token cannot tell whether the fixed bypass is present; a ruleset response without that field fails the run. Managed-file writes use a different token with contents and pull-requests write access. It adds workflows write access for workflow changes and for the rebuild of an existing branch, because the final ref move may carry the branch across workflow changes on the default branch. Approver capability tokens are used only for preflight and make no writes.
+Discovery uses metadata read access. The activation preflight and managed-file inspection use a repository-scoped token with contents and pull-requests read access. Settings, Dependabot security updates, rulesets and immutable releases are read and changed with a token scoped to one target with only `administration: write`. The apply stage reruns the activation preflight before its first write. GitHub returns a ruleset's `bypass_actors` only to callers with write access to that ruleset, so a read-only token cannot tell whether the fixed bypass is present; a ruleset response without that field fails the run. Managed-file writes use a different token with contents and pull-requests write access. It adds workflows write access for workflow changes and for the rebuild of an existing branch, because the final ref move may carry the branch across workflow changes on the default branch. Approver capability tokens are used only for preflight and make no writes.
 
 The approver App must be installed on every target where manual dispatch enables controlled merges, including the server. The operation does not install Apps, distribute secrets, or create repositories. See [setup](setup.md) for the caller workflow.
