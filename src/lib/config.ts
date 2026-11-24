@@ -122,6 +122,7 @@ const RepoSettings = z.preprocess((input, ctx) => {
     has_wiki: z.boolean().optional(),
     has_projects: z.boolean().optional(),
     allow_update_branch: z.boolean().optional(),
+    dependabot_security_updates: z.boolean().optional(),
   }).optional(),
   additional_managed_files: z.record(z.string(), z.string()).default({}),
 }).superRefine((value, ctx) => {

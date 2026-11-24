@@ -22,11 +22,12 @@ test.each(["baseline", "restored", "observed"] satisfies Parameters<typeof snaps
     { method: "GET", path: "/repos/owner/client/rulesets", body: [ruleset] },
     { method: "GET", path: "/repos/owner/client/rulesets/17", body: ruleset },
     { method: "GET", path: "/repos/owner/client/immutable-releases", body: { enabled: true } },
+    { method: "GET", path: "/repos/owner/client/automated-security-fixes", body: { enabled: false, paused: false } },
   ]);
   const log = spyOn(console, "log").mockImplementation(() => {});
   try {
     const snapshot = await snapshotRepository(github("test", fetch), "owner/client", phase);
-    expect(snapshot).toEqual({ settings, rulesets: [ruleset], immutableReleases: true });
+    expect(snapshot).toEqual({ settings, rulesets: [ruleset], immutableReleases: true, dependabotSecurityUpdates: false });
     expect(log).toHaveBeenCalledWith(`repo-settings-snapshot ${JSON.stringify({ repository: "owner/client", phase, snapshot })}`);
   } finally {
     log.mockRestore();
@@ -55,6 +56,8 @@ test.each([
     { method: "GET", path: "/repos/owner/client/rulesets", body: [] },
     { method: "GET", path: "/repos/owner/client/immutable-releases", body: { enabled: true } },
     { method: "PATCH", path: "/repos/owner/client", status, body: { message: "settings write rejected" } },
+    { method: "GET", path: "/repos/owner/client/automated-security-fixes", body: { enabled: true, paused: false } },
+    { method: "PUT", path: "/repos/owner/client/automated-security-fixes", body: {} },
   ]);
   const log = spyOn(console, "log").mockImplementation(() => {});
   try {

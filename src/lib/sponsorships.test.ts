@@ -74,7 +74,7 @@ describe("sponsorship administration", () => {
     const fetch = fakeFetch([{ method: "POST", path: "/graphql", body: queryResponse(state(!enabled)), then: [queryResponse(state(!enabled)), queryResponse(state(!enabled)), mutationResponse(state(enabled)), queryResponse(state(enabled))] }]);
     const args = options(fetch, enabled);
     expect((await inspectRepoSettings(args)).changes.sponsorships).toBe(true);
-    expect(await applyRepoSettings(args)).toEqual({ settingsUpdated: 0, sponsorshipsUpdated: 1, immutableReleasesEnabled: 0, rulesetsUpdated: 0, rulesetsCreated: 0 });
+    expect(await applyRepoSettings(args)).toEqual({ settingsUpdated: 0, dependabotSecurityUpdatesUpdated: 0, sponsorshipsUpdated: 1, immutableReleasesEnabled: 0, rulesetsUpdated: 0, rulesetsCreated: 0 });
     expect((await applyRepoSettings(args)).sponsorshipsUpdated).toBe(0);
     const writes = fetch.requests.filter((request) => JSON.parse(request.body ?? "{}").query.startsWith("mutation"));
     expect(writes).toHaveLength(1);

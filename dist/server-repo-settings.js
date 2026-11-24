@@ -32784,7 +32784,8 @@ var RepoSettings = preprocess((input, ctx) => {
     allow_rebase_merge: literal(false).optional(),
     has_wiki: boolean2().optional(),
     has_projects: boolean2().optional(),
-    allow_update_branch: boolean2().optional()
+    allow_update_branch: boolean2().optional(),
+    dependabot_security_updates: boolean2().optional()
   }).optional(),
   additional_managed_files: record(string2(), string2()).default({})
 }).superRefine((value, ctx) => {
@@ -37986,6 +37987,9 @@ function repoSettingsRuleSets(config, isServer = false) {
     ...isServer ? [displayRuleSet] : []
   ];
 }
+function hasRepoSettingsChanges(changes) {
+  return changes.settings.length > 0 || changes.dependabotSecurityUpdates || changes.immutableReleases || changes.sponsorships || changes.rulesets.length > 0;
+}
 var ALL_ADMIN_TARGETS = { settings: true, rulesets: true, releases: true };
 var CreatedRuleSet = object({ id: number2().int().positive(), name: string2() });
 async function inspectRepoSettings(args) {
@@ -37994,11 +37998,13 @@ async function inspectRepoSettings(args) {
     throw new Rejection("repo_settings is not configured");
   const targets = args.targets ?? ALL_ADMIN_TARGETS;
   const address = { ...splitRepository(args.target.name) };
-  const [repositoryResponse, ruleSets, immutableEnabled, sponsorships] = await Promise.all([
+  const securityUpdates = repoSettings.settings?.dependabot_security_updates;
+  const [repositoryResponse, ruleSets, immutableEnabled, sponsorships, securityUpdatesEnabled] = await Promise.all([
     targets.settings ? args.adminGH.rest.repos.get(address) : undefined,
     targets.rulesets ? args.adminGH.paginate("GET /repos/{owner}/{repo}/rulesets", { ...address, per_page: 100 }) : [],
     targets.releases ? isImmutableReleasesEnabled(args.adminGH, address) : true,
-    targets.settings && repoSettings.sponsorships ? readSponsorships(args.adminGH, args.target.name) : undefined
+    targets.settings && repoSettings.sponsorships ? readSponsorships(args.adminGH, args.target.name) : undefined,
+    targets.settings && securityUpdates !== undefined ? readDependabotSecurityUpdates(args.adminGH, address) : undefined
   ]);
   const definitions = targets.rulesets ? repoSettingsRuleSets(args.config, args.target.isServer) : [];
   const summaries = array(object({ id: number2().int().positive(), name: string2(), source_type: string2().optional() })).parse(ruleSets);
@@ -38036,7 +38042,7 @@ async function inspectRepoSettings(args) {
   }
   return {
     target: args.target,
-    changes: { settings: repositoryResponse ? changedSettings(repositoryResponse.data, repoSettings.settings ?? {}) : [], immutableReleases: !immutableEnabled, sponsorships: sponsorships !== undefined && sponsorships.hasSponsorshipsEnabled !== repoSettings.sponsorships?.enabled, rulesets: rulesetsToChange },
+    changes: { settings: repositoryResponse ? changedSettings(repositoryResponse.data, repoSettings.settings ?? {}) : [], dependabotSecurityUpdates: securityUpdatesEnabled !== undefined && securityUpdatesEnabled !== securityUpdates, immutableReleases: !immutableEnabled, sponsorships: sponsorships !== undefined && sponsorships.hasSponsorshipsEnabled !== repoSettings.sponsorships?.enabled, rulesets: rulesetsToChange },
     activation,
     rulesetIds: ids,
     rulesetEnforcements: enforcements
@@ -38056,6 +38062,7 @@ async function applyRepoSettings(args) {
     throw new Rejection("repo_settings is not configured");
   const address = { ...splitRepository(args.target.name) };
   let settingsUpdated = 0;
+  let dependabotSecurityUpdatesUpdated = 0;
   let sponsorshipsUpdated = 0;
   let immutableReleasesEnabled = 0;
   let rulesetsUpdated = 0;
@@ -38063,6 +38070,11 @@ async function applyRepoSettings(args) {
   if (inspection.changes.settings.length > 0 && repoSettings.settings) {
     await args.adminGH.rest.repos.update({ ...address, ...desiredRepositorySettings(repoSettings.settings) });
     settingsUpdated = 1;
+  }
+  const securityUpdates = repoSettings.settings?.dependabot_security_updates;
+  if (inspection.changes.dependabotSecurityUpdates && securityUpdates !== undefined) {
+    await args.adminGH.request(securityUpdates ? "PUT /repos/{owner}/{repo}/automated-security-fixes" : "DELETE /repos/{owner}/{repo}/automated-security-fixes", address);
+    dependabotSecurityUpdatesUpdated = 1;
   }
   if (inspection.changes.sponsorships && repoSettings.sponsorships) {
     const current = await readSponsorships(args.adminGH, args.target.name);
@@ -38101,7 +38113,7 @@ async function applyRepoSettings(args) {
       rulesetsUpdated++;
     }
   }
-  return { settingsUpdated, sponsorshipsUpdated, immutableReleasesEnabled, rulesetsUpdated, rulesetsCreated };
+  return { settingsUpdated, dependabotSecurityUpdatesUpdated, sponsorshipsUpdated, immutableReleasesEnabled, rulesetsUpdated, rulesetsCreated };
 }
 function validateDispatchPreflight(preflight) {
   const checks = [
@@ -38158,6 +38170,20 @@ async function isImmutableReleasesEnabled(gh, address) {
 }
 function status(error) {
   return typeof error === "object" && error !== null && "status" in error && typeof error.status === "number" ? error.status : undefined;
+}
+async function readDependabotSecurityUpdates(gh, address) {
+  let response;
+  try {
+    response = await gh.request("GET /repos/{owner}/{repo}/automated-security-fixes", address);
+  } catch (error) {
+    if (status(error) === 404)
+      return false;
+    throw error;
+  }
+  const result = object({ enabled: boolean2() }).safeParse(response.data);
+  if (!result.success)
+    throw new Rejection("Dependabot security updates setting is unavailable or invalid");
+  return result.data.enabled;
 }
 var SponsorshipState = object({ id: string2().min(1), hasSponsorshipsEnabled: boolean2() });
 async function readSponsorships(gh, repository) {
@@ -39626,7 +39652,7 @@ async function main() {
     info(`drift for ${target.name}: ${JSON.stringify(result.changes)}; activation required: ${result.activation}`);
     setOutput("changes", JSON.stringify(result.changes));
     setOutput("activation-required", String(result.activation));
-    setOutput("has-changes", String(result.changes.settings.length > 0 || result.changes.immutableReleases || result.changes.sponsorships || result.changes.rulesets.length > 0));
+    setOutput("has-changes", String(hasRepoSettingsChanges(result.changes)));
     return;
   }
   const readGH = github(input("read-token", true));

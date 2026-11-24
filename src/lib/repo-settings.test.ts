@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { CONFIG_YAML, config, fakeFetch } from "./testing.ts";
 import { parseConfig } from "./config.ts";
 import { github } from "./github.ts";
-import { applyRepoSettings, discoverRepoSettingsTargets, inspectRepoSettings, inspectRepoSettingsPreflight, repoSettingsRuleSets, verifyRepoSettingsApprover, type RepoSettingsTarget } from "./repo-settings.ts";
+import { applyRepoSettings, discoverRepoSettingsTargets, hasRepoSettingsChanges, inspectRepoSettings, inspectRepoSettingsPreflight, repoSettingsRuleSets, verifyRepoSettingsApprover, type RepoSettingsTarget } from "./repo-settings.ts";
 
 describe("discoverRepoSettingsTargets", () => {
   const installed = [
@@ -119,7 +119,7 @@ describe("inspectRepoSettings", () => {
       { method: "GET", path: "/repos/owner/client/immutable-releases", body: { enabled: true } },
     ]);
     const plan = await inspectRepoSettings({ adminGH: github("admin", fetch), config: configWithSettings(), target, mode: "schedule" });
-    expect(plan.changes).toEqual({ settings: [], immutableReleases: false, sponsorships: false, rulesets: [] });
+    expect(plan.changes).toEqual({ settings: [], dependabotSecurityUpdates: false, immutableReleases: false, sponsorships: false, rulesets: [] });
   });
 
   test("reports each drifted repository setting", async () => {
@@ -462,12 +462,12 @@ describe("administrative target selection", () => {
   } as const;
 
   test.each([
-    ["settings", { settings: true, rulesets: false, releases: false }, { settingsUpdated: 1, sponsorshipsUpdated: 1, immutableReleasesEnabled: 0, rulesetsUpdated: 0, rulesetsCreated: 0 }],
-    ["rulesets", { settings: false, rulesets: true, releases: false }, { settingsUpdated: 0, sponsorshipsUpdated: 0, immutableReleasesEnabled: 0, rulesetsUpdated: 0, rulesetsCreated: 3 }],
-    ["releases", { settings: false, rulesets: false, releases: true }, { settingsUpdated: 0, sponsorshipsUpdated: 0, immutableReleasesEnabled: 1, rulesetsUpdated: 0, rulesetsCreated: 0 }],
-    ["settings and releases", { settings: true, rulesets: false, releases: true }, { settingsUpdated: 1, sponsorshipsUpdated: 1, immutableReleasesEnabled: 1, rulesetsUpdated: 0, rulesetsCreated: 0 }],
-    ["all", { settings: true, rulesets: true, releases: true }, { settingsUpdated: 1, sponsorshipsUpdated: 1, immutableReleasesEnabled: 1, rulesetsUpdated: 0, rulesetsCreated: 3 }],
-    ["omitted (all)", undefined, { settingsUpdated: 1, sponsorshipsUpdated: 1, immutableReleasesEnabled: 1, rulesetsUpdated: 0, rulesetsCreated: 3 }],
+    ["settings", { settings: true, rulesets: false, releases: false }, { settingsUpdated: 1, dependabotSecurityUpdatesUpdated: 0, sponsorshipsUpdated: 1, immutableReleasesEnabled: 0, rulesetsUpdated: 0, rulesetsCreated: 0 }],
+    ["rulesets", { settings: false, rulesets: true, releases: false }, { settingsUpdated: 0, dependabotSecurityUpdatesUpdated: 0, sponsorshipsUpdated: 0, immutableReleasesEnabled: 0, rulesetsUpdated: 0, rulesetsCreated: 3 }],
+    ["releases", { settings: false, rulesets: false, releases: true }, { settingsUpdated: 0, dependabotSecurityUpdatesUpdated: 0, sponsorshipsUpdated: 0, immutableReleasesEnabled: 1, rulesetsUpdated: 0, rulesetsCreated: 0 }],
+    ["settings and releases", { settings: true, rulesets: false, releases: true }, { settingsUpdated: 1, dependabotSecurityUpdatesUpdated: 0, sponsorshipsUpdated: 1, immutableReleasesEnabled: 1, rulesetsUpdated: 0, rulesetsCreated: 0 }],
+    ["all", { settings: true, rulesets: true, releases: true }, { settingsUpdated: 1, dependabotSecurityUpdatesUpdated: 0, sponsorshipsUpdated: 1, immutableReleasesEnabled: 1, rulesetsUpdated: 0, rulesetsCreated: 3 }],
+    ["omitted (all)", undefined, { settingsUpdated: 1, dependabotSecurityUpdatesUpdated: 0, sponsorshipsUpdated: 1, immutableReleasesEnabled: 1, rulesetsUpdated: 0, rulesetsCreated: 3 }],
   ] as const)("schedule apply with %s reads and writes only the selected targets", async (_name, targets, expected) => {
     const fetch = driftFetch();
     const result = await applyRepoSettings({ readGH: github("read", fetch), adminGH: github("admin", fetch), config: config(), target, mode: "schedule", ...(targets ? { targets } : {}) });
@@ -817,8 +817,8 @@ describe("repository feature settings", () => {
     const drifted = { [key]: !value, description: "unrelated" };
     const fetch = stateFetch(drifted, { then: [drifted, desired] });
     const options = args(fetch, desired);
-    expect((await inspectRepoSettings(options)).changes).toEqual({ settings: [key], rulesets: [], immutableReleases: false, sponsorships: false });
-    expect(await applyRepoSettings(options)).toEqual({ settingsUpdated: 1, sponsorshipsUpdated: 0, immutableReleasesEnabled: 0, rulesetsUpdated: 0, rulesetsCreated: 0 });
+    expect((await inspectRepoSettings(options)).changes).toEqual({ settings: [key], rulesets: [], dependabotSecurityUpdates: false, immutableReleases: false, sponsorships: false });
+    expect(await applyRepoSettings(options)).toEqual({ settingsUpdated: 1, dependabotSecurityUpdatesUpdated: 0, sponsorshipsUpdated: 0, immutableReleasesEnabled: 0, rulesetsUpdated: 0, rulesetsCreated: 0 });
     expect((await applyRepoSettings(options)).settingsUpdated).toBe(0);
     const writes = fetch.requests.filter((request) => request.method !== "GET");
     expect(writes).toHaveLength(1);
@@ -871,5 +871,110 @@ describe("repository feature settings", () => {
   test("branch update suggestions do not require up-to-date branches", () => {
     const rule = repoSettingsRuleSets(cfg({ allow_update_branch: true })).find((set) => set.name === "review-and-checks")?.rules.find((item) => item.type === "required_status_checks");
     expect(rule).toHaveProperty("parameters.strict_required_status_checks_policy", false);
+  });
+});
+
+describe("Dependabot security updates", () => {
+  const target = { name: "owner/client", isServer: false };
+  const path = "/repos/owner/client/automated-security-fixes";
+  const cfg = (settings: Record<string, unknown>) => parseConfig(`${CONFIG_YAML}\nrepo_settings: { settings: ${JSON.stringify(settings)} }\n`);
+  function stateFetch(state: unknown, options: { then?: unknown[]; readStatus?: number; writeStatus?: number } = {}) {
+    const definitions = repoSettingsRuleSets(config());
+    const summaries = definitions.map((set, index) => ({ id: index + 1, name: set.name, source_type: "Repository" }));
+    const write = { body: options.writeStatus ? { message: "security updates write rejected" } : {}, status: options.writeStatus ?? 200 };
+    return fakeFetch([
+      { method: "GET", path: "/repos/owner/client", body: { delete_branch_on_merge: true } },
+      { method: "GET", path: "/repos/owner/client/rulesets", body: summaries },
+      ...summaries.map((summary, index) => ({ method: "GET", path: `/repos/owner/client/rulesets/${summary.id}`, body: { ...definitions[index], ...summary } })),
+      { method: "GET", path: "/repos/owner/client/immutable-releases", body: { enabled: true } },
+      { method: "GET", path, body: options.readStatus ? { message: "security updates read rejected" } : state, status: options.readStatus ?? 200, ...(options.then ? { then: options.then } : {}) },
+      { method: "PUT", path, ...write },
+      { method: "DELETE", path, ...write },
+    ]);
+  }
+  function args(fetch: ReturnType<typeof fakeFetch>, settings: Record<string, unknown>, targets?: { settings: boolean; rulesets: boolean; releases: boolean }) {
+    return { adminGH: github("admin", fetch, { backoffMs: [] }), readGH: github("read", fakeFetch([])), config: cfg(settings), target, mode: "schedule" as const, ...(targets ? { targets } : {}) };
+  }
+  const writes = (fetch: ReturnType<typeof fakeFetch>) => fetch.requests.filter((request) => request.method !== "GET").map((request) => `${request.method} ${request.path}`);
+
+  test.each([true, false])("accepts dependabot_security_updates=%p without defaulting other fields", (value) => {
+    expect(cfg({ dependabot_security_updates: value }).repo_settings?.settings).toEqual({ dependabot_security_updates: value });
+  });
+  test.each(["false", 0, null, [], {}].map((value) => ({ value })))("rejects non-boolean dependabot_security_updates=$value", ({ value }) => {
+    expect(() => cfg({ dependabot_security_updates: value })).toThrow("Invalid input: expected boolean");
+  });
+
+  test.each([{ value: true, method: "PUT" }, { value: false, method: "DELETE" }])("reports and repairs drift to $value with $method and makes no write on replay", async ({ value, method }) => {
+    const fetch = stateFetch({ enabled: !value, paused: false }, { then: [{ enabled: !value, paused: false }, { enabled: value, paused: false }] });
+    const options = args(fetch, { dependabot_security_updates: value });
+    expect((await inspectRepoSettings(options)).changes).toEqual({ settings: [], dependabotSecurityUpdates: true, immutableReleases: false, sponsorships: false, rulesets: [] });
+    expect(await applyRepoSettings(options)).toEqual({ settingsUpdated: 0, dependabotSecurityUpdatesUpdated: 1, sponsorshipsUpdated: 0, immutableReleasesEnabled: 0, rulesetsUpdated: 0, rulesetsCreated: 0 });
+    expect((await applyRepoSettings(options)).dependabotSecurityUpdatesUpdated).toBe(0);
+    expect(writes(fetch)).toEqual([`${method} ${path}`]);
+  });
+
+  test.each([true, false].flatMap((value) => [false, true].map((paused) => ({ value, paused }))))("matching enabled=$value with paused=$paused makes no write", async ({ value, paused }) => {
+    const fetch = stateFetch({ enabled: value, paused });
+    const options = args(fetch, { dependabot_security_updates: value });
+    expect((await inspectRepoSettings(options)).changes.dependabotSecurityUpdates).toBe(false);
+    expect((await applyRepoSettings(options)).dependabotSecurityUpdatesUpdated).toBe(0);
+    expect(writes(fetch)).toEqual([]);
+  });
+
+  test("a fresh matching state at apply avoids a stale planned write", async () => {
+    const fetch = stateFetch({ enabled: true, paused: false }, { then: [{ enabled: false, paused: false }] });
+    const options = args(fetch, { dependabot_security_updates: false });
+    expect((await inspectRepoSettings(options)).changes.dependabotSecurityUpdates).toBe(true);
+    expect((await applyRepoSettings(options)).dependabotSecurityUpdatesUpdated).toBe(0);
+    expect(writes(fetch)).toEqual([]);
+  });
+
+  test.each([
+    ["the field is omitted", { delete_branch_on_merge: true }, undefined],
+    ["the settings target is not selected", { dependabot_security_updates: false }, { settings: false, rulesets: true, releases: true }],
+  ] as const)("is neither read nor written when %s", async (_name, settings, targets) => {
+    const fetch = stateFetch({ enabled: true, paused: false });
+    const options = args(fetch, settings, targets);
+    expect((await inspectRepoSettings(options)).changes.dependabotSecurityUpdates).toBe(false);
+    expect((await applyRepoSettings(options)).dependabotSecurityUpdatesUpdated).toBe(0);
+    expect(fetch.calls.filter((call) => call.endsWith(path))).toEqual([]);
+  });
+
+  test.each([{}, { enabled: "false" }, { enabled: null }, "enabled"].map((state) => ({ state })))("rejects an invalid state response $state before writes", async ({ state }) => {
+    const fetch = stateFetch(state);
+    const options = args(fetch, { dependabot_security_updates: false });
+    await expect(inspectRepoSettings(options)).rejects.toThrow("Dependabot security updates setting is unavailable or invalid");
+    await expect(applyRepoSettings(options)).rejects.toThrow("Dependabot security updates setting is unavailable or invalid");
+    expect(writes(fetch)).toEqual([]);
+  });
+
+  test.each([{ value: false, writes: [] as string[] }, { value: true, writes: [`PUT ${path}`] }])("reads a 404 as disabled when configured $value", async ({ value, writes: expected }) => {
+    const fetch = stateFetch({}, { readStatus: 404 });
+    const options = args(fetch, { dependabot_security_updates: value });
+    expect((await inspectRepoSettings(options)).changes.dependabotSecurityUpdates).toBe(value);
+    expect((await applyRepoSettings(options)).dependabotSecurityUpdatesUpdated).toBe(value ? 1 : 0);
+    expect(writes(fetch)).toEqual([...expected]);
+  });
+
+  test.each([403, 404, 422, 503].flatMap((status) => [true, false].flatMap((value) => ["read", "write"].map((stage) => ({ status, value, stage })))).filter((item) => !(item.stage === "read" && item.status === 404)))("surfaces $stage API failure $status for $value", async ({ status, value, stage }) => {
+    const fetch = stateFetch({ enabled: !value, paused: false }, stage === "read" ? { readStatus: status } : { writeStatus: status });
+    await expect(applyRepoSettings(args(fetch, { dependabot_security_updates: value }))).rejects.toThrow(stage === "read" ? "security updates read rejected" : "security updates write rejected");
+    expect(writes(fetch)).toEqual(stage === "read" ? [] : [`${value ? "PUT" : "DELETE"} ${path}`]);
+  });
+});
+
+describe("hasRepoSettingsChanges", () => {
+  const none: Parameters<typeof hasRepoSettingsChanges>[0] = { settings: [], dependabotSecurityUpdates: false, immutableReleases: false, sponsorships: false, rulesets: [] };
+  test.each([
+    ["settings", { settings: ["has_wiki"] }],
+    ["dependabotSecurityUpdates", { dependabotSecurityUpdates: true }],
+    ["immutableReleases", { immutableReleases: true }],
+    ["sponsorships", { sponsorships: true }],
+    ["rulesets", { rulesets: ["integrity"] }],
+  ] satisfies [string, Partial<Parameters<typeof hasRepoSettingsChanges>[0]>][])("runs apply for %s drift alone", (_name, drift) => {
+    expect(hasRepoSettingsChanges({ ...none, ...drift })).toBe(true);
+  });
+  test("skips apply without drift", () => {
+    expect(hasRepoSettingsChanges(none)).toBe(false);
   });
 });
