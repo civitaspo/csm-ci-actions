@@ -104,8 +104,10 @@ async function dependabotSecurityUpdatesState(gh: GitHub, repository: string): P
   }
 }
 
+// A read right after the write can still return the previous value, so this waits until the write is visible.
 async function setDependabotSecurityUpdates(gh: GitHub, repository: string, enabled: boolean): Promise<void> {
   await gh.request(enabled ? "PUT /repos/{owner}/{repo}/automated-security-fixes" : "DELETE /repos/{owner}/{repo}/automated-security-fixes", splitRepository(repository));
+  await until(`Dependabot security updates ${enabled ? "enabled" : "disabled"} in ${repository}`, async () => await dependabotSecurityUpdatesState(gh, repository) === enabled ? true : undefined);
 }
 
 async function listManagedRulesets(gh: GitHub, repository = CLIENT, raw?: unknown[]): Promise<RuleSet[]> {
@@ -847,6 +849,7 @@ export const repoSettings: Scenario[] = [
         await managedFile.write("drift before managed-files reconciliation\n");
         await makeSettingsDrift(ctx);
         const initial = await dispatchReconciliation(ctx, CLIENT, "dispatch", undefined, { createdRulesetIds });
+        assert(initial.reconcileLog.includes('"dependabotSecurityUpdatesUpdated":1'), `client dispatch did not disable Dependabot security updates (${initial.url})`);
         assert(initial.stepConclusions.get("Mint approver contents token") === "success", `client dispatch did not verify the Approver App installation (${initial.url})`);
         assert((await listManagedRulesets(ctx.gh)).find((ruleset) => ruleset.name === "controlled-merges")?.enforcement === "active", "controlled-merges was not active before the schedule stop test");
         await assertSettingsReconciled(ctx);
