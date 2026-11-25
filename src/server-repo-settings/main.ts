@@ -3,7 +3,7 @@ import { generateWorkflows, ReleasedRevision, selectedCallers } from "../lib/gen
 import { resolveWorkflowRelease } from "../lib/workflow-release.ts";
 import { loadAdditionalManagedFiles } from "../lib/additional-managed-files.ts";
 import { applyManagedFiles, inspectManagedFiles } from "../lib/managed-files.ts";
-import { applyRepoSettings, discoverRepoSettingsTargets, inspectRepoSettings, inspectRepoSettingsPreflight } from "../lib/repo-settings.ts";
+import { applyRepoSettings, discoverRepoSettingsTargets, hasRepoSettingsChanges, inspectRepoSettings, inspectRepoSettingsPreflight } from "../lib/repo-settings.ts";
 import { github, loadConfig, splitRepository } from "../lib/github.ts";
 import { formatRepoSettingsSelection, repoSettingsEventMode, repoSettingsSelection, selectsAdministration, validateRepoSettingsContext, validateRepoSettingsStage, type RepoSettingsSelection } from "./context.ts";
 import type { RepoSettingsAdminTargets } from "../lib/repo-settings.ts";
@@ -73,7 +73,7 @@ async function main(): Promise<void> {
     core.info(`drift for ${target.name}: ${JSON.stringify(result.changes)}; activation required: ${result.activation}`);
     core.setOutput("changes", JSON.stringify(result.changes));
     core.setOutput("activation-required", String(result.activation));
-    core.setOutput("has-changes", String(result.changes.settings.length > 0 || result.changes.immutableReleases || result.changes.sponsorships || result.changes.rulesets.length > 0));
+    core.setOutput("has-changes", String(hasRepoSettingsChanges(result.changes)));
     return;
   }
   const readGH = github(input("read-token", true));

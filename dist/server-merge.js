@@ -32788,7 +32788,8 @@ var RepoSettings = preprocess((input, ctx) => {
     allow_rebase_merge: literal(false).optional(),
     has_wiki: boolean2().optional(),
     has_projects: boolean2().optional(),
-    allow_update_branch: boolean2().optional()
+    allow_update_branch: boolean2().optional(),
+    dependabot_security_updates: boolean2().optional()
   }).optional(),
   additional_managed_files: record(string2(), string2()).default({})
 }).superRefine((value, ctx) => {

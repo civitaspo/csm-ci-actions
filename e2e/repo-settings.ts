@@ -51,7 +51,7 @@ type RuleSet = {
 };
 type SettingsSnapshot = z.infer<typeof SettingsSnapshotSchema>;
 type RuleSetSnapshot = Omit<RuleSet, "id" | "source_type">;
-type RepoSnapshot = { settings: SettingsSnapshot; rulesets: RuleSet[]; immutableReleases: boolean };
+type RepoSnapshot = { settings: SettingsSnapshot; rulesets: RuleSet[]; immutableReleases: boolean; dependabotSecurityUpdates: boolean };
 type ManagedPull = { number: number; headSha: string };
 type ManagedCompletionPull = ManagedPull & { authorId: number | bigint | undefined; headRef: string; baseRef: string };
 type ManagedReservationState = "active" | "success" | "failure" | "inactive";
@@ -71,14 +71,15 @@ const RuleSetDetailsSchema = z.object({
 
 export async function snapshotRepository(gh: GitHub, repository: string, phase: "baseline" | "restored" | "observed" = "baseline"): Promise<RepoSnapshot> {
   const address = splitRepository(repository);
-  const [{ data: repositoryInfo }, rawRulesets, immutableReleases] = await Promise.all([
+  const [{ data: repositoryInfo }, rawRulesets, immutableReleases, dependabotSecurityUpdates] = await Promise.all([
     gh.rest.repos.get(address),
     gh.paginate("GET /repos/{owner}/{repo}/rulesets", { ...address, per_page: 100 }),
     immutableReleaseState(gh, repository),
+    dependabotSecurityUpdatesState(gh, repository),
   ]);
   const settings = SettingsSnapshotSchema.parse(repositoryInfo);
   const rulesets = await listManagedRulesets(gh, repository, rawRulesets);
-  const snapshot = { settings, rulesets, immutableReleases };
+  const snapshot = { settings, rulesets, immutableReleases, dependabotSecurityUpdates };
   console.log(`repo-settings-snapshot ${JSON.stringify({ repository, phase, snapshot })}`);
   return snapshot;
 }
@@ -91,6 +92,22 @@ async function immutableReleaseState(gh: GitHub, repository: string): Promise<bo
     if (hasStatus(error, 404)) return false;
     throw error;
   }
+}
+
+async function dependabotSecurityUpdatesState(gh: GitHub, repository: string): Promise<boolean> {
+  try {
+    const { data } = await gh.request("GET /repos/{owner}/{repo}/automated-security-fixes", splitRepository(repository));
+    return z.object({ enabled: z.boolean() }).parse(data).enabled;
+  } catch (error) {
+    if (hasStatus(error, 404)) return false;
+    throw error;
+  }
+}
+
+// A read right after the write can still return the previous value, so this waits until the write is visible.
+async function setDependabotSecurityUpdates(gh: GitHub, repository: string, enabled: boolean): Promise<void> {
+  await gh.request(enabled ? "PUT /repos/{owner}/{repo}/automated-security-fixes" : "DELETE /repos/{owner}/{repo}/automated-security-fixes", splitRepository(repository));
+  await until(`Dependabot security updates ${enabled ? "enabled" : "disabled"} in ${repository}`, async () => await dependabotSecurityUpdatesState(gh, repository) === enabled ? true : undefined);
 }
 
 async function listManagedRulesets(gh: GitHub, repository = CLIENT, raw?: unknown[]): Promise<RuleSet[]> {
@@ -149,12 +166,15 @@ export async function restoreRepository(gh: GitHub, repository: string, snapshot
   }
   await attempt(() => gh.rest.repos.update({ ...address, ...snapshot.settings }));
   if (!snapshot.immutableReleases) await attempt(() => gh.request("DELETE /repos/{owner}/{repo}/immutable-releases", address));
+  // GitHub rejects both writes while Dependabot alerts are disabled, so restore writes only on a difference.
+  await attempt(async () => { if (await dependabotSecurityUpdatesState(gh, repository) !== snapshot.dependabotSecurityUpdates) await setDependabotSecurityUpdates(gh, repository, snapshot.dependabotSecurityUpdates); });
   let restored: RepoSnapshot | undefined;
   await attempt(async () => { restored = await snapshotRepository(gh, repository, "restored"); });
   if (failures.length > 0) throw new AggregateError(failures, `restoring ${repository} failed in ${failures.length} step(s)`);
   assert(restored, `could not read restored repository state for ${repository}`);
   assert(isDeepStrictEqual(restored.settings, snapshot.settings), `repository settings were not restored for ${repository}`);
   assert(restored.immutableReleases === snapshot.immutableReleases, `immutable releases were not restored for ${repository}`);
+  assert(restored.dependabotSecurityUpdates === snapshot.dependabotSecurityUpdates, `Dependabot security updates were not restored for ${repository}`);
   assert(isDeepStrictEqual(normalizeRuleSets(restored.rulesets), normalizeRuleSets(snapshot.rulesets)), `rulesets were not restored for ${repository}`);
 }
 
@@ -456,6 +476,7 @@ async function makeSettingsDrift(ctx: Ctx): Promise<void> {
     allow_rebase_merge: false,
   };
   await ctx.gh.rest.repos.update({ ...address, delete_branch_on_merge: !desired.delete_branch_on_merge, allow_auto_merge: !desired.allow_auto_merge, allow_squash_merge: true, squash_merge_commit_title: "COMMIT_OR_PR_TITLE", squash_merge_commit_message: "COMMIT_MESSAGES", has_wiki: true, has_projects: true, allow_update_branch: false });
+  await setDependabotSecurityUpdates(ctx.gh, CLIENT, true);
   const existing = (await listManagedRulesets(ctx.gh)).find((ruleset) => ruleset.name === "integrity");
   if (existing) {
     await ctx.gh.rest.repos.updateRepoRuleset({
@@ -473,6 +494,7 @@ async function makeSettingsDrift(ctx: Ctx): Promise<void> {
 
 async function assertSettingsReconciled(ctx: Ctx, repository = CLIENT): Promise<void> {
   await assertRepositorySettings(ctx, repository);
+  assert(await dependabotSecurityUpdatesState(ctx.gh, repository) === false, `Dependabot security updates are still enabled in ${repository} after dispatch reconciliation`);
   const rulesets = await listManagedRulesets(ctx.gh, repository);
   for (const name of RULESET_NAMES) {
     const named = rulesets.filter((ruleset) => ruleset.name === name);
@@ -827,6 +849,7 @@ export const repoSettings: Scenario[] = [
         await managedFile.write("drift before managed-files reconciliation\n");
         await makeSettingsDrift(ctx);
         const initial = await dispatchReconciliation(ctx, CLIENT, "dispatch", undefined, { createdRulesetIds });
+        assert(initial.reconcileLog.includes('"dependabotSecurityUpdatesUpdated":1'), `client dispatch did not disable Dependabot security updates (${initial.url})`);
         assert(initial.stepConclusions.get("Mint approver contents token") === "success", `client dispatch did not verify the Approver App installation (${initial.url})`);
         assert((await listManagedRulesets(ctx.gh)).find((ruleset) => ruleset.name === "controlled-merges")?.enforcement === "active", "controlled-merges was not active before the schedule stop test");
         await assertSettingsReconciled(ctx);
@@ -872,15 +895,17 @@ export const repoSettings: Scenario[] = [
         assert(!Array.isArray(managedContent) && managedContent.type === "file" && Buffer.from(managedContent.content, "base64").toString("utf8") === "managed by csm-ci e2e\n", "Server-source managed file bytes differ");
 
         await withServerConfig(ctx, (text) => {
-          const changed = text.replace("    has_wiki: false\n    has_projects: false\n    allow_update_branch: true\n", "");
+          const changed = text.replace("    has_wiki: false\n    has_projects: false\n    allow_update_branch: true\n    dependabot_security_updates: false\n", "");
           assert(changed !== text, "could not omit feature settings for the unmanaged settings scenario");
           return changed;
         }, async () => {
           await ctx.gh.rest.repos.update({ ...splitRepository(CLIENT), has_wiki: true, has_projects: true, allow_update_branch: false });
+          await setDependabotSecurityUpdates(ctx.gh, CLIENT, true);
           const omitted = await dispatchReconciliation(ctx, CLIENT, "dispatch", undefined, { createdRulesetIds });
           assert(omitted.stepConclusions.get("Apply repository settings") === "skipped", `omitted feature settings caused a settings write (${omitted.url})`);
           const { data } = await ctx.gh.rest.repos.get(splitRepository(CLIENT));
           assert(data.has_wiki === true && data.has_projects === true && data.allow_update_branch === false, "omitted feature settings were changed");
+          assert(await dependabotSecurityUpdatesState(ctx.gh, CLIENT), `omitted dependabot_security_updates was changed (${omitted.url})`);
         });
         await ctx.gh.rest.pulls.update({ ...splitRepository(CLIENT), pull_number: managedPull.number, title: "Sync managed files" });
         const retitled = await dispatchReconciliation(ctx, CLIENT, "dispatch", undefined, { createdRulesetIds });
@@ -930,6 +955,7 @@ export const repoSettings: Scenario[] = [
           const serverSchedule = await dispatchReconciliation(ctx, SERVER, "schedule", undefined, { createdRulesetIds: serverCreatedRulesetIds });
           assert(serverSchedule.stepConclusions.get("Mint approver contents token") === "skipped", `server schedule tried to mint an Approver App token (${serverSchedule.url})`);
           await assertRepositorySettings(ctx, SERVER);
+          assert(await dependabotSecurityUpdatesState(ctx.gh, SERVER) === false, `server schedule did not disable Dependabot security updates (${serverSchedule.url})`);
           for (const name of ["integrity", "review-and-checks", "release-tags"]) {
             const rulesets = await listManagedRulesets(ctx.gh, SERVER);
             const named = rulesets.filter((ruleset) => ruleset.name === name);
@@ -993,6 +1019,7 @@ export const repoSettings: Scenario[] = [
         const after = await snapshotRepository(ctx.gh, SERVER, "observed");
         assert(isDeepStrictEqual(after.settings, bootstrapSnapshot.settings)
           && after.immutableReleases === bootstrapSnapshot.immutableReleases
+          && after.dependabotSecurityUpdates === bootstrapSnapshot.dependabotSecurityUpdates
           && isDeepStrictEqual(normalizeRuleSets(after.rulesets), normalizeRuleSets(bootstrapSnapshot.rulesets)),
         "targets managed-files or rejected normal dispatch changed server administration state (" + normal.url + ")");
       }, [

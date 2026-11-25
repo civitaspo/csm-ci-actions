@@ -195,18 +195,23 @@ export function repoSettingsRuleSets(config: Config, isServer = false): RuleSetD
 
 export type RepoSettingsInspection = {
   target: RepoSettingsTarget;
-  changes: { settings: string[]; immutableReleases: boolean; sponsorships: boolean; rulesets: string[] };
+  changes: { settings: string[]; dependabotSecurityUpdates: boolean; immutableReleases: boolean; sponsorships: boolean; rulesets: string[] };
   // A dispatch that would create controlled-merges or move it to active; only this needs the preflight.
   activation: boolean;
   rulesetIds: Record<string, number | undefined>;
   rulesetEnforcements: Record<string, RuleSet["enforcement"] | undefined>;
 };
 
+// Any drift makes the apply step run.
+export function hasRepoSettingsChanges(changes: RepoSettingsInspection["changes"]): boolean {
+  return changes.settings.length > 0 || changes.dependabotSecurityUpdates || changes.immutableReleases || changes.sponsorships || changes.rulesets.length > 0;
+}
+
 // Administrative targets selected for one run. Unselected targets are neither read nor written.
 export type RepoSettingsAdminTargets = { settings: boolean; rulesets: boolean; releases: boolean };
 const ALL_ADMIN_TARGETS: RepoSettingsAdminTargets = { settings: true, rulesets: true, releases: true };
 
-export type RepoSettingsApplyResult = { settingsUpdated: number; sponsorshipsUpdated: number; immutableReleasesEnabled: number; rulesetsUpdated: number; rulesetsCreated: number };
+export type RepoSettingsApplyResult = { settingsUpdated: number; dependabotSecurityUpdatesUpdated: number; sponsorshipsUpdated: number; immutableReleasesEnabled: number; rulesetsUpdated: number; rulesetsCreated: number };
 const CreatedRuleSet = z.object({ id: z.number().int().positive(), name: z.string() });
 
 // GitHub returns ruleset bypass_actors only to callers with write access to the ruleset, so
@@ -222,11 +227,13 @@ export async function inspectRepoSettings(args: {
   if (!repoSettings) throw new Rejection("repo_settings is not configured");
   const targets = args.targets ?? ALL_ADMIN_TARGETS;
   const address = { ...splitRepository(args.target.name) };
-  const [repositoryResponse, ruleSets, immutableEnabled, sponsorships] = await Promise.all([
+  const securityUpdates = repoSettings.settings?.dependabot_security_updates;
+  const [repositoryResponse, ruleSets, immutableEnabled, sponsorships, securityUpdatesEnabled] = await Promise.all([
     targets.settings ? args.adminGH.rest.repos.get(address) : undefined,
     targets.rulesets ? args.adminGH.paginate("GET /repos/{owner}/{repo}/rulesets", { ...address, per_page: 100 }) : [],
     targets.releases ? isImmutableReleasesEnabled(args.adminGH, address) : true,
     targets.settings && repoSettings.sponsorships ? readSponsorships(args.adminGH, args.target.name) : undefined,
+    targets.settings && securityUpdates !== undefined ? readDependabotSecurityUpdates(args.adminGH, address) : undefined,
   ]);
   const definitions = targets.rulesets ? repoSettingsRuleSets(args.config, args.target.isServer) : [];
   const summaries = z.array(z.object({ id: z.number().int().positive(), name: z.string(), source_type: z.string().optional() })).parse(ruleSets);
@@ -258,7 +265,7 @@ export async function inspectRepoSettings(args: {
   }
   return {
     target: args.target,
-    changes: { settings: repositoryResponse ? changedSettings(repositoryResponse.data, repoSettings.settings ?? {}) : [], immutableReleases: !immutableEnabled, sponsorships: sponsorships !== undefined && sponsorships.hasSponsorshipsEnabled !== repoSettings.sponsorships?.enabled, rulesets: rulesetsToChange },
+    changes: { settings: repositoryResponse ? changedSettings(repositoryResponse.data, repoSettings.settings ?? {}) : [], dependabotSecurityUpdates: securityUpdatesEnabled !== undefined && securityUpdatesEnabled !== securityUpdates, immutableReleases: !immutableEnabled, sponsorships: sponsorships !== undefined && sponsorships.hasSponsorshipsEnabled !== repoSettings.sponsorships?.enabled, rulesets: rulesetsToChange },
     activation,
     rulesetIds: ids,
     rulesetEnforcements: enforcements,
@@ -287,6 +294,7 @@ export async function applyRepoSettings(args: {
   if (!repoSettings) throw new Rejection("repo_settings is not configured");
   const address = { ...splitRepository(args.target.name) };
   let settingsUpdated = 0;
+  let dependabotSecurityUpdatesUpdated = 0;
   let sponsorshipsUpdated = 0;
   let immutableReleasesEnabled = 0;
   let rulesetsUpdated = 0;
@@ -294,6 +302,12 @@ export async function applyRepoSettings(args: {
   if (inspection.changes.settings.length > 0 && repoSettings.settings) {
     await args.adminGH.rest.repos.update({ ...address, ...desiredRepositorySettings(repoSettings.settings) });
     settingsUpdated = 1;
+  }
+  const securityUpdates = repoSettings.settings?.dependabot_security_updates;
+  if (inspection.changes.dependabotSecurityUpdates && securityUpdates !== undefined) {
+    // One attempt: after a lost response the next run reads the setting again and writes only on drift.
+    await args.adminGH.request(securityUpdates ? "PUT /repos/{owner}/{repo}/automated-security-fixes" : "DELETE /repos/{owner}/{repo}/automated-security-fixes", address);
+    dependabotSecurityUpdatesUpdated = 1;
   }
   if (inspection.changes.sponsorships && repoSettings.sponsorships) {
     const current = await readSponsorships(args.adminGH, args.target.name);
@@ -333,7 +347,7 @@ export async function applyRepoSettings(args: {
       rulesetsUpdated++;
     }
   }
-  return { settingsUpdated, sponsorshipsUpdated, immutableReleasesEnabled, rulesetsUpdated, rulesetsCreated };
+  return { settingsUpdated, dependabotSecurityUpdatesUpdated, sponsorshipsUpdated, immutableReleasesEnabled, rulesetsUpdated, rulesetsCreated };
 }
 
 function validateDispatchPreflight(preflight: DispatchPreflight): void {
@@ -393,6 +407,20 @@ async function isImmutableReleasesEnabled(gh: GitHub, address: ReturnType<typeof
 
 function status(error: unknown): number | undefined {
   return typeof error === "object" && error !== null && "status" in error && typeof error.status === "number" ? error.status : undefined;
+}
+
+// GitHub documents a 404 from this read as "Dependabot is not enabled for the repository".
+async function readDependabotSecurityUpdates(gh: GitHub, address: ReturnType<typeof splitRepository>): Promise<boolean> {
+  let response;
+  try {
+    response = await gh.request("GET /repos/{owner}/{repo}/automated-security-fixes", address);
+  } catch (error) {
+    if (status(error) === 404) return false;
+    throw error;
+  }
+  const result = z.object({ enabled: z.boolean() }).safeParse(response.data);
+  if (!result.success) throw new Rejection("Dependabot security updates setting is unavailable or invalid");
+  return result.data.enabled;
 }
 
 const SponsorshipState = z.object({ id: z.string().min(1), hasSponsorshipsEnabled: z.boolean() });

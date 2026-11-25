@@ -50,5 +50,6 @@ repo_settings:
     has_wiki: false
     has_projects: false
     allow_update_branch: true
+    dependabot_security_updates: false
   additional_managed_files:
     e2e/repo-settings-managed.txt: managed-files/repo-settings-managed.txt
