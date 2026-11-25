@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.11.0] - 2026-11-25
+
+### 🚀 Features
+
+- *(repo-settings)* Manage Dependabot security updates ([#254](https://github.com/civitaspo/csm-ci-actions/pull/254))
+
+### 📚 Documentation
+
+- *(repo-settings)* Specify Dependabot security updates management ([#253](https://github.com/civitaspo/csm-ci-actions/pull/253))
+
 ## [0.10.0] - 2026-11-23
 
 ### 🚀 Features
