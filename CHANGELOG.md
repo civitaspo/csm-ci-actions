@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.11.1] - 2026-11-27
+
+### ⚙️ Miscellaneous Tasks
+
+- *(repo-settings)* Sync managed files ([#257](https://github.com/civitaspo/csm-ci-actions/pull/257))
+
 ## [0.11.0] - 2026-11-25
 
 ### 🚀 Features
