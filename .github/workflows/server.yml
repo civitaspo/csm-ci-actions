@@ -73,7 +73,7 @@ jobs:
           persist-credentials: false
       - id: server-token
         if: contains(fromJSON('["approve", "policy-check"]'), needs.intake.outputs.kind)
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
@@ -84,7 +84,7 @@ jobs:
           permission-checks: write
       - id: managed-deployments-token
         if: contains(fromJSON('["approve", "policy-check"]'), needs.intake.outputs.kind)
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
@@ -93,7 +93,7 @@ jobs:
           permission-deployments: read
       - id: securefix-read-token
         if: needs.intake.outputs.kind == 'securefix'
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
@@ -106,7 +106,7 @@ jobs:
       # App's permissions, so this token stays at pull_requests:write.
       - id: approver-token
         if: needs.intake.outputs.kind == 'approve'
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.CSM_CI_APPROVER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_APPROVER_APP_PRIVATE_KEY }}
@@ -164,7 +164,7 @@ jobs:
           needs.intake.outputs.kind == 'securefix' &&
           (steps.securefix-prepare.outputs.result == 'ready' || steps.securefix-prepare.outputs.route-mode == 'true') &&
           steps.securefix-prepare.outputs.requires-workflows-write != 'true'
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
@@ -175,7 +175,7 @@ jobs:
           permission-pull-requests: ${{ steps.securefix-prepare.outputs.route-mode == 'true' && 'write' || 'read' }}
       - id: securefix-workflow-token
         if: needs.intake.outputs.kind == 'securefix' && steps.securefix-prepare.outputs.requires-workflows-write == 'true'
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
@@ -187,7 +187,7 @@ jobs:
           permission-workflows: write
       - id: merge-read-token
         if: needs.intake.outputs.kind == 'merge'
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
@@ -199,7 +199,7 @@ jobs:
           permission-issues: read
       - id: merge-read-deployments-token
         if: needs.intake.outputs.kind == 'merge'
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
@@ -218,7 +218,7 @@ jobs:
           args: ${{ needs.intake.outputs.args }}
       - id: merge-acceptance-write-token
         if: steps.merge-prepare.outputs.acceptance-kind == 'accept'
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
@@ -228,7 +228,7 @@ jobs:
           permission-pull-requests: write
       - id: automerge-deployments-token
         if: contains(fromJSON('["accept","cancel"]'), steps.merge-prepare.outputs.acceptance-kind)
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
@@ -238,7 +238,7 @@ jobs:
       - id: automerge-display-token
         if: steps.merge-prepare.outputs.acceptance-kind == 'accept'
         continue-on-error: true
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
@@ -247,7 +247,7 @@ jobs:
           permission-contents: write
       - id: merge-notify-token
         if: steps.merge-prepare.outputs.acceptance-kind == 'accept' || steps.merge-prepare.outputs.acceptance-kind == 'cancel' || steps.merge-prepare.outputs.acceptance-kind == 'replay' || steps.merge-prepare.outputs.acceptance-kind == 'conflict' || steps.merge-prepare.outputs.acceptance-kind == 'external-merge'
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
@@ -258,7 +258,7 @@ jobs:
       - id: merge-display-deployments-token
         if: contains(fromJSON('["accept","cancel","replay"]'), steps.merge-prepare.outputs.acceptance-kind)
         continue-on-error: true
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
@@ -356,7 +356,7 @@ jobs:
           path: .csm-ci-actions
           persist-credentials: false
       - id: read-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
@@ -374,7 +374,7 @@ jobs:
           release-config: ${{ needs.intake.outputs.release }}
       - id: tag-token
         if: steps.plan.outputs.tag-exists != 'true'
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
@@ -530,7 +530,7 @@ jobs:
           predicate-type: https://github.com/civitaspo/csm-ci-actions/attestation/release/v1
           predicate-path: ${{ runner.temp }}/release-predicate.json
       - id: server-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}

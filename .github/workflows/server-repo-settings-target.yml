@@ -64,7 +64,7 @@ jobs:
           repository: ${{ inputs.repository }}
           actions-repository: ${{ job.workflow_repository }}
       - id: read-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
@@ -78,7 +78,7 @@ jobs:
       - id: admin-token
         name: Mint administration write token
         if: steps.target.outputs.selects-administration == 'true'
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
@@ -118,7 +118,7 @@ jobs:
           steps.inspect.outputs.activation-required == 'true' &&
           steps.preflight.outputs.caller-distributed == 'true' &&
           steps.preflight.outputs.auto-merge-queue-count == '0'
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.CSM_CI_APPROVER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_APPROVER_APP_PRIVATE_KEY }}
@@ -154,7 +154,7 @@ jobs:
       - id: contents-token
         name: Mint managed contents token
         if: steps.managed-inspect.outputs.has-changes == 'true' && steps.managed-inspect.outputs.requires-workflows-write != 'true'
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
@@ -165,7 +165,7 @@ jobs:
       - id: workflow-token
         name: Mint managed workflows token
         if: steps.managed-inspect.outputs.has-changes == 'true' && steps.managed-inspect.outputs.requires-workflows-write == 'true'
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
@@ -217,7 +217,7 @@ jobs:
           repository: ${{ inputs.repository }}
           actions-repository: ${{ job.workflow_repository }}
       - id: read-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
@@ -272,7 +272,7 @@ jobs:
           repository: ${{ inputs.repository }}
           actions-repository: ${{ job.workflow_repository }}
       - id: read-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
@@ -297,7 +297,7 @@ jobs:
           read-token: ${{ steps.read-token.outputs.token }}
       - id: policy-token
         if: steps.preflight.outputs.authorized == 'true'
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
@@ -308,7 +308,7 @@ jobs:
           permission-checks: write
       - id: approver-token
         if: steps.preflight.outputs.authorized == 'true'
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.CSM_CI_APPROVER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_APPROVER_APP_PRIVATE_KEY }}
@@ -363,7 +363,7 @@ jobs:
           repository: ${{ inputs.repository }}
           actions-repository: ${{ job.workflow_repository }}
       - id: read-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
@@ -372,7 +372,7 @@ jobs:
           permission-contents: read
           permission-pull-requests: read
       - id: deployments-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.CSM_CI_SERVER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_SERVER_APP_PRIVATE_KEY }}
